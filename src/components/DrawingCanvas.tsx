@@ -35,9 +35,13 @@ import {
 import { generateId, PAPER_PRESETS } from '../utils/storage';
 import {
   CanvasPageSheet,
+  getLastGlobalPenTimestamp,
+  isAnyPenStrokeActive,
+  markGlobalPenActivity,
   type EditingTextState,
   type SelectedImageState,
 } from './CanvasPageSheet';
+import type { StabilizationLevel } from '../utils/strokeStabilizer';
 import {
   IconArrow,
   IconChevronLeft,
@@ -133,6 +137,20 @@ const QUICK_APPEND_PRESETS = [
   { label: 'Quadrat', width: 1000, height: 1000 },
 ];
 
+interface AppleTouch extends Touch {
+  touchType?: 'direct' | 'stylus';
+}
+
+const MIN_ZOOM = 0.45;
+const MAX_ZOOM = 3.5;
+
+const STABILIZATION_ORDER: StabilizationLevel[] = ['off', 'light', 'medium'];
+const STABILIZATION_LABELS: Record<StabilizationLevel, string> = {
+  off: 'Aus',
+  light: 'Leicht',
+  medium: 'Mittel',
+};
+
 export function DrawingCanvas(props: DrawingCanvasProps) {
   const [tool, setTool] = createSignal<DrawingTool>('pen');
   const [penColor, setPenColor] = createSignal<string>('auto');
@@ -145,7 +163,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [textBold, setTextBold] = createSignal<boolean>(false);
 
   const [stylusOnly, setStylusOnly] = createSignal<boolean>(false);
+  const [stabilization, setStabilization] = createSignal<StabilizationLevel>('light');
   const [zoom, setZoom] = createSignal<number>(1);
+  const [liveZoomPreview, setLiveZoomPreview] = createSignal<number | null>(null);
   const [viewportWidth, setViewportWidth] = createSignal<number>(720);
   const [lastPointerType, setLastPointerType] = createSignal<string | null>(null);
 
@@ -160,12 +180,14 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [selectedImage, setSelectedImage] = createSignal<SelectedImageState | null>(null);
 
   let viewportRef: HTMLDivElement | undefined;
+  let zoomStageRef: HTMLDivElement | undefined;
   let paperMenuRef: HTMLDivElement | undefined;
   let sizeMenuRef: HTMLDivElement | undefined;
   let imageFileInputRef: HTMLInputElement | undefined;
   let pageImportInputRef: HTMLInputElement | undefined;
 
   const pageElements = new Map<string, HTMLDivElement>();
+  const touchAbortCallbacks = new Map<string, () => void>();
   let scrollRafId: number | null = null;
   let ignoreScrollSyncUntil = 0;
   let autoEnabledStylusOnce = false;
@@ -181,13 +203,22 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     ) {
       autoEnabledStylusOnce = true;
       setStylusOnly(true);
-      props.store.showToast('Stift erkannt — Handballenschutz aktiv (2 Finger zum Scrollen)');
+      props.store.showToast(
+        'Stift erkannt — Handballenschutz aktiv (2 Finger: Scrollen & Zoomen)'
+      );
     }
   };
 
   const note = () => props.store.activeNote();
   const pages = () => note()?.pages ?? [];
-  const pageIds = createMemo(() => pages().map((p) => p.id));
+  const pageIds = createMemo(
+    () => pages().map((p) => p.id),
+    undefined,
+    {
+      equals: (prev, next) =>
+        prev.length === next.length && prev.every((id, i) => id === next[i]),
+    }
+  );
   const page = () => props.store.activePage();
   const pageIndex = () => props.store.activePageIndex();
   const paperConfig = () => page()?.paperConfig ?? DEFAULT_PAPER_CONFIG;
@@ -260,6 +291,30 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const registerPageElement = (pageId: string, el: HTMLDivElement | null) => {
     if (el) pageElements.set(pageId, el);
     else pageElements.delete(pageId);
+  };
+
+  const registerTouchAbort = (pageId: string, fn: (() => void) | null) => {
+    if (fn) touchAbortCallbacks.set(pageId, fn);
+    else touchAbortCallbacks.delete(pageId);
+  };
+
+  const abortAllTouchStrokes = () => {
+    for (const fn of touchAbortCallbacks.values()) {
+      fn();
+    }
+  };
+
+  const cycleStabilization = () => {
+    const idx = STABILIZATION_ORDER.indexOf(stabilization());
+    const next = STABILIZATION_ORDER[(idx + 1) % STABILIZATION_ORDER.length];
+    setStabilization(next);
+    props.store.showToast(
+      next === 'off'
+        ? 'Schrift-Stabilisierung: Aus'
+        : next === 'light'
+          ? 'Schrift-Stabilisierung: Leicht (empfohlen)'
+          : 'Schrift-Stabilisierung: Mittel'
+    );
   };
 
   const scrollToPage = (pageId: string, behavior: ScrollBehavior = 'smooth') => {
@@ -340,6 +395,370 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     });
     ro.observe(el);
     onCleanup(() => ro.disconnect());
+  });
+
+  // Unified iPad / Touch Gesture Handler on .canvas-viewport:
+  // - Reliable 2-finger pan/scroll across ALL pages, headers, gaps, and margins (with gentle momentum)
+  // - Silky 120fps GPU-accelerated 2-finger pinch-to-zoom anchored right under the user's fingers
+  // - Palm rejection on both canvas sheets AND outer viewport margins so Safari never cancels Apple Pencil
+  // - Trackpad / Ctrl+Wheel zoom support anchored to cursor
+  onMount(() => {
+    const vp = viewportRef;
+    if (!vp) return;
+
+    interface SheetAnchor {
+      el: HTMLElement;
+      relX: number;
+      relY: number;
+    }
+
+    interface TwoFingerGesture {
+      startDist: number;
+      startZoom: number;
+      startMidX: number;
+      startMidY: number;
+      startScrollLeft: number;
+      startScrollTop: number;
+      lastMidX: number;
+      lastMidY: number;
+      lastMoveTs: number;
+      velX: number;
+      velY: number;
+      isZooming: boolean;
+      targetZoom: number;
+      anchor: SheetAnchor | null;
+    }
+
+    let gesture: TwoFingerGesture | null = null;
+    let momentumRafId: number | null = null;
+    let momentumVx = 0;
+    let momentumVy = 0;
+
+    const stopMomentum = () => {
+      if (momentumRafId !== null) {
+        cancelAnimationFrame(momentumRafId);
+        momentumRafId = null;
+      }
+      momentumVx = 0;
+      momentumVy = 0;
+    };
+
+    const startMomentum = (vx: number, vy: number) => {
+      stopMomentum();
+      if (Math.hypot(vx, vy) < 1.5) return;
+      momentumVx = Math.max(-48, Math.min(48, vx));
+      momentumVy = Math.max(-48, Math.min(48, vy));
+
+      const step = () => {
+        momentumRafId = null;
+        if (isAnyPenStrokeActive() || gesture) {
+          stopMomentum();
+          return;
+        }
+        vp.scrollLeft -= momentumVx;
+        vp.scrollTop -= momentumVy;
+        momentumVx *= 0.92;
+        momentumVy *= 0.92;
+        if (Math.hypot(momentumVx, momentumVy) >= 0.45) {
+          momentumRafId = requestAnimationFrame(step);
+        } else {
+          stopMomentum();
+        }
+      };
+      momentumRafId = requestAnimationFrame(step);
+    };
+
+    const isInteractiveTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof Element)) return false;
+      return Boolean(
+        target.closest(
+          'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection, .paper-popover'
+        )
+      );
+    };
+
+    const findAnchorSheet = (clientX: number, clientY: number): SheetAnchor | null => {
+      const sheets = vp.querySelectorAll<HTMLElement>('.canvas-sheet');
+      let bestEl: HTMLElement | null = null;
+      let bestDist = Infinity;
+      let bestRect: DOMRect | null = null;
+
+      sheets.forEach((sheet) => {
+        const rect = sheet.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const clampedX = Math.max(rect.left, Math.min(rect.right, clientX));
+        const clampedY = Math.max(rect.top, Math.min(rect.bottom, clientY));
+        const d = Math.hypot(clientX - clampedX, clientY - clampedY);
+        if (d < bestDist) {
+          bestDist = d;
+          bestEl = sheet;
+          bestRect = rect;
+        }
+      });
+
+      if (!bestEl || !bestRect) return null;
+      const r: DOMRect = bestRect;
+      return {
+        el: bestEl,
+        relX: (clientX - r.left) / r.width,
+        relY: (clientY - r.top) / r.height,
+      };
+    };
+
+    const initTwoFingerGesture = (t0: Touch, t1: Touch): TwoFingerGesture => {
+      const midX = (t0.clientX + t1.clientX) / 2;
+      const midY = (t0.clientY + t1.clientY) / 2;
+      const dist = Math.max(10, Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY));
+      const currZoom = zoom();
+      return {
+        startDist: dist,
+        startZoom: currZoom,
+        startMidX: midX,
+        startMidY: midY,
+        startScrollLeft: vp.scrollLeft,
+        startScrollTop: vp.scrollTop,
+        lastMidX: midX,
+        lastMidY: midY,
+        lastMoveTs: performance.now(),
+        velX: 0,
+        velY: 0,
+        isZooming: false,
+        targetZoom: currZoom,
+        anchor: findAnchorSheet(midX, midY),
+      };
+    };
+
+    const commitOrCancelGesture = (allowMomentum: boolean) => {
+      const g = gesture;
+      gesture = null;
+      if (!g) return;
+
+      const stage = zoomStageRef;
+      if (g.isZooming) {
+        if (stage) {
+          stage.style.transform = '';
+        }
+        setLiveZoomPreview(null);
+        const committedZoom = Math.max(
+          MIN_ZOOM,
+          Math.min(MAX_ZOOM, Math.round(g.targetZoom * 100) / 100)
+        );
+        ignoreScrollSyncUntil = performance.now() + 260;
+        setZoom(committedZoom);
+
+        // Synchronously re-anchor scroll so the exact pinched spot stays pinned under fingers
+        if (g.anchor && g.anchor.el.isConnected) {
+          const newRect = g.anchor.el.getBoundingClientRect();
+          const newPointX = newRect.left + g.anchor.relX * newRect.width;
+          const newPointY = newRect.top + g.anchor.relY * newRect.height;
+          vp.scrollLeft += newPointX - g.lastMidX;
+          vp.scrollTop += newPointY - g.lastMidY;
+        }
+      } else if (allowMomentum && performance.now() - g.lastMoveTs < 90) {
+        startMomentum(g.velX, g.velY);
+      }
+    };
+
+    const hasStylusTouch = (e: TouchEvent): boolean => {
+      const all = Array.from(e.touches) as AppleTouch[];
+      const changed = Array.from(e.changedTouches) as AppleTouch[];
+      return (
+        all.some((t) => t.touchType === 'stylus') ||
+        changed.some((t) => t.touchType === 'stylus')
+      );
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      stopMomentum();
+
+      if (hasStylusTouch(e)) {
+        markGlobalPenActivity();
+        if (gesture) commitOrCancelGesture(false);
+        if (!isInteractiveTarget(e.target)) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      const touches = e.touches;
+
+      // 2-finger pan + pinch-to-zoom (works across pages, headers, gaps, and margins)
+      if (touches.length === 2 && !isAnyPenStrokeActive()) {
+        e.preventDefault();
+        abortAllTouchStrokes();
+        gesture = initTwoFingerGesture(touches[0], touches[1]);
+        return;
+      }
+
+      if (touches.length > 2) {
+        e.preventDefault();
+        if (gesture) commitOrCancelGesture(false);
+        return;
+      }
+
+      // Single finger/palm touch:
+      if (touches.length === 1) {
+        if (isInteractiveTarget(e.target)) return;
+
+        const onCanvas =
+          e.target instanceof Element && Boolean(e.target.closest('.drawing-canvas'));
+        const isDrawingTool = tool() !== 'text' && tool() !== 'select';
+        const penRecentlyActive = Date.now() - getLastGlobalPenTimestamp() < 1500;
+
+        // Block Safari native scroll/selection/bounce on canvas (for drawing tools)
+        // AND on outer viewport margin when stylus-only or Apple Pencil was just used!
+        if ((onCanvas && isDrawingTool) || stylusOnly() || penRecentlyActive) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (hasStylusTouch(e)) {
+        markGlobalPenActivity();
+        if (gesture) commitOrCancelGesture(false);
+        if (!isInteractiveTarget(e.target)) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      const touches = e.touches;
+
+      if (touches.length === 2 && !isAnyPenStrokeActive()) {
+        e.preventDefault();
+        abortAllTouchStrokes();
+
+        if (!gesture) {
+          gesture = initTwoFingerGesture(touches[0], touches[1]);
+          return;
+        }
+
+        const t0 = touches[0];
+        const t1 = touches[1];
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        const dist = Math.max(10, Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY));
+        const dx = midX - gesture.lastMidX;
+        const dy = midY - gesture.lastMidY;
+        const now = performance.now();
+
+        // Engage pinch-zoom once fingers clearly spread or pinch (keeps pure 2-finger scroll crisp!)
+        const distDelta = Math.abs(dist - gesture.startDist);
+        const ratio = dist / gesture.startDist;
+        if (!gesture.isZooming && (distDelta > 12 || Math.abs(ratio - 1) > 0.055)) {
+          gesture.isZooming = true;
+          gesture.startDist = dist;
+          gesture.startZoom = zoom();
+          gesture.startMidX = midX;
+          gesture.startMidY = midY;
+          gesture.startScrollLeft = vp.scrollLeft;
+          gesture.startScrollTop = vp.scrollTop;
+          gesture.anchor = findAnchorSheet(midX, midY);
+        }
+
+        gesture.lastMidX = midX;
+        gesture.lastMidY = midY;
+        gesture.lastMoveTs = now;
+
+        if (gesture.isZooming && zoomStageRef) {
+          const nextZoom = Math.max(
+            MIN_ZOOM,
+            Math.min(MAX_ZOOM, gesture.startZoom * (dist / gesture.startDist))
+          );
+          gesture.targetZoom = nextZoom;
+          const s = nextZoom / gesture.startZoom;
+
+          const vpRect = vp.getBoundingClientRect();
+          const v0x = gesture.startMidX - vpRect.left;
+          const v0y = gesture.startMidY - vpRect.top;
+          const vx = midX - vpRect.left;
+          const vy = midY - vpRect.top;
+          const c0x = gesture.startScrollLeft + v0x;
+          const c0y = gesture.startScrollTop + v0y;
+          const tx = gesture.startScrollLeft + vx - c0x * s;
+          const ty = gesture.startScrollTop + vy - c0y * s;
+
+          zoomStageRef.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${s})`;
+          setLiveZoomPreview(nextZoom);
+        } else {
+          // Direct, zero-lag 2-finger pan/scroll
+          vp.scrollLeft -= dx;
+          vp.scrollTop -= dy;
+          gesture.velX = gesture.velX * 0.45 + dx * 0.55;
+          gesture.velY = gesture.velY * 0.45 + dy * 0.55;
+        }
+        return;
+      }
+
+      if (touches.length === 1) {
+        if (isInteractiveTarget(e.target)) return;
+        const onCanvas =
+          e.target instanceof Element && Boolean(e.target.closest('.drawing-canvas'));
+        const isDrawingTool = tool() !== 'text' && tool() !== 'select';
+        const penRecentlyActive = Date.now() - getLastGlobalPenTimestamp() < 1500;
+        if ((onCanvas && isDrawingTool) || stylusOnly() || penRecentlyActive) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2 && gesture) {
+        commitOrCancelGesture(e.type !== 'touchcancel');
+      }
+    };
+
+    // Prevent Safari's native page-level pinch gesture from zooming browser chrome
+    const handleSafariGesture = (e: Event) => {
+      e.preventDefault();
+    };
+
+    // Smooth Trackpad / Ctrl+Wheel pinch-to-zoom anchored at cursor
+    const handleWheelZoom = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      stopMomentum();
+
+      const anchor = findAnchorSheet(e.clientX, e.clientY);
+      const factor = Math.exp(-e.deltaY * 0.0045);
+      const nextZoom = Math.max(
+        MIN_ZOOM,
+        Math.min(MAX_ZOOM, Math.round(zoom() * factor * 100) / 100)
+      );
+      if (nextZoom === zoom()) return;
+
+      ignoreScrollSyncUntil = performance.now() + 180;
+      setZoom(nextZoom);
+
+      if (anchor && anchor.el.isConnected) {
+        const newRect = anchor.el.getBoundingClientRect();
+        const newX = newRect.left + anchor.relX * newRect.width;
+        const newY = newRect.top + anchor.relY * newRect.height;
+        vp.scrollLeft += newX - e.clientX;
+        vp.scrollTop += newY - e.clientY;
+      }
+    };
+
+    vp.addEventListener('touchstart', handleTouchStart, { passive: false });
+    vp.addEventListener('touchmove', handleTouchMove, { passive: false });
+    vp.addEventListener('touchend', handleTouchEnd, { passive: true });
+    vp.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+    vp.addEventListener('gesturestart', handleSafariGesture, { passive: false });
+    vp.addEventListener('gesturechange', handleSafariGesture, { passive: false });
+    vp.addEventListener('wheel', handleWheelZoom, { passive: false });
+
+    onCleanup(() => {
+      stopMomentum();
+      if (zoomStageRef) zoomStageRef.style.transform = '';
+      vp.removeEventListener('touchstart', handleTouchStart);
+      vp.removeEventListener('touchmove', handleTouchMove);
+      vp.removeEventListener('touchend', handleTouchEnd);
+      vp.removeEventListener('touchcancel', handleTouchEnd);
+      vp.removeEventListener('gesturestart', handleSafariGesture);
+      vp.removeEventListener('gesturechange', handleSafariGesture);
+      vp.removeEventListener('wheel', handleWheelZoom);
+    });
   });
 
   const importImagesToPage = async (
@@ -1067,6 +1486,21 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </div>
           </Show>
 
+          <Show when={tool() === 'pen'}>
+            <button
+              type="button"
+              class="tool-pill"
+              classList={{ 'is-active': stabilization() !== 'off' }}
+              onClick={cycleStabilization}
+              title={`Schrift-Stabilisierung: ${STABILIZATION_LABELS[stabilization()]} (Klicken zum Wechseln: Aus / Leicht / Mittel)`}
+            >
+              <span class="stab-dot" data-level={stabilization()} />
+              <span class="hide-compact">
+                Glättung: {STABILIZATION_LABELS[stabilization()]}
+              </span>
+            </button>
+          </Show>
+
           <button
             type="button"
             class="tool-pill"
@@ -1076,11 +1510,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               setStylusOnly(next);
               props.store.showToast(
                 next
-                  ? 'Nur-Stift-Modus aktiv (Handballen blockiert · 2 Finger zum Scrollen)'
+                  ? 'Nur-Stift-Modus aktiv (Handballen blockiert · 2 Finger: Scrollen & Zoomen)'
                   : 'Stift, Touch & Maus aktiv (automatischer Handballenschutz bei Stift)'
               );
             }}
-            title="Handballenerkennung: Blockiert Touch-Eingaben beim Zeichnen (2 Finger scrollen)"
+            title="Handballenerkennung: Blockiert Touch-Eingaben beim Zeichnen (2 Finger: Scrollen & Zoomen)"
           >
             <IconStylus size={14} />
             <span class="hide-compact">Nur Stift</span>
@@ -1391,100 +1825,104 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         class="canvas-viewport continuous-viewport"
         onScroll={handleViewportScroll}
         onPointerDown={(e) => {
-          if (e.target === viewportRef) {
+          if (e.target === viewportRef || e.target === zoomStageRef) {
             if (editingText()) commitEditingText();
             if (selectedImage()) setSelectedImage(null);
           }
         }}
       >
-        <For each={pageIds()}>
-          {(pid, idx) => (
-            <CanvasPageSheet
-              store={props.store}
-              pageId={pid}
-              pageNumber={idx() + 1}
-              totalPages={pages().length}
-              cssScale={docScale()}
-              tool={tool()}
-              penColor={penColor()}
-              highlighterColor={highlighterColor()}
-              penWidth={penWidth()}
-              highlighterWidth={highlighterWidth()}
-              eraserSize={eraserSize()}
-              textFontSize={textFontSize()}
-              textFontFamily={textFontFamily()}
-              textBold={textBold()}
-              stylusOnly={stylusOnly()}
-              editingText={editingText()}
-              selectedImage={selectedImage()}
-              onPointerTypeChange={handlePointerTypeDetected}
-              onSetEditingText={setEditingText}
-              onCommitEditingText={commitEditingText}
-              onSetSelectedImage={setSelectedImage}
-              onSyncTextStyle={(patch) => {
-                if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
-                if (patch.fontFamily !== undefined) setTextFontFamily(patch.fontFamily);
-                if (patch.bold !== undefined) setTextBold(patch.bold);
-              }}
-              onOpenSizeMenu={(targetId) => {
-                props.store.setActivePage(targetId);
-                setPaperMenuOpen(false);
-                setSizeMenuOpen(true);
-              }}
-              onImportFilesAt={(targetId, files, dropPt) => {
-                void importImagesToPage(targetId, files, dropPt);
-              }}
-              onImportPagesFiles={(files) => {
-                void handleImportFilesAsPages(files);
-              }}
-              registerElement={registerPageElement}
-            />
-          )}
-        </For>
+        <div ref={zoomStageRef} class="canvas-zoom-stage">
+          <For each={pageIds()}>
+            {(pid, idx) => (
+              <CanvasPageSheet
+                store={props.store}
+                pageId={pid}
+                pageNumber={idx() + 1}
+                totalPages={pages().length}
+                cssScale={docScale()}
+                tool={tool()}
+                penColor={penColor()}
+                highlighterColor={highlighterColor()}
+                penWidth={penWidth()}
+                highlighterWidth={highlighterWidth()}
+                eraserSize={eraserSize()}
+                textFontSize={textFontSize()}
+                textFontFamily={textFontFamily()}
+                textBold={textBold()}
+                stylusOnly={stylusOnly()}
+                stabilization={stabilization()}
+                editingText={editingText()}
+                selectedImage={selectedImage()}
+                onPointerTypeChange={handlePointerTypeDetected}
+                onSetEditingText={setEditingText}
+                onCommitEditingText={commitEditingText}
+                onSetSelectedImage={setSelectedImage}
+                onSyncTextStyle={(patch) => {
+                  if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
+                  if (patch.fontFamily !== undefined) setTextFontFamily(patch.fontFamily);
+                  if (patch.bold !== undefined) setTextBold(patch.bold);
+                }}
+                onOpenSizeMenu={(targetId) => {
+                  props.store.setActivePage(targetId);
+                  setPaperMenuOpen(false);
+                  setSizeMenuOpen(true);
+                }}
+                onImportFilesAt={(targetId, files, dropPt) => {
+                  void importImagesToPage(targetId, files, dropPt);
+                }}
+                onImportPagesFiles={(files) => {
+                  void handleImportFilesAsPages(files);
+                }}
+                registerElement={registerPageElement}
+                registerTouchAbort={registerTouchAbort}
+              />
+            )}
+          </For>
 
-        {/* Continuous Bottom Page Appender */}
-        <div class="continuous-append-bar">
-          <span class="cab-label">Neue Seite anhängen:</span>
-          <div class="cab-actions">
-            <For each={QUICK_APPEND_PRESETS}>
-              {(preset) => (
-                <button
-                  type="button"
-                  class="btn-extend-canvas"
-                  onClick={() =>
-                    handleAppendPage({
-                      width: preset.width,
-                      height: preset.height,
-                    })
-                  }
-                  title={`${preset.label} (${preset.width} × ${preset.height} px)`}
-                >
-                  <IconPlus size={13} />
-                  <span>{preset.label}</span>
-                </button>
-              )}
-            </For>
-            <button
-              type="button"
-              class="btn-extend-canvas"
-              onClick={() => pageImportInputRef?.click()}
-              title="PDF oder Bilder als neue Seiten importieren"
-            >
-              <IconFileUp size={13} />
-              <span>PDF / Bild als Seite</span>
-            </button>
-            <button
-              type="button"
-              class="btn-extend-canvas is-accent-btn"
-              onClick={() => {
-                setOverviewAutoCreator(true);
-                setOverviewOpen(true);
-              }}
-              title="Benutzerdefinierte Breite & Höhe in der Seitenübersicht wählen"
-            >
-              <IconRuler size={13} />
-              <span>Eigenes Format…</span>
-            </button>
+          {/* Continuous Bottom Page Appender */}
+          <div class="continuous-append-bar">
+            <span class="cab-label">Neue Seite anhängen:</span>
+            <div class="cab-actions">
+              <For each={QUICK_APPEND_PRESETS}>
+                {(preset) => (
+                  <button
+                    type="button"
+                    class="btn-extend-canvas"
+                    onClick={() =>
+                      handleAppendPage({
+                        width: preset.width,
+                        height: preset.height,
+                      })
+                    }
+                    title={`${preset.label} (${preset.width} × ${preset.height} px)`}
+                  >
+                    <IconPlus size={13} />
+                    <span>{preset.label}</span>
+                  </button>
+                )}
+              </For>
+              <button
+                type="button"
+                class="btn-extend-canvas"
+                onClick={() => pageImportInputRef?.click()}
+                title="PDF oder Bilder als neue Seiten importieren"
+              >
+                <IconFileUp size={13} />
+                <span>PDF / Bild als Seite</span>
+              </button>
+              <button
+                type="button"
+                class="btn-extend-canvas is-accent-btn"
+                onClick={() => {
+                  setOverviewAutoCreator(true);
+                  setOverviewOpen(true);
+                }}
+                title="Benutzerdefinierte Breite & Höhe in der Seitenübersicht wählen"
+              >
+                <IconRuler size={13} />
+                <span>Eigenes Format…</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1533,7 +1971,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             type="button"
             class="zoom-btn"
             onClick={() =>
-              setZoom((z) => Math.max(0.45, Math.round((z - 0.15) * 100) / 100))
+              setZoom((z) => Math.max(MIN_ZOOM, Math.round((z - 0.15) * 100) / 100))
             }
             title="Verkleinern"
           >
@@ -1545,13 +1983,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             onClick={() => setZoom(1)}
             title="Zoom zurücksetzen"
           >
-            {Math.round(zoom() * 100)}%
+            {Math.round((liveZoomPreview() ?? zoom()) * 100)}%
           </button>
           <button
             type="button"
             class="zoom-btn"
             onClick={() =>
-              setZoom((z) => Math.min(2.2, Math.round((z + 0.15) * 100) / 100))
+              setZoom((z) => Math.min(MAX_ZOOM, Math.round((z + 0.15) * 100) / 100))
             }
             title="Vergrößern"
           >

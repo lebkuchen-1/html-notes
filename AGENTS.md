@@ -33,6 +33,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 | `src/store/notesStore.ts` | Zentraler SolidJS-Store (`createNotesStore`): Notizen, verschachtelte Ordner, offene Notiz-Tabs (`openTabIds`), aktiver Screen (`'home' \| 'note'`), aktive Seite, seitenbezogenes Undo/Redo (`${noteId}:${pageId}`), debounced Autosave. |
 | `src/utils/storage.ts` | `localStorage`-Persistenz (`solid-notes:v1:*`), abwärtskompatible Migration (altes `note.canvas` → `pages[]`, altes `paper` → `paperConfig`), JSON-Backup v2 (`{ version: 2, folders, notes }`, liest auch alte `Note[]`-Arrays), Markdown-Export. |
 | `src/utils/canvasRenderer.ts` | HiDPI-Canvas-Engine: Papierhintergrund (gebatchtes Punktraster, Kästchen mit 5er-Hauptgitter, Zeilen, Randlinie), gesperrtes `backgroundImage` (PDF/Bild), bewegliche Bilder, Textmarker unter Tinte, variable Stiftstriche (`drawPenDot`, `drawPenIncrementalSegment`), Formen, Canvas-Text, Hit-Testing, async 2× PNG-Export (`ensureImagesLoaded`). |
+| `src/utils/strokeStabilizer.ts` | Geschwindigkeitsadaptiver One-Euro-Filter (`Aus` / `Leicht` [Standard] / `Mittel`) + eckenerhaltender Abschluss-Pass für ruhige Handschrift ohne fühlbare Latenz. |
 | `src/utils/imageImport.ts` | Clientseitige Bildskalierung/-kompression (WebP/PNG bei Alpha, JPEG `0.84` bei Fotos) + Clipboard/DragDrop-Extraktion. |
 | `src/utils/pageImport.ts` | Lazy-geladenes `pdfjs-dist` + `pdf.worker.min.mjs?url`; rendert PDF-Seiten und Bilder in eigenständige `CanvasPage`s im exakten Seitenverhältnis. |
 | `src/utils/markdown.ts` | XSS-sicherer Markdown-Renderer mit anklickbaren Checklisten (`data-line-index`) und `note-img://<id>`-Bildauflösung aus `note.attachments`. |
@@ -51,17 +52,21 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 
 ## Wichtige Designentscheidungen & Invarianten (Nicht brechen!)
 
-### 1. iPadOS Safari + Apple Pencil (Performance & Palm Rejection)
+### 1. iPadOS Safari + Apple Pencil (Performance, Palm Rejection, Gesten & Stabilisierung)
 - **Dual-Layer-Canvas in `CanvasPageSheet.tsx`:**
   - `drawing-canvas-base` (`pointer-events: none`): Statisches Blatt (Papier, PDF/Bild, fertige Striche & Texte). Wird **niemals** während `pointermove` neu gezeichnet.
-  - `drawing-canvas-live` (`position: absolute; inset: 0`, `getContext('2d', { desynchronized: true })`): Zeichnet aktive Stiftstriche **inkrementell in O(1)** (`drawPenIncrementalSegment`). Nach `pointerup` setzt `pendingLiveClearAfterBaseRender = true` das Live-Canvas erst nach dem Base-Repaint zurück (kein Flackern).
+  - `drawing-canvas-live` (`position: absolute; inset: 0`, normaler gecachter `2d`-Kontext — **kein** `desynchronized: true`, da WebKit-Overlays damit hängen können): Zeichnet aktive Stiftstriche **inkrementell in O(1)** (`drawPenIncrementalSegment`). Nach `pointerup` setzt `pendingLiveClearAfterBaseRender = true` das Live-Canvas erst nach dem Base-Repaint zurück (kein Flackern).
   - Backing-Store ist auf `dpr <= 2` und max. `2800px` Kantenlänge begrenzt (iPadOS-Safari-GPU-Limit).
   - Punktraster-Papier wird in einem einzigen `beginPath()` + `fill()` gebatcht.
-- **Palm Rejection:**
-  - `.drawing-canvas` **muss dauerhaft `touch-action: none` behalten** (niemals `pan-y`/`pinch-zoom` per CSS setzen — das weckt den Safari-Scroll-Recognizer und bricht Apple-Pencil-Striche mit `pointercancel` ab!).
-  - Nicht-passive native Listener (`touchstart`/`touchmove` mit `{ passive: false }`) rufen `e.preventDefault()` auf und implementieren flüssiges **2-Finger-Scrollen** direkt auf `.canvas-viewport`.
-  - **Automatische Handballenerkennung:** Globales `lastGlobalPenTimestamp`, automatisches einmaliges Aktivieren von `stylusOnly` bei erster Stifterkennung auf Touch-Geräten, Filterung großer Kontaktflächen (`width/height > 26`, `radiusX/Y > 22`) sowie **Palm Preemption** (ein eintreffender `pen`-Touch bricht einen `< 400ms` alten Touch-Ansatz sauber ab).
+- **Selbstheilendes Pointer-Handling (gegen zufälliges Schreib-Stoppen):**
+  - `onLostPointerCapture` + `window`-Fallback (`pointerup`/`pointercancel`) stellen sicher, dass `activePointerId` niemals hängen bleibt.
+  - Ein neues `pen`-`pointerdown` wird niemals durch eine verwaiste `activePointerId` blockiert: Ein hängengebliebener Vorgänger-Stiftstrich wird sauber abgeschlossen, ein vorheriger Touch-Ansatz (`< 450ms`) verworfen.
+- **Palm Rejection, 2-Finger-Scroll & Pinch-to-Zoom (zentral auf `.canvas-viewport` in `DrawingCanvas.tsx`):**
+  - `.drawing-canvas` **muss dauerhaft `touch-action: none` behalten** (niemals `pan-y`/`pinch-zoom` per CSS setzen!).
+  - Nicht-passive Touch-/Gesture-Listener (`touchstart`/`touchmove`/`gesturestart`/`gesturechange` mit `{ passive: false }`) auf `.canvas-viewport` blockieren Safari-Scroll/Bounce auf Canvas und (bei `stylusOnly`/aktivem Stift) auch auf den äußeren Rändern.
+  - **2-Finger-Gesten:** Funktionieren seitenübergreifend auf `.canvas-viewport` (ohne enge `radiusX`-Sperre, da normale Finger auf dem iPad >22px Radius melden) — reines Scrollen mit sanftem Auslaufen (Momentum) + GPU-beschleunigtes Pinch-to-Zoom (`translate3d` + `scale` auf `.canvas-zoom-stage`, 45%–350%) mit exaktem Ankerpunkt unter den Fingern.
   - Bei `pointercancel` während eines echten `pen`-Strichs wird der bereits gezeichnete Strich erhalten statt verworfen.
+- **Schrift-Stabilisierung:** `StrokeStabilizer` (One-Euro-Filter, Standard: `Leicht`, umschaltbar `Aus` / `Leicht` / `Mittel`).
 
 ### 2. Seiten-, Tab- & Canvas-Konventionen
 - **Seiten = kontinuierliche vertikale Ansicht** (keine Seiten-Tabs!); **Tabs oben = geöffnete Notizen** (+ fester `Übersicht`-Tab).

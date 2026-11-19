@@ -97,7 +97,7 @@ export function createNotesStore() {
       if (!ok) {
         showToast('Speicher voll: Bitte kleinere Bilder verwenden oder alte Notizen löschen.');
       }
-    }, 220);
+    }, 450);
   });
 
   createEffect(() => {

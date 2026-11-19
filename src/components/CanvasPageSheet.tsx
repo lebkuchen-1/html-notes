@@ -35,6 +35,10 @@ import { extractImageFilesFromTransfer } from '../utils/imageImport';
 import { extractPdfFilesFromTransfer } from '../utils/pageImport';
 import { generateId } from '../utils/storage';
 import {
+  StrokeStabilizer,
+  type StabilizationLevel,
+} from '../utils/strokeStabilizer';
+import {
   IconBringFront,
   IconCheck,
   IconChevronDown,
@@ -59,11 +63,21 @@ export interface SelectedImageState {
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
-// Shared across all page sheets so moving Apple Pencil between pages keeps automatic palm rejection active
+// Shared across all page sheets and DrawingCanvas so moving Apple Pencil between pages
+// keeps automatic palm rejection active and blocks 2-finger scroll/pinch while actively writing
 let lastGlobalPenTimestamp = 0;
+const activePenPageIds = new Set<string>();
 
-interface AppleTouch extends Touch {
-  touchType?: 'direct' | 'stylus';
+export function getLastGlobalPenTimestamp(): number {
+  return lastGlobalPenTimestamp;
+}
+
+export function markGlobalPenActivity(): void {
+  lastGlobalPenTimestamp = Date.now();
+}
+
+export function isAnyPenStrokeActive(): boolean {
+  return activePenPageIds.size > 0;
 }
 
 const FONT_FAMILIES: { value: CanvasFontFamily; label: string }[] = [
@@ -89,6 +103,7 @@ interface CanvasPageSheetProps {
   textFontFamily: CanvasFontFamily;
   textBold: boolean;
   stylusOnly: boolean;
+  stabilization: StabilizationLevel;
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   onPointerTypeChange: (type: string) => void;
@@ -108,6 +123,7 @@ interface CanvasPageSheetProps {
   ) => void;
   onImportPagesFiles: (files: File[]) => void;
   registerElement: (pageId: string, el: HTMLDivElement | null) => void;
+  registerTouchAbort: (pageId: string, fn: (() => void) | null) => void;
 }
 
 export function CanvasPageSheet(props: CanvasPageSheetProps) {
@@ -116,13 +132,16 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
   let baseCanvasRef: HTMLCanvasElement | undefined;
   let liveCanvasRef: HTMLCanvasElement | undefined;
+  let liveCtxCache: CanvasRenderingContext2D | null = null;
   let textInputRef: HTMLTextAreaElement | undefined;
 
   // Imperative 120Hz drawing state local to this page sheet
   let activePointerId: number | null = null;
   let activePointerType: string | null = null;
   let activeStrokeStartTime = 0;
+  let lastPointerEventWallTime = 0;
   let activeStroke: Stroke | null = null;
+  let activeStabilizer: StrokeStabilizer | null = null;
 
   // Incremental pen rendering cursors (O(1) per pointermove on liveCanvas!)
   let penDrawnCount = 0;
@@ -208,8 +227,11 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
   const getLiveCtx = (): CanvasRenderingContext2D | null => {
     if (!liveCanvasRef) return null;
-    // desynchronized reduces Apple Pencil ink latency on supported browsers
-    return liveCanvasRef.getContext('2d', { desynchronized: true }) ?? liveCanvasRef.getContext('2d');
+    if (!liveCtxCache || liveCtxCache.canvas !== liveCanvasRef) {
+      // Standard 2D context avoids WebKit/iPadOS desynchronized overlay compositor stalls
+      liveCtxCache = liveCanvasRef.getContext('2d');
+    }
+    return liveCtxCache;
   };
 
   const syncCanvasSizes = () => {
@@ -375,132 +397,59 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     scheduleBaseRender();
   });
 
-  // Non-passive iPad Safari touch handlers:
-  // 1. Always blocks iOS Scribble / long-press / palm scroll on canvas (with CSS touch-action: none)
-  // 2. Supports silky 2-finger pan/scroll of the continuous viewport when not actively drawing with stylus!
+  // Window-level pointerup/pointercancel safety net + touch-abort registration for 2-finger gestures
   onMount(() => {
-    const el = liveCanvasRef;
-    if (!el) return;
-
-    let twoFingerScroll: { lastX: number; lastY: number } | null = null;
-
-    const isLargePalmTouch = (t: AppleTouch): boolean => {
-      const rx = t.radiusX ?? 0;
-      const ry = t.radiusY ?? 0;
-      return rx > 22 || ry > 22;
-    };
-
-    const handleNativeTouchStart = (e: TouchEvent) => {
-      if (props.tool === 'text' || props.tool === 'select') return;
-
-      const touches = Array.from(e.touches) as AppleTouch[];
-      const changed = Array.from(e.changedTouches) as AppleTouch[];
-
-      const hasStylus =
-        touches.some((t) => t.touchType === 'stylus') ||
-        changed.some((t) => t.touchType === 'stylus');
-
-      if (hasStylus) {
-        lastGlobalPenTimestamp = Date.now();
-        twoFingerScroll = null;
-        e.preventDefault();
-        return;
-      }
-
-      // Always prevent default so iOS Safari never bounces, selects, or cancels Apple Pencil!
-      e.preventDefault();
-
-      // Start smooth 2-finger scroll when 2 regular fingers touch (and no stylus is active)
-      if (
-        touches.length === 2 &&
-        activePointerType !== 'pen' &&
-        touches.every((t) => !isLargePalmTouch(t))
-      ) {
-        // Cancel any accidental 1-finger touch stroke that just started < 180ms ago
-        if (activePointerId !== null && activePointerType === 'touch') {
-          abortCurrentInteraction();
-        }
-        twoFingerScroll = {
-          lastX: (touches[0].clientX + touches[1].clientX) / 2,
-          lastY: (touches[0].clientY + touches[1].clientY) / 2,
-        };
-      } else {
-        twoFingerScroll = null;
+    const handleWindowPointerEnd = (e: PointerEvent) => {
+      if (activePointerId !== null && activePointerId === e.pointerId) {
+        finishPointerInteraction(e, e.type === 'pointercancel');
       }
     };
 
-    const handleNativeTouchMove = (e: TouchEvent) => {
-      if (props.tool === 'text' || props.tool === 'select') return;
+    window.addEventListener('pointerup', handleWindowPointerEnd);
+    window.addEventListener('pointercancel', handleWindowPointerEnd);
 
-      const touches = Array.from(e.touches) as AppleTouch[];
-      if (touches.some((t) => t.touchType === 'stylus')) {
-        lastGlobalPenTimestamp = Date.now();
-        twoFingerScroll = null;
-        e.preventDefault();
-        return;
+    props.registerTouchAbort(props.pageId, () => {
+      if (activePointerId !== null && activePointerType === 'touch') {
+        abortCurrentInteraction();
       }
-
-      e.preventDefault();
-
-      if (
-        twoFingerScroll &&
-        touches.length === 2 &&
-        activePointerType !== 'pen'
-      ) {
-        const midX = (touches[0].clientX + touches[1].clientX) / 2;
-        const midY = (touches[0].clientY + touches[1].clientY) / 2;
-        const dx = midX - twoFingerScroll.lastX;
-        const dy = midY - twoFingerScroll.lastY;
-        twoFingerScroll.lastX = midX;
-        twoFingerScroll.lastY = midY;
-
-        const viewport = el.closest('.canvas-viewport');
-        if (viewport) {
-          viewport.scrollTop -= dy;
-          viewport.scrollLeft -= dx;
-        }
-      }
-    };
-
-    const handleNativeTouchEnd = (e: TouchEvent) => {
-      if (e.touches.length < 2) {
-        twoFingerScroll = null;
-      }
-    };
-
-    el.addEventListener('touchstart', handleNativeTouchStart, { passive: false });
-    el.addEventListener('touchmove', handleNativeTouchMove, { passive: false });
-    el.addEventListener('touchend', handleNativeTouchEnd, { passive: true });
-    el.addEventListener('touchcancel', handleNativeTouchEnd, { passive: true });
+    });
 
     onCleanup(() => {
-      el.removeEventListener('touchstart', handleNativeTouchStart);
-      el.removeEventListener('touchmove', handleNativeTouchMove);
-      el.removeEventListener('touchend', handleNativeTouchEnd);
-      el.removeEventListener('touchcancel', handleNativeTouchEnd);
+      window.removeEventListener('pointerup', handleWindowPointerEnd);
+      window.removeEventListener('pointercancel', handleWindowPointerEnd);
+      props.registerTouchAbort(props.pageId, null);
     });
   });
 
   onCleanup(() => {
     if (baseRafId !== null) cancelAnimationFrame(baseRafId);
     if (liveRafId !== null) cancelAnimationFrame(liveRafId);
+    activePenPageIds.delete(props.pageId);
     props.registerElement(props.pageId, null);
   });
 
-  const toLogicalPoint = (e: PointerEvent): StrokePoint => {
+  const toLogicalPoint = (
+    e: PointerEvent,
+    explicitPointerType?: string
+  ): StrokePoint => {
     const canvas = liveCanvasRef!;
     const p = page()!;
     const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * p.width;
-    const y = ((e.clientY - rect.top) / rect.height) * p.height;
+    const safeW = Math.max(1, rect.width);
+    const safeH = Math.max(1, rect.height);
+    const x = ((e.clientX - rect.left) / safeW) * p.width;
+    const y = ((e.clientY - rect.top) / safeH) * p.height;
 
+    const pType = explicitPointerType || e.pointerType;
     let pressure = lastPoint?.pressure ?? 0.5;
-    if (e.pointerType === 'pen') {
+    if (pType === 'pen') {
       // Ignore occasional 0-pressure glitches from iPad coalesced events and smooth slightly
-      const raw = e.pressure > 0.01 ? Math.min(1, Math.max(0.14, e.pressure)) : pressure;
-      pressure = lastPoint ? lastPoint.pressure * 0.45 + raw * 0.55 : raw;
+      const raw =
+        e.pressure > 0.01 ? Math.min(1, Math.max(0.14, e.pressure)) : pressure;
+      const smooth = activeStabilizer?.pressureSmoothing ?? 0.55;
+      pressure = lastPoint ? lastPoint.pressure * smooth + raw * (1 - smooth) : raw;
     } else if (lastPoint && lastMoveTime > 0) {
-      const dt = Math.max(1, e.timeStamp - lastMoveTime);
+      const dt = Math.max(1, (e.timeStamp || performance.now()) - lastMoveTime);
       const dist = Math.hypot(x - lastPoint.x, y - lastPoint.y);
       const velocity = dist / dt;
       const target = Math.max(0.28, Math.min(0.88, 0.78 - velocity * 0.28));
@@ -568,15 +517,82 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
         // ignore
       }
     }
+    activePenPageIds.delete(props.pageId);
     activePointerId = null;
     activePointerType = null;
     activeStroke = null;
+    activeStabilizer = null;
     isErasing = false;
     erasingStrokes = null;
     erasingTexts = null;
     erasedSomething = false;
     lastPoint = null;
     clearLiveCanvas();
+  };
+
+  const finalizeCurrentInteraction = (cancelled = false, isTouch = false) => {
+    const pointerIdToRelease = activePointerId;
+    if (pointerIdToRelease !== null && liveCanvasRef?.hasPointerCapture(pointerIdToRelease)) {
+      try {
+        liveCanvasRef.releasePointerCapture(pointerIdToRelease);
+      } catch {
+        // ignore
+      }
+    }
+    const wasPen = activePointerType === 'pen';
+    activePenPageIds.delete(props.pageId);
+    activePointerId = null;
+    activePointerType = null;
+    lastPoint = null;
+
+    if (isErasing) {
+      const p = page();
+      if (erasedSomething && erasingStrokes && erasingTexts && p) {
+        props.store.commitCanvasSnapshot(
+          {
+            strokes: erasingStrokes,
+            texts: erasingTexts,
+            images: p.images,
+          },
+          undefined,
+          props.pageId
+        );
+      }
+      isErasing = false;
+      erasingStrokes = null;
+      erasingTexts = null;
+      erasedSomething = false;
+      if (isTouch) eraserCursor = null;
+      scheduleBaseRender();
+      scheduleLiveRender();
+      return;
+    }
+
+    if (activeStroke) {
+      const finished = activeStroke;
+      const stabilizer = activeStabilizer;
+      activeStroke = null;
+      activeStabilizer = null;
+      penDrawnCount = 0;
+
+      // On iPadOS Safari, if a genuine pen stroke gets pointercancel after already drawing points,
+      // preserve it instead of losing the user's writing! Discard only cancelled accidental touch touches.
+      const shouldDiscard = cancelled && !wasPen;
+      const isShape =
+        finished.tool !== 'pen' && finished.tool !== 'highlighter';
+
+      if (!shouldDiscard && (!isShape || finished.points.length >= 2)) {
+        if (stabilizer && (finished.tool === 'pen' || finished.tool === 'highlighter')) {
+          finished.points = stabilizer.finalize(finished.points);
+        }
+        pendingLiveClearAfterBaseRender = true;
+        props.store.addStroke(finished, props.pageId);
+      } else {
+        clearLiveCanvas();
+      }
+    } else {
+      activeStabilizer = null;
+    }
   };
 
   const openTextEditorAt = (pt: StrokePoint, onlyExisting = false) => {
@@ -630,26 +646,44 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       e.pointerType === 'pen' && (e.button === 5 || (e.buttons & 32) !== 0);
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
+    const now = Date.now();
+
     // Record Apple Pencil / stylus activity for automatic palm rejection
     if (e.pointerType === 'pen') {
-      lastGlobalPenTimestamp = Date.now();
+      lastGlobalPenTimestamp = now;
     }
 
     // Palm Rejection for touch pointers on drawing tools:
     if (e.pointerType === 'touch' && props.tool !== 'select' && props.tool !== 'text') {
-      const isLargePalm = e.width > 26 || e.height > 26;
-      const penRecentlyActive = Date.now() - lastGlobalPenTimestamp < 1200;
+      const isLargePalm = e.width > 42 || e.height > 42;
+      const penRecentlyActive = now - lastGlobalPenTimestamp < 1200;
       if (props.stylusOnly || penRecentlyActive || isLargePalm || activePointerType === 'pen') {
         e.preventDefault();
         return;
       }
     }
 
-    // Palm Preemption: if Apple Pencil touches down shortly after a resting palm started a touch stroke,
-    // immediately discard the stray palm stroke and hand over seamlessly to the Apple Pencil!
-    if (e.pointerType === 'pen' && activePointerId !== null && activePointerType === 'touch') {
-      if (Date.now() - activeStrokeStartTime < 400) {
-        abortCurrentInteraction();
+    // Self-healing pointer recovery (fixes iPadOS Safari bug where a dropped pointerup
+    // could leave activePointerId stuck and make writing randomly stop):
+    if (activePointerId !== null) {
+      if (e.pointerType === 'pen') {
+        if (activePointerType === 'touch') {
+          // Preempt stray palm touch immediately (< 450ms discard, otherwise commit cleanly)
+          if (now - activeStrokeStartTime < 450) {
+            abortCurrentInteraction();
+          } else {
+            finalizeCurrentInteraction(false, true);
+          }
+        } else {
+          // Only one physical stylus can be down at once — previous pen stroke lost its pointerup;
+          // commit it cleanly so the new stroke is NEVER blocked!
+          finalizeCurrentInteraction(false, false);
+        }
+      } else if (now - lastPointerEventWallTime > 1200) {
+        // Recover from any orphaned touch/mouse pointer that never received pointerup
+        finalizeCurrentInteraction(false, activePointerType === 'touch');
+      } else {
+        return;
       }
     }
 
@@ -690,13 +724,15 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     if (props.editingText) props.onCommitEditingText();
     if (props.selectedImage) props.onSetSelectedImage(null);
 
-    if (activePointerId !== null) return;
-
     e.preventDefault();
     props.onPointerTypeChange(e.pointerType);
     activePointerId = e.pointerId;
     activePointerType = e.pointerType;
-    activeStrokeStartTime = Date.now();
+    activeStrokeStartTime = now;
+    lastPointerEventWallTime = now;
+    if (e.pointerType === 'pen') {
+      activePenPageIds.add(props.pageId);
+    }
     try {
       liveCanvasRef.setPointerCapture(e.pointerId);
     } catch {
@@ -704,11 +740,20 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     }
 
     lastPoint = null;
-    lastMoveTime = e.timeStamp;
-    const pt = toLogicalPoint(e);
-    lastPoint = pt;
+    lastMoveTime = e.timeStamp || performance.now();
 
     const currentTool = isStylusEraser ? 'eraser' : props.tool;
+    const isHighlighter = currentTool === 'highlighter';
+    const useStabilizer = currentTool === 'pen' || isHighlighter;
+    activeStabilizer = useStabilizer
+      ? new StrokeStabilizer(isHighlighter ? 'light' : props.stabilization)
+      : null;
+
+    const rawPt = toLogicalPoint(e, e.pointerType);
+    const pt = activeStabilizer
+      ? activeStabilizer.filter(rawPt, e.timeStamp || performance.now())
+      : rawPt;
+    lastPoint = pt;
 
     if (currentTool === 'eraser') {
       isErasing = true;
@@ -725,7 +770,6 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     if (currentTool === 'text' || currentTool === 'select') return;
 
-    const isHighlighter = currentTool === 'highlighter';
     penDrawnCount = 0;
     pendingLiveClearAfterBaseRender = false;
     activeStroke = {
@@ -748,14 +792,14 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     if (activePointerId === null) {
       if (props.tool === 'eraser' && e.pointerType !== 'touch') {
-        const pt = toLogicalPoint(e);
+        const pt = toLogicalPoint(e, e.pointerType);
         eraserCursor = { x: pt.x, y: pt.y };
         scheduleLiveRender();
       } else if (
         (props.tool === 'text' || props.tool === 'select') &&
         e.pointerType !== 'touch'
       ) {
-        const pt = toLogicalPoint(e);
+        const pt = toLogicalPoint(e, e.pointerType);
         const hit = findTextAtPoint(pt);
         setHoveredTextId(hit?.id ?? null);
       }
@@ -764,41 +808,59 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     if (e.pointerId !== activePointerId) return;
     e.preventDefault();
+    lastPointerEventWallTime = Date.now();
 
-    const events =
-      typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e];
-    const sourceEvents = events.length > 0 ? events : [e];
+    const parentPointerType = activePointerType || e.pointerType;
+    const rawCoalesced =
+      typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    const sourceEvents = rawCoalesced.length > 0 ? rawCoalesced : [e];
 
     let erasedNow = false;
 
     for (const ev of sourceEvents) {
-      const pt = toLogicalPoint(ev);
-      lastMoveTime = ev.timeStamp;
+      if (!Number.isFinite(ev.clientX) || !Number.isFinite(ev.clientY)) continue;
+      // Guard against occasional WebKit coalesced (0, 0) glitch events
+      if (
+        ev !== e &&
+        ev.clientX === 0 &&
+        ev.clientY === 0 &&
+        Math.hypot(e.clientX, e.clientY) > 12
+      ) {
+        continue;
+      }
+
+      const evTime = ev.timeStamp || e.timeStamp || performance.now();
+      const rawPt = toLogicalPoint(ev, parentPointerType);
+      lastMoveTime = evTime;
 
       if (isErasing) {
-        eraserCursor = { x: pt.x, y: pt.y };
-        if (eraseAtPoint(pt)) erasedNow = true;
-        lastPoint = pt;
+        eraserCursor = { x: rawPt.x, y: rawPt.y };
+        if (eraseAtPoint(rawPt)) erasedNow = true;
+        lastPoint = rawPt;
         continue;
       }
 
       if (!activeStroke) continue;
 
       if (activeStroke.tool === 'pen' || activeStroke.tool === 'highlighter') {
+        const pt = activeStabilizer
+          ? activeStabilizer.filter(rawPt, evTime)
+          : rawPt;
+        const minDist = activeStabilizer?.minSpacing ?? 1.1;
         if (
           !lastPoint ||
-          Math.hypot(pt.x - lastPoint.x, pt.y - lastPoint.y) >= 1.1
+          Math.hypot(pt.x - lastPoint.x, pt.y - lastPoint.y) >= minDist
         ) {
           activeStroke.points.push(pt);
           lastPoint = pt;
         }
       } else {
         if (activeStroke.points.length === 1) {
-          activeStroke.points.push(pt);
+          activeStroke.points.push(rawPt);
         } else {
-          activeStroke.points[1] = pt;
+          activeStroke.points[1] = rawPt;
         }
-        lastPoint = pt;
+        lastPoint = rawPt;
       }
     }
 
@@ -813,58 +875,13 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       lastGlobalPenTimestamp = Date.now();
     }
 
-    if (liveCanvasRef?.hasPointerCapture(e.pointerId)) {
-      try {
-        liveCanvasRef.releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-    }
-    const wasPen = activePointerType === 'pen';
-    activePointerId = null;
-    activePointerType = null;
-    lastPoint = null;
+    finalizeCurrentInteraction(cancelled, e.pointerType === 'touch');
+  };
 
-    if (isErasing) {
-      const p = page();
-      if (erasedSomething && erasingStrokes && erasingTexts && p) {
-        props.store.commitCanvasSnapshot(
-          {
-            strokes: erasingStrokes,
-            texts: erasingTexts,
-            images: p.images,
-          },
-          undefined,
-          props.pageId
-        );
-      }
-      isErasing = false;
-      erasingStrokes = null;
-      erasingTexts = null;
-      erasedSomething = false;
-      if (e.pointerType === 'touch') eraserCursor = null;
-      scheduleBaseRender();
-      scheduleLiveRender();
-      return;
-    }
-
-    if (activeStroke) {
-      const finished = activeStroke;
-      activeStroke = null;
-      penDrawnCount = 0;
-
-      // On iPadOS Safari, if a genuine pen stroke gets pointercancel after already drawing points,
-      // preserve it instead of losing the user's writing! Discard only cancelled accidental touch touches.
-      const shouldDiscard = cancelled && !wasPen;
-      const isShape =
-        finished.tool !== 'pen' && finished.tool !== 'highlighter';
-
-      if (!shouldDiscard && (!isShape || finished.points.length >= 2)) {
-        pendingLiveClearAfterBaseRender = true;
-        props.store.addStroke(finished, props.pageId);
-      } else {
-        clearLiveCanvas();
-      }
+  const handleLostPointerCapture = (e: PointerEvent) => {
+    if (activePointerId !== null && activePointerId === e.pointerId) {
+      // Never leave activePointerId stuck if Safari silently releases capture
+      finalizeCurrentInteraction(false, e.pointerType === 'touch');
     }
   };
 
@@ -1212,6 +1229,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
               onPointerMove={handlePointerMove}
               onPointerUp={(e) => finishPointerInteraction(e, false)}
               onPointerCancel={(e) => finishPointerInteraction(e, true)}
+              onLostPointerCapture={handleLostPointerCapture}
               onPointerLeave={handlePointerLeave}
               onContextMenu={(e) => e.preventDefault()}
             />
