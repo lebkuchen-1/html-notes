@@ -46,6 +46,15 @@ export function App() {
         target instanceof HTMLTextAreaElement ||
         Boolean(target?.isContentEditable);
 
+      if (
+        e.key === 'F11' ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f')
+      ) {
+        e.preventDefault();
+        store.toggleFullscreen();
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
         e.preventDefault();
         if (store.activeScreen() === 'settings') {
@@ -105,7 +114,13 @@ export function App() {
         </div>
       }
     >
-      <div class="app-shell" classList={{ 'is-dragging-split': isDraggingSplit() }}>
+      <div
+        class="app-shell"
+        classList={{
+          'is-dragging-split': isDraggingSplit(),
+          'is-fullscreen': store.isFullscreen(),
+        }}
+      >
       <Sidebar store={store} />
 
       <Show when={store.sidebarOpen()}>
@@ -117,7 +132,9 @@ export function App() {
       </Show>
 
       <main class="main-column">
-        <NoteTabs store={store} />
+        <Show when={!store.isFullscreen()}>
+          <NoteTabs store={store} />
+        </Show>
 
         <Switch fallback={<HomePage store={store} />}>
           <Match when={store.activeScreen() === 'settings'}>

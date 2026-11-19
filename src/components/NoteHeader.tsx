@@ -2,7 +2,9 @@ import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
 import type { Folder, ViewMode } from '../types';
 import {
+  IconExitFullscreen,
   IconFolder,
+  IconMaximize,
   IconMoon,
   IconPalette,
   IconPin,
@@ -232,6 +234,28 @@ export function NoteHeader(props: NoteHeaderProps) {
             </>
           )}
         </Show>
+
+        <button
+          type="button"
+          class="icon-btn"
+          classList={{ 'is-fullscreen-active': props.store.isFullscreen() }}
+          onClick={() => props.store.toggleFullscreen()}
+          title={
+            props.store.isFullscreen()
+              ? 'Vollbildmodus beenden (F11 / Esc)'
+              : 'Vollbildmodus: Browser-Leisten ausblenden & UI verkleinern (F11 / Strg+Umschalt+F)'
+          }
+          aria-label={
+            props.store.isFullscreen() ? 'Vollbildmodus beenden' : 'Vollbildmodus aktivieren'
+          }
+        >
+          <Show
+            when={props.store.isFullscreen()}
+            fallback={<IconMaximize size={16} />}
+          >
+            <IconExitFullscreen size={16} />
+          </Show>
+        </button>
 
         <button
           type="button"

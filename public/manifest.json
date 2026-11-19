@@ -1,0 +1,9 @@
+{
+  "name": "Notizblock — Text & Stift",
+  "short_name": "Notizblock",
+  "description": "Lokale Notiz-App mit Markdown-Texteditor, Seiten und unendlichem Canvas für Apple Pencil.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "background_color": "#f4f6f9",
+  "theme_color": "#4f46e5"
+}

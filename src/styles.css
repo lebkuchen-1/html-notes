@@ -4841,3 +4841,120 @@ button {
   font-size: 13.5px;
   font-weight: 500;
 }
+
+/* ==================== FULLSCREEN / ZEN MODE (IPAD & DESKTOP) ==================== */
+.icon-btn.is-fullscreen-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(79, 70, 229, 0.3);
+}
+
+.app-shell.is-fullscreen {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.app-shell.is-fullscreen .note-header {
+  min-height: 36px;
+  padding: 3px 10px;
+  gap: 8px;
+}
+
+.app-shell.is-fullscreen .header-left {
+  gap: 7px;
+}
+
+.app-shell.is-fullscreen .header-right {
+  gap: 4px;
+}
+
+.app-shell.is-fullscreen .title-area {
+  gap: 0;
+}
+
+.app-shell.is-fullscreen .note-title-input {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.app-shell.is-fullscreen .header-tags {
+  display: none;
+}
+
+.app-shell.is-fullscreen .note-header .icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.app-shell.is-fullscreen .note-header .view-switcher {
+  padding: 2px;
+  border-radius: 7px;
+}
+
+.app-shell.is-fullscreen .note-header .view-switch-btn {
+  padding: 3px 7px;
+  font-size: 11.5px;
+}
+
+.app-shell.is-fullscreen .note-header .view-switch-label {
+  display: none;
+}
+
+.app-shell.is-fullscreen .pane-toolbar {
+  padding: 4px 8px;
+  gap: 3px;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .toolbar-group {
+  flex-shrink: 0;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .tool-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .tool-pill {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .hide-compact {
+  display: none;
+}
+
+.app-shell.is-fullscreen .page-strip {
+  min-height: 30px;
+  padding: 2px 8px;
+  gap: 6px;
+}
+
+.app-shell.is-fullscreen .page-strip .tool-pill {
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.app-shell.is-fullscreen .page-strip .tool-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.app-shell.is-fullscreen .pane-statusbar {
+  padding: 2px 10px;
+  min-height: 22px;
+  font-size: 11px;
+}
+
+.app-shell.is-fullscreen .home-topbar {
+  padding: 6px 12px;
+  min-height: 44px;
+}

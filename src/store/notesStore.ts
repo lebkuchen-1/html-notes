@@ -70,7 +70,118 @@ export function createNotesStore() {
   const [sidebarOpen, setSidebarOpen] = createSignal(
     typeof window !== 'undefined' ? window.innerWidth >= 900 : true
   );
+  const [isFullscreen, setIsFullscreen] = createSignal<boolean>(false);
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
+
+  let enteredNativeFullscreen = false;
+  let sidebarWasOpenBeforeFullscreen = false;
+
+  const getNativeFullscreenElement = (): Element | null => {
+    if (typeof document === 'undefined') return null;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+  };
+
+  const enterFullscreen = () => {
+    if (!isFullscreen()) {
+      sidebarWasOpenBeforeFullscreen = sidebarOpen();
+      setSidebarOpen(false);
+      setIsFullscreen(true);
+    }
+
+    if (typeof document === 'undefined' || getNativeFullscreenElement()) return;
+    const el = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    try {
+      if (typeof el.requestFullscreen === 'function') {
+        const res = el.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions);
+        if (res && typeof res.then === 'function') {
+          res
+            .then(() => {
+              enteredNativeFullscreen = true;
+            })
+            .catch(() => {
+              // Compact fullscreen UI remains active even if browser declines native fullscreen
+            });
+        } else {
+          enteredNativeFullscreen = true;
+        }
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        el.webkitRequestFullscreen();
+        enteredNativeFullscreen = true;
+      }
+    } catch {
+      // Compact fullscreen UI remains active
+    }
+  };
+
+  const exitFullscreen = () => {
+    setIsFullscreen(false);
+    if (
+      sidebarWasOpenBeforeFullscreen &&
+      typeof window !== 'undefined' &&
+      window.innerWidth >= 900
+    ) {
+      setSidebarOpen(true);
+    }
+    sidebarWasOpenBeforeFullscreen = false;
+
+    if (typeof document !== 'undefined' && getNativeFullscreenElement()) {
+      const doc = document as Document & {
+        webkitExitFullscreen?: () => Promise<void> | void;
+      };
+      try {
+        if (typeof document.exitFullscreen === 'function') {
+          void document.exitFullscreen().catch(() => {});
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          doc.webkitExitFullscreen();
+        }
+      } catch {
+        // ignore
+      }
+    }
+    enteredNativeFullscreen = false;
+  };
+
+  const toggleFullscreen = () => {
+    if (isFullscreen()) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  };
+
+  if (typeof document !== 'undefined') {
+    const handleNativeFullscreenChange = () => {
+      const activeEl = getNativeFullscreenElement();
+      if (activeEl) {
+        enteredNativeFullscreen = true;
+        if (!isFullscreen()) {
+          sidebarWasOpenBeforeFullscreen = sidebarOpen();
+          setSidebarOpen(false);
+          setIsFullscreen(true);
+        }
+      } else if (enteredNativeFullscreen) {
+        enteredNativeFullscreen = false;
+        setIsFullscreen(false);
+        if (
+          sidebarWasOpenBeforeFullscreen &&
+          typeof window !== 'undefined' &&
+          window.innerWidth >= 900
+        ) {
+          setSidebarOpen(true);
+        }
+        sidebarWasOpenBeforeFullscreen = false;
+      }
+    };
+    document.addEventListener('fullscreenchange', handleNativeFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleNativeFullscreenChange);
+    onCleanup(() => {
+      document.removeEventListener('fullscreenchange', handleNativeFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleNativeFullscreenChange);
+    });
+  }
 
   // Per-page undo/redo stacks keyed by `${noteId}:${pageId}`
   const [histories, setHistories] = createSignal<Record<string, HistoryState>>({});
@@ -206,6 +317,10 @@ export function createNotesStore() {
     const currentTheme = theme();
     saveTheme(currentTheme);
     document.documentElement.setAttribute('data-theme', currentTheme);
+    const metaTheme = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.content = currentTheme === 'dark' ? '#151822' : '#ffffff';
+    }
   });
 
   createEffect(() => {
@@ -1483,6 +1598,10 @@ export function createNotesStore() {
     toggleTheme,
     sidebarOpen,
     setSidebarOpen,
+    isFullscreen,
+    enterFullscreen,
+    exitFullscreen,
+    toggleFullscreen,
     toastMessage,
     showToast,
     canUndo,

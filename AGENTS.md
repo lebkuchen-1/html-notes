@@ -91,6 +91,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 ## Tastenkürzel (Referenz)
 
 - `Strg+Alt+N` / `Strg+Alt+W`: Neuer Notiz-Tab / Aktiven Tab schließen (Mittelklick schließt Tab, Doppelklick auf freie Tab-Leiste öffnet neuen Tab)
+- `F11` / `Strg+Umschalt+F`: Vollbildmodus (blendet Browser-UI per Fullscreen-API aus, versteckt Tab-Leiste & Tags, verkleinert Header/Toolbar/Seitenleiste für maximalen Schreibplatz auf dem iPad)
 - `Strg+,`: Einstellungen (lokal in Notiz / global auf Startseite) öffnen bzw. schließen (`Esc` schließt ebenfalls)
 - `Strg+Z` / `Strg+Umschalt+Z` (`Strg+Y`): Undo / Redo auf aktiver Canvas-Seite
 - `Strg+V`: Bild aus Zwischenablage (im Canvas oder Text-Editor)

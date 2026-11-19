@@ -15,10 +15,12 @@ import {
 import { importFilesAsPages, stripFileExtension } from '../utils/pageImport';
 import {
   IconCopy,
+  IconExitFullscreen,
   IconFileUp,
   IconFolder,
   IconFolderPlus,
   IconInfinity,
+  IconMaximize,
   IconMoon,
   IconPen,
   IconPin,
@@ -463,6 +465,29 @@ export function HomePage(props: HomePageProps) {
           >
             <IconPlus size={16} />
             <span>Neue Notiz</span>
+          </button>
+          <button
+            type="button"
+            class="icon-btn"
+            classList={{ 'is-fullscreen-active': props.store.isFullscreen() }}
+            onClick={() => props.store.toggleFullscreen()}
+            title={
+              props.store.isFullscreen()
+                ? 'Vollbildmodus beenden (F11)'
+                : 'Vollbildmodus aktivieren (F11)'
+            }
+            aria-label={
+              props.store.isFullscreen()
+                ? 'Vollbildmodus beenden'
+                : 'Vollbildmodus aktivieren'
+            }
+          >
+            <Show
+              when={props.store.isFullscreen()}
+              fallback={<IconMaximize size={16} />}
+            >
+              <IconExitFullscreen size={16} />
+            </Show>
           </button>
           <button
             type="button"
