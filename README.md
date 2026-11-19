@@ -135,3 +135,9 @@ npm run preview     # Vorschau des Produktions-Builds
 - **[Vite](https://vitejs.dev/)** — Schneller Dev-Server & Bundle-Build
 - **[PDF.js (`pdfjs-dist`)](https://mozilla.github.io/pdf.js/)** — Lokales clientseitiges PDF-Rendering (lazy-geladen)
 - **HTML5 Canvas & Pointer Events API** — Hochauflösendes HiDPI-Zeichnen mit Druckempfindlichkeit
+
+---
+
+## Entstehung
+
+Diese App wurde an einem einzigen Abend mit **Gemini 4 Neon** erstellt.
