@@ -4819,3 +4819,25 @@ button {
   background-image: radial-gradient(rgba(156, 140, 116, 0.45) 1.1px, transparent 1.1px);
   background-size: 10px 10px;
 }
+
+.app-loading-shell {
+  width: 100vw;
+  height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: var(--bg-app);
+  color: var(--text-secondary);
+}
+
+.app-loading-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+}

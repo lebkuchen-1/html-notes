@@ -27,6 +27,15 @@ import {
   type ThemeMode,
   type ViewMode,
 } from '../types';
+import {
+  isIndexedDbAvailable,
+  loadWorkspaceFromIndexedDb,
+  replaceFoldersInIndexedDb,
+  saveFullWorkspaceToIndexedDb,
+  syncNotesDeltaToIndexedDb,
+} from './db';
+
+export type StorageBackend = 'indexeddb' | 'localstorage';
 
 const STORAGE_KEYS = {
   NOTES: 'solid-notes:v1:notes',
@@ -806,60 +815,224 @@ export function estimateStorageUsageBytes(): number {
   }
 }
 
+export function estimateWorkspacePayloadBytes(
+  notes: Note[],
+  folders: Folder[]
+): number {
+  let bytes = folders.length * 140;
+  for (const note of notes) {
+    bytes += 220 + (note.title.length + note.content.length) * 2;
+    for (const att of note.attachments) {
+      bytes += 80 + att.src.length;
+    }
+    for (const page of note.pages) {
+      bytes += 180 + page.title.length * 2;
+      if (page.backgroundImage?.src) {
+        bytes += 100 + page.backgroundImage.src.length;
+      }
+      for (const img of page.images) {
+        bytes += 140 + img.src.length;
+      }
+      for (const text of page.texts) {
+        bytes += 100 + text.text.length * 2;
+      }
+      for (const stroke of page.strokes) {
+        bytes += 96 + stroke.points.length * 28;
+      }
+    }
+  }
+  return bytes;
+}
+
+function createDefaultStarterWorkspace(): { notes: Note[]; folders: Folder[] } {
+  const now = Date.now();
+  const defaultFolders: Folder[] = [
+    { id: generateId(), name: 'Allgemein', color: '#4f46e5', parentId: null, createdAt: now },
+    { id: generateId(), name: 'Projekte', color: '#059669', parentId: null, createdAt: now + 1 },
+  ];
+  return {
+    folders: defaultFolders,
+    notes: [createWelcomeNote(defaultFolders[0].id)],
+  };
+}
+
+function sanitizeNormalizedWorkspace(
+  rawNotes: unknown[],
+  rawFolders: unknown[]
+): { notes: Note[]; folders: Folder[] } {
+  const normalizedNotes: Note[] = rawNotes
+    .filter((item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === 'object')
+    )
+    .map(normalizeNote);
+
+  let folders: Folder[] = rawFolders
+    .filter((item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === 'object')
+    )
+    .map(normalizeFolder);
+
+  const folderIds = new Set(folders.map((f) => f.id));
+  folders = folders
+    .map((f) => ({
+      ...f,
+      parentId:
+        f.parentId && folderIds.has(f.parentId) && f.parentId !== f.id
+          ? f.parentId
+          : null,
+    }))
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  const notes = (normalizedNotes.length > 0 ? normalizedNotes : [createWelcomeNote()])
+    .map((n) => ({
+      ...n,
+      folderId: n.folderId && folderIds.has(n.folderId) ? n.folderId : null,
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return { notes, folders };
+}
+
 export function loadInitialWorkspace(): { notes: Note[]; folders: Folder[] } {
   try {
     const rawNotes = localStorage.getItem(STORAGE_KEYS.NOTES);
     const rawFolders = localStorage.getItem(STORAGE_KEYS.FOLDERS);
 
     if (!rawNotes) {
-      const now = Date.now();
-      const defaultFolders: Folder[] = [
-        { id: generateId(), name: 'Allgemein', color: '#4f46e5', parentId: null, createdAt: now },
-        { id: generateId(), name: 'Projekte', color: '#059669', parentId: null, createdAt: now + 1 },
-      ];
-      return {
-        folders: defaultFolders,
-        notes: [createWelcomeNote(defaultFolders[0].id)],
-      };
+      return createDefaultStarterWorkspace();
     }
 
     const parsedNotes = JSON.parse(rawNotes);
-    const notes: Note[] =
-      Array.isArray(parsedNotes) && parsedNotes.length > 0
-        ? parsedNotes
-            .filter((item): item is Record<string, unknown> =>
-              Boolean(item && typeof item === 'object')
-            )
-            .map(normalizeNote)
-        : [createWelcomeNote()];
+    const parsedFolders = rawFolders ? JSON.parse(rawFolders) : [];
 
-    let folders: Folder[] = [];
-    if (rawFolders) {
-      const parsedFolders = JSON.parse(rawFolders);
-      if (Array.isArray(parsedFolders)) {
-        folders = parsedFolders
-          .filter((item): item is Record<string, unknown> =>
-            Boolean(item && typeof item === 'object')
-          )
-          .map(normalizeFolder);
-      }
-    }
-
-    // Sanitize orphaned parentIds & folderIds
-    const folderIds = new Set(folders.map((f) => f.id));
-    folders = folders.map((f) => ({
-      ...f,
-      parentId: f.parentId && folderIds.has(f.parentId) && f.parentId !== f.id ? f.parentId : null,
-    }));
-    const cleanNotes = notes.map((n) => ({
-      ...n,
-      folderId: n.folderId && folderIds.has(n.folderId) ? n.folderId : null,
-    }));
-
-    return { notes: cleanNotes, folders };
+    return sanitizeNormalizedWorkspace(
+      Array.isArray(parsedNotes) ? parsedNotes : [],
+      Array.isArray(parsedFolders) ? parsedFolders : []
+    );
   } catch {
     return { notes: [createWelcomeNote()], folders: [] };
   }
+}
+
+export interface LoadedWorkspaceResult {
+  notes: Note[];
+  folders: Folder[];
+  backend: StorageBackend;
+  migratedFromLocalStorage: boolean;
+}
+
+/**
+ * Loads the workspace from IndexedDB (no ~5 MB localStorage limit!).
+ * Automatically migrates any existing localStorage notes/folders on first run,
+ * and gracefully falls back to localStorage if IndexedDB is unavailable.
+ */
+export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
+  if (isIndexedDbAvailable()) {
+    try {
+      const dbData = await loadWorkspaceFromIndexedDb();
+
+      if (dbData.initialized) {
+        const clean = sanitizeNormalizedWorkspace(dbData.notes, dbData.folders);
+        return {
+          ...clean,
+          backend: 'indexeddb',
+          migratedFromLocalStorage: false,
+        };
+      }
+
+      // First run with IndexedDB: check for legacy localStorage data to migrate seamlessly
+      let legacyRawNotes: string | null = null;
+      let legacyRawFolders: string | null = null;
+      try {
+        legacyRawNotes = localStorage.getItem(STORAGE_KEYS.NOTES);
+        legacyRawFolders = localStorage.getItem(STORAGE_KEYS.FOLDERS);
+      } catch {
+        // ignore
+      }
+
+      if (legacyRawNotes) {
+        let parsedNotes: unknown[] = [];
+        let parsedFolders: unknown[] = [];
+        try {
+          const n = JSON.parse(legacyRawNotes);
+          if (Array.isArray(n)) parsedNotes = n;
+        } catch {
+          // ignore
+        }
+        try {
+          if (legacyRawFolders) {
+            const f = JSON.parse(legacyRawFolders);
+            if (Array.isArray(f)) parsedFolders = f;
+          }
+        } catch {
+          // ignore
+        }
+
+        const migrated = sanitizeNormalizedWorkspace(parsedNotes, parsedFolders);
+        const savedOk = await saveFullWorkspaceToIndexedDb(
+          migrated.notes,
+          migrated.folders
+        );
+        if (savedOk) {
+          // Free bulky legacy blobs from localStorage only AFTER IndexedDB commit succeeded
+          try {
+            localStorage.removeItem(STORAGE_KEYS.NOTES);
+            localStorage.removeItem(STORAGE_KEYS.FOLDERS);
+          } catch {
+            // ignore
+          }
+          return {
+            ...migrated,
+            backend: 'indexeddb',
+            migratedFromLocalStorage: true,
+          };
+        }
+      } else {
+        // Brand-new workspace: seed starter notes/folders directly into IndexedDB
+        const starter = createDefaultStarterWorkspace();
+        const savedOk = await saveFullWorkspaceToIndexedDb(starter.notes, starter.folders);
+        if (savedOk) {
+          return {
+            ...starter,
+            backend: 'indexeddb',
+            migratedFromLocalStorage: false,
+          };
+        }
+      }
+    } catch {
+      // Fall back cleanly to localStorage below
+    }
+  }
+
+  const fallback = loadInitialWorkspace();
+  return {
+    ...fallback,
+    backend: 'localstorage',
+    migratedFromLocalStorage: false,
+  };
+}
+
+export async function saveNotesDeltaAsync(
+  changedNotes: Note[],
+  deletedIds: string[],
+  allNotes: Note[],
+  backend: StorageBackend
+): Promise<boolean> {
+  if (backend === 'indexeddb') {
+    return syncNotesDeltaToIndexedDb(changedNotes, deletedIds);
+  }
+  return saveNotes(allNotes);
+}
+
+export async function saveFoldersAsync(
+  folders: Folder[],
+  backend: StorageBackend
+): Promise<boolean> {
+  if (backend === 'indexeddb') {
+    return replaceFoldersInIndexedDb(folders);
+  }
+  saveFolders(folders);
+  return true;
 }
 
 export function saveFolders(folders: Folder[]): void {

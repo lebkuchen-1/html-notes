@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
 import {
   PAGE_SIZE_PRESETS,
@@ -10,8 +10,9 @@ import {
   type StabilizationLevel,
   type ViewMode,
 } from '../types';
+import { queryBrowserStorageEstimate, type StorageEstimateInfo } from '../utils/db';
 import {
-  estimateStorageUsageBytes,
+  estimateWorkspacePayloadBytes,
   exportNotesAsJson,
   PAPER_PRESETS,
 } from '../utils/storage';
@@ -85,7 +86,8 @@ const AUTOSAVE_OPTIONS: { value: number; label: string }[] = [
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 export function SettingsPage(props: SettingsPageProps) {
@@ -125,17 +127,43 @@ export function SettingsPage(props: SettingsPageProps) {
     props.store.updateNoteSettings({ [key]: undefined }, note.id);
   };
 
+  const [storageEstimate, setStorageEstimate] = createSignal<StorageEstimateInfo>({
+    usageBytes: 0,
+    quotaBytes: null,
+    persisted: null,
+  });
+
+  createEffect(() => {
+    const notes = props.store.notes();
+    const folders = props.store.folders();
+    const payloadBytes = estimateWorkspacePayloadBytes(notes, folders);
+    let cancelled = false;
+    void queryBrowserStorageEstimate(payloadBytes).then((info) => {
+      if (!cancelled) setStorageEstimate(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   const storageStats = createMemo(() => {
     const notes = props.store.notes();
-    const bytes = estimateStorageUsageBytes();
+    const folders = props.store.folders();
+    const backend = props.store.storageBackend();
+    const est = storageEstimate();
+    const fallbackBytes = estimateWorkspacePayloadBytes(notes, folders);
+    const bytes = Math.max(est.usageBytes, fallbackBytes);
+    const quota = backend === 'indexeddb' ? est.quotaBytes : 5 * 1024 * 1024;
     const totalPages = notes.reduce((acc, n) => acc + n.pages.length, 0);
     const totalStrokes = notes.reduce(
       (acc, n) => acc + n.pages.reduce((pAcc, p) => pAcc + p.strokes.length, 0),
       0
     );
-    const approxQuota = 5 * 1024 * 1024;
-    const pct = Math.min(100, Math.round((bytes / approxQuota) * 100));
-    return { bytes, totalPages, totalStrokes, pct };
+    const pct =
+      quota && quota > 0
+        ? Math.min(100, Math.round((bytes / quota) * 100))
+        : Math.min(100, Math.round((bytes / (250 * 1024 * 1024)) * 100));
+    return { bytes, quota, persisted: est.persisted, backend, totalPages, totalStrokes, pct };
   });
 
   const handleImportFile = (e: Event) => {
@@ -959,10 +987,33 @@ export function SettingsPage(props: SettingsPageProps) {
 
                 <div class="setting-row is-stacked">
                   <div class="storage-meter-head">
-                    <span class="setting-label">Lokaler Browser-Speicher</span>
+                    <div class="setting-label-row">
+                      <span class="setting-label">
+                        {storageStats().backend === 'indexeddb'
+                          ? 'Lokaler Speicher (IndexedDB)'
+                          : 'Lokaler Speicher (LocalStorage-Fallback)'}
+                      </span>
+                      <span
+                        class="setting-scope-tag"
+                        classList={{
+                          'is-local': storageStats().backend === 'indexeddb',
+                          'is-inherited': storageStats().backend !== 'indexeddb',
+                        }}
+                      >
+                        {storageStats().backend === 'indexeddb'
+                          ? storageStats().persisted
+                            ? 'IndexedDB · Dauerhaft'
+                            : 'IndexedDB aktiv'
+                          : '5-MB-Fallback'}
+                      </span>
+                    </div>
                     <span class="storage-meter-stats">
-                      {formatBytes(storageStats().bytes)} · {props.store.notes().length} Notizen ·{' '}
-                      {storageStats().totalPages} Seiten · {storageStats().totalStrokes} Striche
+                      {formatBytes(storageStats().bytes)}
+                      <Show when={storageStats().quota}>
+                        {(q) => <> von {formatBytes(q())}</>}
+                      </Show>{' '}
+                      · {props.store.notes().length} Notizen · {storageStats().totalPages} Seiten ·{' '}
+                      {storageStats().totalStrokes} Striche
                     </span>
                   </div>
                   <div class="storage-meter-bar">

@@ -94,7 +94,18 @@ export function App() {
   });
 
   return (
-    <div class="app-shell" classList={{ 'is-dragging-split': isDraggingSplit() }}>
+    <Show
+      when={store.isHydrated()}
+      fallback={
+        <div class="app-loading-shell" role="status" aria-live="polite">
+          <div class="app-loading-card">
+            <span class="import-spinner" />
+            <span>Notizblock wird geladen…</span>
+          </div>
+        </div>
+      }
+    >
+      <div class="app-shell" classList={{ 'is-dragging-split': isDraggingSplit() }}>
       <Sidebar store={store} />
 
       <Show when={store.sidebarOpen()}>
@@ -159,7 +170,8 @@ export function App() {
           </div>
         )}
       </Show>
-    </div>
+      </div>
+    </Show>
   );
 }
 

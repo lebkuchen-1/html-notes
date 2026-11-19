@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal } from 'solid-js';
+import { batch, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import {
   DEFAULT_APP_SETTINGS,
   FOLDER_COLORS,
@@ -19,6 +19,7 @@ import {
   type ThemeMode,
   type ViewMode,
 } from '../types';
+import { requestPersistentStorage } from '../utils/db';
 import {
   clampPageHeight,
   clampPageWidth,
@@ -27,20 +28,21 @@ import {
   loadActiveNoteId,
   loadActiveScreen,
   loadAppSettings,
-  loadInitialWorkspace,
   loadOpenTabIds,
   loadTheme,
   loadViewMode,
+  loadWorkspaceAsync,
   normalizeFolder,
   normalizeNote,
   saveActiveNoteId,
   saveActiveScreen,
   saveAppSettings,
-  saveFolders,
-  saveNotes,
+  saveFoldersAsync,
+  saveNotesDeltaAsync,
   saveOpenTabIds,
   saveTheme,
   saveViewMode,
+  type StorageBackend,
 } from '../utils/storage';
 
 export type SidebarFilterMode = 'all' | 'pinned' | 'unfiled' | 'folder';
@@ -50,34 +52,15 @@ export type SettingsScopeTab = 'global' | 'local';
 const MAX_HISTORY = 50;
 
 export function createNotesStore() {
-  const { notes: initialNotes, folders: initialFolders } = loadInitialWorkspace();
-  const savedActiveId = loadActiveNoteId();
-  const initialActiveId =
-    savedActiveId && initialNotes.some((n) => n.id === savedActiveId)
-      ? savedActiveId
-      : initialNotes[0]?.id ?? null;
-
-  const validNoteIds = new Set(initialNotes.map((n) => n.id));
-  const savedTabs = loadOpenTabIds().filter((id) => validNoteIds.has(id));
-  const initialTabIds =
-    savedTabs.length > 0
-      ? initialActiveId && !savedTabs.includes(initialActiveId)
-        ? [...savedTabs, initialActiveId]
-        : savedTabs
-      : initialActiveId
-        ? [initialActiveId]
-        : [];
-
-  const [notes, setNotes] = createSignal<Note[]>(initialNotes);
-  const [folders, setFolders] = createSignal<Folder[]>(initialFolders);
-  const [activeNoteId, setActiveNoteId] = createSignal<string | null>(initialActiveId);
-  const [openTabIds, setOpenTabIds] = createSignal<string[]>(initialTabIds);
-  const [activeScreen, setActiveScreen] = createSignal<ActiveScreen>(
-    initialActiveId ? loadActiveScreen() : 'home'
-  );
+  const [isHydrated, setIsHydrated] = createSignal<boolean>(false);
+  const [storageBackend, setStorageBackend] = createSignal<StorageBackend>('indexeddb');
+  const [notes, setNotes] = createSignal<Note[]>([]);
+  const [folders, setFolders] = createSignal<Folder[]>([]);
+  const [activeNoteId, setActiveNoteId] = createSignal<string | null>(null);
+  const [openTabIds, setOpenTabIds] = createSignal<string[]>([]);
+  const [activeScreen, setActiveScreen] = createSignal<ActiveScreen>('home');
   const [settingsTab, setSettingsTab] = createSignal<SettingsScopeTab>('global');
-  let previousNonSettingsScreen: 'home' | 'note' =
-    initialActiveId ? loadActiveScreen() : 'home';
+  let previousNonSettingsScreen: 'home' | 'note' = 'home';
   const [settings, setSettings] = createSignal<AppSettings>(loadAppSettings());
   const [searchQuery, setSearchQuery] = createSignal('');
   const [filterMode, setFilterMode] = createSignal<SidebarFilterMode>('all');
@@ -92,6 +75,10 @@ export function createNotesStore() {
   // Per-page undo/redo stacks keyed by `${noteId}:${pageId}`
   const [histories, setHistories] = createSignal<Record<string, HistoryState>>({});
 
+  // Snapshots of last persisted records so IndexedDB writes ONLY changed/deleted notes
+  let lastSavedNotesMap = new Map<string, Note>();
+  let lastSavedFoldersRef: Folder[] | null = null;
+
   let toastTimer: number | undefined;
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -99,18 +86,117 @@ export function createNotesStore() {
     toastTimer = window.setTimeout(() => setToastMessage(null), 2600);
   };
 
+  // Async IndexedDB hydration (with automatic one-time migration from localStorage)
+  void loadWorkspaceAsync().then((loaded) => {
+    const savedActiveId = loadActiveNoteId();
+    const initialActiveId =
+      savedActiveId && loaded.notes.some((n) => n.id === savedActiveId)
+        ? savedActiveId
+        : loaded.notes[0]?.id ?? null;
+
+    const validNoteIds = new Set(loaded.notes.map((n) => n.id));
+    const savedTabs = loadOpenTabIds().filter((id) => validNoteIds.has(id));
+    const initialTabIds =
+      savedTabs.length > 0
+        ? initialActiveId && !savedTabs.includes(initialActiveId)
+          ? [...savedTabs, initialActiveId]
+          : savedTabs
+        : initialActiveId
+          ? [initialActiveId]
+          : [];
+
+    const initialScreen: 'home' | 'note' = initialActiveId ? loadActiveScreen() : 'home';
+
+    lastSavedNotesMap = new Map(loaded.notes.map((n) => [n.id, n]));
+    lastSavedFoldersRef = loaded.folders;
+    previousNonSettingsScreen = initialScreen;
+
+    batch(() => {
+      setStorageBackend(loaded.backend);
+      setNotes(loaded.notes);
+      setFolders(loaded.folders);
+      setActiveNoteId(initialActiveId);
+      setOpenTabIds(initialTabIds);
+      setActiveScreen(initialScreen);
+      setIsHydrated(true);
+    });
+
+    if (loaded.backend === 'indexeddb') {
+      void requestPersistentStorage();
+    }
+    if (loaded.migratedFromLocalStorage) {
+      showToast('Notizen automatisch auf IndexedDB übertragen (großer Speicher aktiv)');
+    }
+  });
+
   let saveTimer: number | undefined;
+
+  const flushNotesSave = async (currentNotes: Note[]) => {
+    const changed: Note[] = [];
+    const currentIds = new Set<string>();
+
+    for (const n of currentNotes) {
+      currentIds.add(n.id);
+      if (lastSavedNotesMap.get(n.id) !== n) {
+        changed.push(n);
+      }
+    }
+
+    const deletedIds: string[] = [];
+    for (const prevId of lastSavedNotesMap.keys()) {
+      if (!currentIds.has(prevId)) {
+        deletedIds.push(prevId);
+      }
+    }
+
+    if (changed.length === 0 && deletedIds.length === 0) return;
+
+    const prevSnapshot = lastSavedNotesMap;
+    lastSavedNotesMap = new Map(currentNotes.map((n) => [n.id, n]));
+
+    const ok = await saveNotesDeltaAsync(
+      changed,
+      deletedIds,
+      currentNotes,
+      storageBackend()
+    );
+    if (!ok) {
+      lastSavedNotesMap = prevSnapshot;
+      showToast('Speichern fehlgeschlagen: Bitte genügend freien Gerätespeicher sicherstellen.');
+    }
+  };
+
   createEffect(() => {
     const currentNotes = notes();
     const delay = settings().autosaveDelayMs;
+    if (!isHydrated()) return;
     if (saveTimer) window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
-      const ok = saveNotes(currentNotes);
-      if (!ok) {
-        showToast('Speicher voll: Bitte kleinere Bilder verwenden oder alte Notizen löschen.');
-      }
+      saveTimer = undefined;
+      void flushNotesSave(currentNotes);
     }, delay);
   });
+
+  // Flush any pending debounced IndexedDB write immediately when iPad Safari backgrounds/closes
+  if (typeof window !== 'undefined') {
+    const flushNow = () => {
+      if (!isHydrated()) return;
+      if (saveTimer !== undefined) {
+        window.clearTimeout(saveTimer);
+        saveTimer = undefined;
+        void flushNotesSave(notes());
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushNow();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', flushNow);
+    onCleanup(() => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', flushNow);
+    });
+  }
 
   createEffect(() => {
     saveAppSettings(settings());
@@ -127,19 +213,28 @@ export function createNotesStore() {
   });
 
   createEffect(() => {
-    saveActiveNoteId(activeNoteId());
+    const id = activeNoteId();
+    if (!isHydrated()) return;
+    saveActiveNoteId(id);
   });
 
   createEffect(() => {
-    saveOpenTabIds(openTabIds());
+    const tabs = openTabIds();
+    if (!isHydrated()) return;
+    saveOpenTabIds(tabs);
   });
 
   createEffect(() => {
-    saveFolders(folders());
+    const currentFolders = folders();
+    if (!isHydrated()) return;
+    if (currentFolders === lastSavedFoldersRef) return;
+    lastSavedFoldersRef = currentFolders;
+    void saveFoldersAsync(currentFolders, storageBackend());
   });
 
   createEffect(() => {
     const screen = activeScreen();
+    if (!isHydrated()) return;
     if (screen === 'home' || screen === 'note') {
       previousNonSettingsScreen = screen;
       saveActiveScreen(screen);
@@ -1339,6 +1434,8 @@ export function createNotesStore() {
   };
 
   return {
+    isHydrated,
+    storageBackend,
     notes,
     folders,
     activeNoteId,
