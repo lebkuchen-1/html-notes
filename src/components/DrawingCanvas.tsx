@@ -168,6 +168,22 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const pageElements = new Map<string, HTMLDivElement>();
   let scrollRafId: number | null = null;
   let ignoreScrollSyncUntil = 0;
+  let autoEnabledStylusOnce = false;
+
+  const handlePointerTypeDetected = (pointerType: string) => {
+    setLastPointerType(pointerType);
+    if (
+      pointerType === 'pen' &&
+      !autoEnabledStylusOnce &&
+      !stylusOnly() &&
+      typeof navigator !== 'undefined' &&
+      navigator.maxTouchPoints > 0
+    ) {
+      autoEnabledStylusOnce = true;
+      setStylusOnly(true);
+      props.store.showToast('Stift erkannt — Handballenschutz aktiv (2 Finger zum Scrollen)');
+    }
+  };
 
   const note = () => props.store.activeNote();
   const pages = () => note()?.pages ?? [];
@@ -1060,11 +1076,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               setStylusOnly(next);
               props.store.showToast(
                 next
-                  ? 'Nur-Stift-Modus aktiv (Touch ignoriert)'
-                  : 'Stift, Touch & Maus aktiv'
+                  ? 'Nur-Stift-Modus aktiv (Handballen blockiert · 2 Finger zum Scrollen)'
+                  : 'Stift, Touch & Maus aktiv (automatischer Handballenschutz bei Stift)'
               );
             }}
-            title="Handballenerkennung: Ignoriert Touch-Eingaben und erlaubt nur Stift & Maus"
+            title="Handballenerkennung: Blockiert Touch-Eingaben beim Zeichnen (2 Finger scrollen)"
           >
             <IconStylus size={14} />
             <span class="hide-compact">Nur Stift</span>
@@ -1401,7 +1417,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               stylusOnly={stylusOnly()}
               editingText={editingText()}
               selectedImage={selectedImage()}
-              onPointerTypeChange={setLastPointerType}
+              onPointerTypeChange={handlePointerTypeDetected}
               onSetEditingText={setEditingText}
               onCommitEditingText={commitEditingText}
               onSetSelectedImage={setSelectedImage}

@@ -2167,6 +2167,8 @@ button {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 20px 16px 28px;
   display: flex;
   flex-direction: column;
@@ -2181,6 +2183,9 @@ button {
   box-shadow: var(--shadow-sheet);
   flex-shrink: 0;
   background: #fcf9f2;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .drawing-canvas {
@@ -2189,7 +2194,18 @@ button {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
   cursor: crosshair;
+}
+
+.drawing-canvas-base {
+  pointer-events: none;
+}
+
+.drawing-canvas-live {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
 }
 
 .drawing-canvas.is-eraser {
@@ -2202,11 +2218,6 @@ button {
 
 .drawing-canvas.is-select-tool {
   cursor: default;
-}
-
-/* Allow touch scrolling when palm-rejection / stylus-only mode is enabled */
-.drawing-canvas.is-stylus-only {
-  touch-action: pan-y pinch-zoom;
 }
 
 /* Selected Canvas Image Move & Resize Overlay */

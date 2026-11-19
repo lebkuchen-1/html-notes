@@ -199,13 +199,15 @@ export function drawPaperBackground(
   } else if (paperConfig.pattern === 'dots') {
     ctx.fillStyle = dotFill;
     const radius = Math.max(1.2, Math.min(2.2, step * 0.045));
+    // Batch all dots into a single path for fast rendering on HiDPI/iPad screens
+    ctx.beginPath();
     for (let y = step; y < height; y += step) {
       for (let x = step; x < width; x += step) {
-        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
         ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fill();
       }
     }
+    ctx.fill();
   }
 
   if (paperConfig.showMargin) {
@@ -219,6 +221,57 @@ export function drawPaperBackground(
   }
 
   ctx.restore();
+}
+
+export function drawPenDot(
+  ctx: CanvasRenderingContext2D,
+  pt: StrokePoint,
+  strokeWidth: number,
+  color: string,
+  opacity: number,
+  scale = 1
+) {
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = opacity;
+  ctx.fillStyle = color;
+  const r = Math.max(0.75, (strokeWidth * (0.45 + pt.pressure * 0.85)) / 2);
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+export function drawPenIncrementalSegment(
+  ctx: CanvasRenderingContext2D,
+  prevMidX: number,
+  prevMidY: number,
+  prev: StrokePoint,
+  curr: StrokePoint,
+  strokeWidth: number,
+  color: string,
+  opacity: number,
+  scale = 1
+): { midX: number; midY: number } {
+  const midX = (prev.x + curr.x) / 2;
+  const midY = (prev.y + curr.y) / 2;
+  const avgPressure = (prev.pressure + curr.pressure) / 2;
+  const segmentWidth = Math.max(0.8, strokeWidth * (0.42 + avgPressure * 0.9));
+
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = opacity;
+  ctx.strokeStyle = color;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = segmentWidth;
+  ctx.beginPath();
+  ctx.moveTo(prevMidX, prevMidY);
+  ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
+  ctx.stroke();
+  ctx.restore();
+
+  return { midX, midY };
 }
 
 function drawPenStroke(
