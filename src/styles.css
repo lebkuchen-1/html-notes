@@ -4854,6 +4854,20 @@ button {
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
+  overscroll-behavior: none;
+}
+
+.app-shell.is-fullscreen .canvas-viewport {
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.app-shell.is-fullscreen .note-header,
+.app-shell.is-fullscreen .pane-toolbar,
+.app-shell.is-fullscreen .page-strip,
+.app-shell.is-fullscreen .pane-statusbar {
+  touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
 .app-shell.is-fullscreen .note-header {

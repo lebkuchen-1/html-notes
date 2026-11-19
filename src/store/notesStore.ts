@@ -82,6 +82,15 @@ export function createNotesStore() {
     return document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
   };
 
+  const isStandalonePwa = (): boolean => {
+    if (typeof window === 'undefined') return false;
+    const nav = navigator as Navigator & { standalone?: boolean };
+    return (
+      nav.standalone === true ||
+      Boolean(window.matchMedia?.('(display-mode: standalone)').matches)
+    );
+  };
+
   const enterFullscreen = () => {
     if (!isFullscreen()) {
       sidebarWasOpenBeforeFullscreen = sidebarOpen();
@@ -89,7 +98,15 @@ export function createNotesStore() {
       setIsFullscreen(true);
     }
 
-    if (typeof document === 'undefined' || getNativeFullscreenElement()) return;
+    // In iPadOS Home-Screen Standalone mode, Safari chrome is already hidden permanently;
+    // avoid invoking WebKit's native WKFullScreenWindowController swipe-dismiss overlay!
+    if (
+      typeof document === 'undefined' ||
+      isStandalonePwa() ||
+      getNativeFullscreenElement()
+    ) {
+      return;
+    }
     const el = document.documentElement as HTMLElement & {
       webkitRequestFullscreen?: () => Promise<void> | void;
     };
@@ -177,9 +194,32 @@ export function createNotesStore() {
     };
     document.addEventListener('fullscreenchange', handleNativeFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleNativeFullscreenChange);
+
+    // In fullscreen mode, prevent stray touchmove overscroll on non-scrollable UI bars
+    // from leaking into Safari's native pan/fullscreen recognizer
+    const handleFullscreenTouchMoveGuard = (e: TouchEvent) => {
+      if (!isFullscreen()) return;
+      const target = e.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          '.note-textarea, .markdown-preview, .settings-scroll, .home-scroll, .sidebar-explorer, .paper-popover, .page-overview-strip, input[type="range"]'
+        )
+      ) {
+        return;
+      }
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('touchmove', handleFullscreenTouchMoveGuard, {
+      passive: false,
+    });
+
     onCleanup(() => {
       document.removeEventListener('fullscreenchange', handleNativeFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleNativeFullscreenChange);
+      document.removeEventListener('touchmove', handleFullscreenTouchMoveGuard);
     });
   }
 

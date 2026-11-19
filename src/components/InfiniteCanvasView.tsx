@@ -1152,7 +1152,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
             t.clientY - oneFingerPan.startY
           );
           if (moved < oneFingerPan.threshold) {
-            if (props.tool !== 'text' && props.tool !== 'select') e.preventDefault();
+            if (e.cancelable) e.preventDefault();
             return;
           }
           oneFingerPan.engaged = true;

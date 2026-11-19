@@ -897,10 +897,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             t.clientY - oneFingerPan.startY
           );
           if (moved < oneFingerPan.threshold) {
-            const onCanvas =
-              e.target instanceof Element && Boolean(e.target.closest('.drawing-canvas'));
-            const isDrawingTool = tool() !== 'text' && tool() !== 'select';
-            if (onCanvas && isDrawingTool) e.preventDefault();
+            if (e.cancelable) e.preventDefault();
             return;
           }
           oneFingerPan.engaged = true;
