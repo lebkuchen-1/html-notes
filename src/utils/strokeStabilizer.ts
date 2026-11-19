@@ -1,6 +1,6 @@
-import type { StrokePoint } from '../types';
+import type { StabilizationLevel, StrokePoint } from '../types';
 
-export type StabilizationLevel = 'off' | 'light' | 'medium';
+export type { StabilizationLevel };
 
 interface StabilizerPreset {
   minCutoff: number;

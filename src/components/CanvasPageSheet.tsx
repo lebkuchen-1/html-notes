@@ -104,6 +104,9 @@ interface CanvasPageSheetProps {
   textBold: boolean;
   stylusOnly: boolean;
   stabilization: StabilizationLevel;
+  pressureSensitivity: boolean;
+  palmRadiusLimit: number;
+  showSheetHeader: boolean;
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   onPointerTypeChange: (type: string) => void;
@@ -442,19 +445,22 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     const y = ((e.clientY - rect.top) / safeH) * p.height;
 
     const pType = explicitPointerType || e.pointerType;
-    let pressure = lastPoint?.pressure ?? 0.5;
-    if (pType === 'pen') {
-      // Ignore occasional 0-pressure glitches from iPad coalesced events and smooth slightly
-      const raw =
-        e.pressure > 0.01 ? Math.min(1, Math.max(0.14, e.pressure)) : pressure;
-      const smooth = activeStabilizer?.pressureSmoothing ?? 0.55;
-      pressure = lastPoint ? lastPoint.pressure * smooth + raw * (1 - smooth) : raw;
-    } else if (lastPoint && lastMoveTime > 0) {
-      const dt = Math.max(1, (e.timeStamp || performance.now()) - lastMoveTime);
-      const dist = Math.hypot(x - lastPoint.x, y - lastPoint.y);
-      const velocity = dist / dt;
-      const target = Math.max(0.28, Math.min(0.88, 0.78 - velocity * 0.28));
-      pressure = lastPoint.pressure * 0.65 + target * 0.35;
+    let pressure = 0.55;
+    if (props.pressureSensitivity) {
+      pressure = lastPoint?.pressure ?? 0.5;
+      if (pType === 'pen') {
+        // Ignore occasional 0-pressure glitches from iPad coalesced events and smooth slightly
+        const raw =
+          e.pressure > 0.01 ? Math.min(1, Math.max(0.14, e.pressure)) : pressure;
+        const smooth = activeStabilizer?.pressureSmoothing ?? 0.55;
+        pressure = lastPoint ? lastPoint.pressure * smooth + raw * (1 - smooth) : raw;
+      } else if (lastPoint && lastMoveTime > 0) {
+        const dt = Math.max(1, (e.timeStamp || performance.now()) - lastMoveTime);
+        const dist = Math.hypot(x - lastPoint.x, y - lastPoint.y);
+        const velocity = dist / dt;
+        const target = Math.max(0.28, Math.min(0.88, 0.78 - velocity * 0.28));
+        pressure = lastPoint.pressure * 0.65 + target * 0.35;
+      }
     }
 
     return { x, y, pressure };
@@ -657,7 +663,8 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     // Palm Rejection for touch pointers on drawing tools:
     if (e.pointerType === 'touch' && props.tool !== 'select' && props.tool !== 'text') {
-      const isLargePalm = e.width > 42 || e.height > 42;
+      const isLargePalm =
+        e.width > props.palmRadiusLimit || e.height > props.palmRadiusLimit;
       const penRecentlyActive = now - lastGlobalPenTimestamp < 1200;
       if (props.stylusOnly || penRecentlyActive || isLargePalm || activePointerType === 'pen') {
         e.preventDefault();
@@ -1053,13 +1060,14 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
           data-page-id={props.pageId}
         >
           {/* Compact Page Header above each sheet */}
-          <div
-            class="sheet-header"
-            style={{ width: `${cssSize().width}px` }}
-            onPointerDown={() => {
-              if (!isActivePage()) props.store.setActivePage(props.pageId);
-            }}
-          >
+          <Show when={props.showSheetHeader}>
+            <div
+              class="sheet-header"
+              style={{ width: `${cssSize().width}px` }}
+              onPointerDown={() => {
+                if (!isActivePage()) props.store.setActivePage(props.pageId);
+              }}
+            >
             <div class="sheet-header-left">
               <span class="sheet-index-pill">#{props.pageNumber}</span>
               <Show when={currPage().backgroundImage}>
@@ -1155,6 +1163,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
               </Show>
             </div>
           </div>
+          </Show>
 
           {/* Dual-Layer Canvas Sheet (Base Static Layer + 120Hz Live Ink Overlay) */}
           <div

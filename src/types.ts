@@ -17,6 +17,36 @@ export type ViewMode = 'split' | 'text' | 'canvas';
 
 export type ThemeMode = 'light' | 'dark';
 
+export type StabilizationLevel = 'off' | 'light' | 'medium';
+
+export type PalmSensitivity = 'low' | 'normal' | 'high';
+
+export type EditorFontFamily = 'sans' | 'serif' | 'mono';
+
+/** Settings that can be configured globally and optionally overridden per note */
+export interface NoteLocalSettings {
+  stabilization: StabilizationLevel;
+  pressureSensitivity: boolean;
+  stylusOnly: boolean;
+  oneFingerScroll: boolean;
+  palmSensitivity: PalmSensitivity;
+  pinchZoomEnabled: boolean;
+  scrollMomentum: boolean;
+  showSheetHeaders: boolean;
+  editorFontSize: number;
+  editorFontFamily: EditorFontFamily;
+  editorSpellCheck: boolean;
+}
+
+export interface AppSettings extends NoteLocalSettings {
+  autoEnableStylusOnly: boolean;
+  defaultViewMode: ViewMode;
+  defaultPagePresetId: string;
+  defaultPaperConfig: PaperConfig;
+  pngExportScale: 1 | 2 | 3;
+  autosaveDelayMs: number;
+}
+
 export interface StrokePoint {
   x: number;
   y: number;
@@ -122,6 +152,8 @@ export interface Note {
   attachments: NoteImageAttachment[];
   pages: CanvasPage[];
   activePageId: string;
+  /** Optional per-note overrides for local settings (undefined keys inherit from global AppSettings) */
+  settings?: Partial<NoteLocalSettings>;
   createdAt: number;
   updatedAt: number;
 }
@@ -175,4 +207,24 @@ export const DEFAULT_PAPER_CONFIG: PaperConfig = {
   spacing: 34,
   lineOpacity: 0.24,
   showMargin: false,
+};
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  stabilization: 'light',
+  pressureSensitivity: true,
+  stylusOnly: false,
+  oneFingerScroll: true,
+  palmSensitivity: 'normal',
+  pinchZoomEnabled: true,
+  scrollMomentum: true,
+  showSheetHeaders: true,
+  editorFontSize: 15,
+  editorFontFamily: 'sans',
+  editorSpellCheck: true,
+  autoEnableStylusOnly: true,
+  defaultViewMode: 'split',
+  defaultPagePresetId: 'a4-p',
+  defaultPaperConfig: { ...DEFAULT_PAPER_CONFIG },
+  pngExportScale: 2,
+  autosaveDelayMs: 450,
 };

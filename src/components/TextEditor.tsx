@@ -28,6 +28,14 @@ export function TextEditor(props: TextEditorProps) {
   let imageInputRef: HTMLInputElement | undefined;
 
   const note = () => props.store.activeNote();
+  const effSettings = () => props.store.effectiveSettings();
+
+  const editorFontCss = createMemo(() => {
+    const family = effSettings().editorFontFamily;
+    if (family === 'serif') return "Georgia, 'Times New Roman', serif";
+    if (family === 'mono') return "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace";
+    return 'inherit';
+  });
 
   const stats = createMemo(() => {
     const content = note()?.content ?? '';
@@ -325,6 +333,10 @@ export function TextEditor(props: TextEditorProps) {
           fallback={
             <div
               class="markdown-preview"
+              style={{
+                'font-size': `${effSettings().editorFontSize}px`,
+                'font-family': editorFontCss(),
+              }}
               innerHTML={
                 renderedHtml() ||
                 '<p class="md-empty">Noch kein Text vorhanden. Wechsle auf „Bearbeiten“, um loszuschreiben.</p>'
@@ -339,11 +351,15 @@ export function TextEditor(props: TextEditorProps) {
               el.value = note()?.content ?? '';
             }}
             class="note-textarea"
+            style={{
+              'font-size': `${effSettings().editorFontSize}px`,
+              'font-family': editorFontCss(),
+            }}
             onInput={(e) => props.store.updateContent(e.currentTarget.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder="Beginne zu schreiben… (Markdown wird unterstützt, Bilder können per Button, Drag & Drop oder Strg+V eingefügt werden)"
-            spellcheck={true}
+            spellcheck={effSettings().editorSpellCheck}
           />
         </Show>
 

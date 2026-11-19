@@ -29,8 +29,8 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 
 | Datei | Verantwortung |
 | --- | --- |
-| `src/types.ts` | Datenmodelle: `Note`, `Folder`, `CanvasPage`, `Stroke`, `CanvasTextItem`, `CanvasImageItem`, `PageBackgroundImage`, `PaperConfig`, `PAGE_SIZE_PRESETS`, `FOLDER_COLORS`. |
-| `src/store/notesStore.ts` | Zentraler SolidJS-Store (`createNotesStore`): Notizen, verschachtelte Ordner, offene Notiz-Tabs (`openTabIds`), aktiver Screen (`'home' \| 'note'`), aktive Seite, seitenbezogenes Undo/Redo (`${noteId}:${pageId}`), debounced Autosave. |
+| `src/types.ts` | Datenmodelle: `Note` (inkl. lokaler `settings?: Partial<NoteLocalSettings>`), `Folder`, `CanvasPage`, `Stroke`, `CanvasTextItem`, `CanvasImageItem`, `PageBackgroundImage`, `PaperConfig`, `AppSettings`, `NoteLocalSettings`, `PAGE_SIZE_PRESETS`, `FOLDER_COLORS`. |
+| `src/store/notesStore.ts` | Zentraler SolidJS-Store (`createNotesStore`): Notizen, verschachtelte Ordner, offene Notiz-Tabs (`openTabIds`), aktiver Screen (`'home' \| 'note' \| 'settings'`), globale & lokale Einstellungen (`settings`, `effectiveSettings`), aktive Seite, seitenbezogenes Undo/Redo (`${noteId}:${pageId}`), debounced Autosave. |
 | `src/utils/storage.ts` | `localStorage`-Persistenz (`solid-notes:v1:*`), abwärtskompatible Migration (altes `note.canvas` → `pages[]`, altes `paper` → `paperConfig`), JSON-Backup v2 (`{ version: 2, folders, notes }`, liest auch alte `Note[]`-Arrays), Markdown-Export. |
 | `src/utils/canvasRenderer.ts` | HiDPI-Canvas-Engine: Papierhintergrund (gebatchtes Punktraster, Kästchen mit 5er-Hauptgitter, Zeilen, Randlinie), gesperrtes `backgroundImage` (PDF/Bild), bewegliche Bilder, Textmarker unter Tinte, variable Stiftstriche (`drawPenDot`, `drawPenIncrementalSegment`), Formen, Canvas-Text, Hit-Testing, async 2× PNG-Export (`ensureImagesLoaded`). |
 | `src/utils/strokeStabilizer.ts` | Geschwindigkeitsadaptiver One-Euro-Filter (`Aus` / `Leicht` [Standard] / `Mittel`) + eckenerhaltender Abschluss-Pass für ruhige Handschrift ohne fühlbare Latenz. |
@@ -45,6 +45,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 | `src/components/DrawingCanvas.tsx` | Werkzeugleiste, konfigurierbares Papier-/Hintergrund-Popover (inkl. PDF/Bild-Hintergrund-Deckkraft), Seiten-Leiste, Format-Popover (`B × H`), angedockte horizontale `PageOverview`, kontinuierliche Scroll-Ansicht aller Seiten im einheitlichen `docScale`. |
 | `src/components/CanvasPageSheet.tsx` | Einzelne Seite in der kontinuierlichen Ansicht mit **Dual-Layer-Canvas**, iPad-Palm-Rejection, Inline-Texteditor, Bild-Verschieben/Skalieren und Seiten-Kopfzeile (`#N`, `PDF`/`Bild`-Badge, `B × H`, `+H`, `↑`/`↓`, Duplizieren, Löschen). |
 | `src/components/PageOverview.tsx` | Horizontaler angedockter Filmstreifen oberhalb des kontinuierlichen Dokuments mit proportionalen Live-Thumbnails, Drag-&-Drop-Seitenverschiebung (`reorderPage`), Verschieben in andere Notizen (`movePageToNote`) und einklappbarem Neue-Seite-Creator. |
+| `src/components/SettingsPage.tsx` | Einstellungsseite mit **Global**- und **Lokal (pro Notiz)**-Reiter (Vererbung + Einzel-/Komplett-Reset): Glättung, Druckempfindlichkeit, Nur-Stift, 1-Finger-Scroll, Palm-Rejection-Empfindlichkeit, Pinch-Zoom, Momentum, Seiten-Kopfzeilen, Editor-Typografie, Standard-Papier/-Format, PNG-Auflösung, Autosave & Speicher-Übersicht. |
 | `src/components/Icons.tsx` | Inline-SVG-Icons ohne externe Icon-Abhängigkeit. |
 | `src/styles.css` | Komplettes Designsystem mit CSS-Variablen für `[data-theme='light']` und `[data-theme='dark']`. |
 
@@ -88,6 +89,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 ## Tastenkürzel (Referenz)
 
 - `Strg+Alt+N` / `Strg+Alt+W`: Neuer Notiz-Tab / Aktiven Tab schließen (Mittelklick schließt Tab, Doppelklick auf freie Tab-Leiste öffnet neuen Tab)
+- `Strg+,`: Einstellungen (lokal in Notiz / global auf Startseite) öffnen bzw. schließen (`Esc` schließt ebenfalls)
 - `Strg+Z` / `Strg+Umschalt+Z` (`Strg+Y`): Undo / Redo auf aktiver Canvas-Seite
 - `Strg+V`: Bild aus Zwischenablage (im Canvas oder Text-Editor)
 - `Entf` / `Rücktaste`: Ausgewähltes Canvas-Bild löschen

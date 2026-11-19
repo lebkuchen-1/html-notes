@@ -1,4 +1,5 @@
 import {
+  DEFAULT_APP_SETTINGS,
   DEFAULT_CANVAS_HEIGHT,
   DEFAULT_CANVAS_WIDTH,
   DEFAULT_PAPER_CONFIG,
@@ -6,16 +7,22 @@ import {
   MAX_PAGE_HEIGHT,
   MAX_PAGE_WIDTH,
   MIN_PAGE_DIMENSION,
+  PAGE_SIZE_PRESETS,
+  type AppSettings,
   type CanvasFontFamily,
   type CanvasImageItem,
   type CanvasPage,
   type CanvasTextItem,
+  type EditorFontFamily,
   type Folder,
   type Note,
   type NoteImageAttachment,
+  type NoteLocalSettings,
   type PageBackgroundImage,
+  type PalmSensitivity,
   type PaperConfig,
   type PaperPattern,
+  type StabilizationLevel,
   type Stroke,
   type ThemeMode,
   type ViewMode,
@@ -29,6 +36,7 @@ const STORAGE_KEYS = {
   ACTIVE_ID: 'solid-notes:v1:activeId',
   OPEN_TABS: 'solid-notes:v1:openTabs',
   SCREEN: 'solid-notes:v1:screen',
+  SETTINGS: 'solid-notes:v1:settings',
 } as const;
 
 export interface PaperPreset {
@@ -655,6 +663,8 @@ export function normalizeNote(raw: Record<string, unknown>): Note {
     ? rawActivePageId
     : pages[0].id;
 
+  const normalizedSettings = normalizeNoteSettings(raw.settings);
+
   return {
     id: typeof raw.id === 'string' ? raw.id : generateId(),
     title: typeof raw.title === 'string' ? raw.title : '',
@@ -667,9 +677,130 @@ export function normalizeNote(raw: Record<string, unknown>): Note {
     attachments: normalizeAttachments(raw),
     pages,
     activePageId,
+    ...(normalizedSettings && Object.keys(normalizedSettings).length > 0
+      ? { settings: normalizedSettings }
+      : {}),
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
   };
+}
+
+export function normalizeNoteSettings(raw: unknown): Partial<NoteLocalSettings> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const out: Partial<NoteLocalSettings> = {};
+
+  if (obj.stabilization === 'off' || obj.stabilization === 'light' || obj.stabilization === 'medium') {
+    out.stabilization = obj.stabilization as StabilizationLevel;
+  }
+  if (typeof obj.pressureSensitivity === 'boolean') {
+    out.pressureSensitivity = obj.pressureSensitivity;
+  }
+  if (typeof obj.stylusOnly === 'boolean') {
+    out.stylusOnly = obj.stylusOnly;
+  }
+  if (typeof obj.oneFingerScroll === 'boolean') {
+    out.oneFingerScroll = obj.oneFingerScroll;
+  }
+  if (obj.palmSensitivity === 'low' || obj.palmSensitivity === 'normal' || obj.palmSensitivity === 'high') {
+    out.palmSensitivity = obj.palmSensitivity as PalmSensitivity;
+  }
+  if (typeof obj.pinchZoomEnabled === 'boolean') {
+    out.pinchZoomEnabled = obj.pinchZoomEnabled;
+  }
+  if (typeof obj.scrollMomentum === 'boolean') {
+    out.scrollMomentum = obj.scrollMomentum;
+  }
+  if (typeof obj.showSheetHeaders === 'boolean') {
+    out.showSheetHeaders = obj.showSheetHeaders;
+  }
+  if (typeof obj.editorFontSize === 'number' && obj.editorFontSize >= 12 && obj.editorFontSize <= 24) {
+    out.editorFontSize = Math.round(obj.editorFontSize);
+  }
+  if (obj.editorFontFamily === 'sans' || obj.editorFontFamily === 'serif' || obj.editorFontFamily === 'mono') {
+    out.editorFontFamily = obj.editorFontFamily as EditorFontFamily;
+  }
+  if (typeof obj.editorSpellCheck === 'boolean') {
+    out.editorSpellCheck = obj.editorSpellCheck;
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function normalizeAppSettings(raw: unknown): AppSettings {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ...DEFAULT_APP_SETTINGS,
+      defaultPaperConfig: { ...DEFAULT_APP_SETTINGS.defaultPaperConfig },
+    };
+  }
+  const obj = raw as Record<string, unknown>;
+  const localPart = normalizeNoteSettings(obj) ?? {};
+  const validPreset =
+    typeof obj.defaultPagePresetId === 'string' &&
+    PAGE_SIZE_PRESETS.some((p) => p.id === obj.defaultPagePresetId)
+      ? obj.defaultPagePresetId
+      : DEFAULT_APP_SETTINGS.defaultPagePresetId;
+  const pngScale: 1 | 2 | 3 =
+    obj.pngExportScale === 1 || obj.pngExportScale === 2 || obj.pngExportScale === 3
+      ? obj.pngExportScale
+      : DEFAULT_APP_SETTINGS.pngExportScale;
+  const autosave =
+    typeof obj.autosaveDelayMs === 'number' &&
+    obj.autosaveDelayMs >= 150 &&
+    obj.autosaveDelayMs <= 3000
+      ? Math.round(obj.autosaveDelayMs)
+      : DEFAULT_APP_SETTINGS.autosaveDelayMs;
+
+  return {
+    ...DEFAULT_APP_SETTINGS,
+    ...localPart,
+    autoEnableStylusOnly:
+      typeof obj.autoEnableStylusOnly === 'boolean'
+        ? obj.autoEnableStylusOnly
+        : DEFAULT_APP_SETTINGS.autoEnableStylusOnly,
+    defaultViewMode:
+      obj.defaultViewMode === 'split' ||
+      obj.defaultViewMode === 'text' ||
+      obj.defaultViewMode === 'canvas'
+        ? obj.defaultViewMode
+        : DEFAULT_APP_SETTINGS.defaultViewMode,
+    defaultPagePresetId: validPreset,
+    defaultPaperConfig: normalizePaperConfig({ paperConfig: obj.defaultPaperConfig }),
+    pngExportScale: pngScale,
+    autosaveDelayMs: autosave,
+  };
+}
+
+export function loadAppSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (!raw) return normalizeAppSettings(null);
+    return normalizeAppSettings(JSON.parse(raw));
+  } catch {
+    return normalizeAppSettings(null);
+  }
+}
+
+export function saveAppSettings(settings: AppSettings): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  } catch {
+    // ignore
+  }
+}
+
+export function estimateStorageUsageBytes(): number {
+  try {
+    let total = 0;
+    for (const key of Object.values(STORAGE_KEYS)) {
+      const val = localStorage.getItem(key);
+      if (val) total += (key.length + val.length) * 2;
+    }
+    return total;
+  } catch {
+    return 0;
+  }
 }
 
 export function loadInitialWorkspace(): { notes: Note[]; folders: Folder[] } {
@@ -839,8 +970,14 @@ export function saveActiveScreen(screen: 'home' | 'note'): void {
   }
 }
 
-export function exportNotesAsJson(notes: Note[], folders: Folder[] = []) {
-  const payload = { version: 2, folders, notes };
+export function exportNotesAsJson(
+  notes: Note[],
+  folders: Folder[] = [],
+  settings?: AppSettings
+) {
+  const payload = settings
+    ? { version: 2, folders, notes, settings }
+    : { version: 2, folders, notes };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: 'application/json',
   });

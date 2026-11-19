@@ -1,8 +1,9 @@
-import { createSignal, onCleanup, onMount, Show } from 'solid-js';
+import { createSignal, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { HomePage } from './components/HomePage';
 import { NoteHeader } from './components/NoteHeader';
 import { NoteTabs } from './components/NoteTabs';
+import { SettingsPage } from './components/SettingsPage';
 import { Sidebar } from './components/Sidebar';
 import { TextEditor } from './components/TextEditor';
 import { createNotesStore } from './store/notesStore';
@@ -44,6 +45,22 @@ export function App() {
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         Boolean(target?.isContentEditable);
+
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        if (store.activeScreen() === 'settings') {
+          store.closeSettings();
+        } else {
+          store.openSettings(store.activeScreen() === 'note' ? 'local' : 'global');
+        }
+        return;
+      }
+
+      if (e.key === 'Escape' && store.activeScreen() === 'settings' && !isEditable) {
+        e.preventDefault();
+        store.closeSettings();
+        return;
+      }
 
       if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'n') {
         e.preventDefault();
@@ -91,45 +108,48 @@ export function App() {
       <main class="main-column">
         <NoteTabs store={store} />
 
-        <Show
-          when={store.activeScreen() === 'note' && store.activeNote()}
-          fallback={<HomePage store={store} />}
-        >
-          <NoteHeader store={store} />
-          <div
-            ref={workspaceRef}
-            class="workspace"
-            classList={{
-              'mode-split': store.viewMode() === 'split',
-              'mode-text': store.viewMode() === 'text',
-              'mode-canvas': store.viewMode() === 'canvas',
-            }}
-            style={{ '--split-ratio': `${splitRatio()}%` }}
-          >
-            <Show when={store.viewMode() === 'split' || store.viewMode() === 'text'}>
-              <TextEditor store={store} />
-            </Show>
+        <Switch fallback={<HomePage store={store} />}>
+          <Match when={store.activeScreen() === 'settings'}>
+            <SettingsPage store={store} />
+          </Match>
 
-            <Show when={store.viewMode() === 'split'}>
-              <div
-                class="split-resizer"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Größe von Text und Zeichenfläche anpassen"
-                onPointerDown={startSplitDrag}
-                onPointerMove={onSplitDragMove}
-                onPointerUp={endSplitDrag}
-                onPointerCancel={endSplitDrag}
-              >
-                <span class="split-handle" />
-              </div>
-            </Show>
+          <Match when={store.activeScreen() === 'note' && store.activeNote()}>
+            <NoteHeader store={store} />
+            <div
+              ref={workspaceRef}
+              class="workspace"
+              classList={{
+                'mode-split': store.viewMode() === 'split',
+                'mode-text': store.viewMode() === 'text',
+                'mode-canvas': store.viewMode() === 'canvas',
+              }}
+              style={{ '--split-ratio': `${splitRatio()}%` }}
+            >
+              <Show when={store.viewMode() === 'split' || store.viewMode() === 'text'}>
+                <TextEditor store={store} />
+              </Show>
 
-            <Show when={store.viewMode() === 'split' || store.viewMode() === 'canvas'}>
-              <DrawingCanvas store={store} />
-            </Show>
-          </div>
-        </Show>
+              <Show when={store.viewMode() === 'split'}>
+                <div
+                  class="split-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Größe von Text und Zeichenfläche anpassen"
+                  onPointerDown={startSplitDrag}
+                  onPointerMove={onSplitDragMove}
+                  onPointerUp={endSplitDrag}
+                  onPointerCancel={endSplitDrag}
+                >
+                  <span class="split-handle" />
+                </div>
+              </Show>
+
+              <Show when={store.viewMode() === 'split' || store.viewMode() === 'canvas'}>
+                <DrawingCanvas store={store} />
+              </Show>
+            </div>
+          </Match>
+        </Switch>
       </main>
 
       <Show when={store.toastMessage()}>

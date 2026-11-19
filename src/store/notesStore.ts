@@ -1,6 +1,9 @@
 import { createEffect, createMemo, createSignal } from 'solid-js';
 import {
+  DEFAULT_APP_SETTINGS,
   FOLDER_COLORS,
+  PAGE_SIZE_PRESETS,
+  type AppSettings,
   type CanvasImageItem,
   type CanvasPage,
   type CanvasSnapshot,
@@ -9,6 +12,7 @@ import {
   type HistoryState,
   type Note,
   type NoteImageAttachment,
+  type NoteLocalSettings,
   type PageBackgroundImage,
   type PaperConfig,
   type Stroke,
@@ -19,10 +23,10 @@ import {
   clampPageHeight,
   clampPageWidth,
   createCanvasPage,
-  createEmptyNote,
   generateId,
   loadActiveNoteId,
   loadActiveScreen,
+  loadAppSettings,
   loadInitialWorkspace,
   loadOpenTabIds,
   loadTheme,
@@ -31,6 +35,7 @@ import {
   normalizeNote,
   saveActiveNoteId,
   saveActiveScreen,
+  saveAppSettings,
   saveFolders,
   saveNotes,
   saveOpenTabIds,
@@ -39,6 +44,8 @@ import {
 } from '../utils/storage';
 
 export type SidebarFilterMode = 'all' | 'pinned' | 'unfiled' | 'folder';
+export type ActiveScreen = 'home' | 'note' | 'settings';
+export type SettingsScopeTab = 'global' | 'local';
 
 const MAX_HISTORY = 50;
 
@@ -65,9 +72,13 @@ export function createNotesStore() {
   const [folders, setFolders] = createSignal<Folder[]>(initialFolders);
   const [activeNoteId, setActiveNoteId] = createSignal<string | null>(initialActiveId);
   const [openTabIds, setOpenTabIds] = createSignal<string[]>(initialTabIds);
-  const [activeScreen, setActiveScreen] = createSignal<'home' | 'note'>(
+  const [activeScreen, setActiveScreen] = createSignal<ActiveScreen>(
     initialActiveId ? loadActiveScreen() : 'home'
   );
+  const [settingsTab, setSettingsTab] = createSignal<SettingsScopeTab>('global');
+  let previousNonSettingsScreen: 'home' | 'note' =
+    initialActiveId ? loadActiveScreen() : 'home';
+  const [settings, setSettings] = createSignal<AppSettings>(loadAppSettings());
   const [searchQuery, setSearchQuery] = createSignal('');
   const [filterMode, setFilterMode] = createSignal<SidebarFilterMode>('all');
   const [selectedFolderId, setSelectedFolderId] = createSignal<string | null>(null);
@@ -91,13 +102,18 @@ export function createNotesStore() {
   let saveTimer: number | undefined;
   createEffect(() => {
     const currentNotes = notes();
+    const delay = settings().autosaveDelayMs;
     if (saveTimer) window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       const ok = saveNotes(currentNotes);
       if (!ok) {
         showToast('Speicher voll: Bitte kleinere Bilder verwenden oder alte Notizen löschen.');
       }
-    }, 450);
+    }, delay);
+  });
+
+  createEffect(() => {
+    saveAppSettings(settings());
   });
 
   createEffect(() => {
@@ -123,7 +139,11 @@ export function createNotesStore() {
   });
 
   createEffect(() => {
-    saveActiveScreen(activeScreen());
+    const screen = activeScreen();
+    if (screen === 'home' || screen === 'note') {
+      previousNonSettingsScreen = screen;
+      saveActiveScreen(screen);
+    }
   });
 
   const activeNote = createMemo<Note | undefined>(() => {
@@ -145,6 +165,101 @@ export function createNotesStore() {
     const idx = n.pages.findIndex((item) => item.id === p.id);
     return idx >= 0 ? idx : 0;
   });
+
+  // Effective settings for the currently active note (global AppSettings + per-note local overrides)
+  const effectiveSettings = createMemo<AppSettings>(() => {
+    const g = settings();
+    const local = activeNote()?.settings;
+    if (!local) return g;
+    return { ...g, ...local };
+  });
+
+  const activeNoteLocalOverrideCount = createMemo<number>(() => {
+    const local = activeNote()?.settings;
+    if (!local) return 0;
+    return Object.values(local).filter((v) => v !== undefined).length;
+  });
+
+  const openSettings = (tab?: SettingsScopeTab) => {
+    const resolvedTab: SettingsScopeTab =
+      tab === 'local' && activeNote() ? 'local' : tab ?? 'global';
+    setSettingsTab(resolvedTab);
+    setActiveScreen('settings');
+  };
+
+  const closeSettings = () => {
+    if (previousNonSettingsScreen === 'note' && activeNote()) {
+      setActiveScreen('note');
+    } else {
+      setActiveScreen('home');
+    }
+  };
+
+  const updateSettings = (patch: Partial<AppSettings>) => {
+    setSettings((prev) => ({
+      ...prev,
+      ...patch,
+      defaultPaperConfig: patch.defaultPaperConfig
+        ? { ...prev.defaultPaperConfig, ...patch.defaultPaperConfig }
+        : prev.defaultPaperConfig,
+    }));
+  };
+
+  const updateDefaultPaperConfig = (patch: Partial<PaperConfig>) => {
+    setSettings((prev) => ({
+      ...prev,
+      defaultPaperConfig: { ...prev.defaultPaperConfig, ...patch },
+    }));
+  };
+
+  const resetSettings = () => {
+    setSettings({
+      ...DEFAULT_APP_SETTINGS,
+      defaultPaperConfig: { ...DEFAULT_APP_SETTINGS.defaultPaperConfig },
+    });
+    showToast('Globale Einstellungen zurückgesetzt');
+  };
+
+  const updateNoteSettings = (
+    patch: Partial<{ [K in keyof NoteLocalSettings]: NoteLocalSettings[K] | undefined }>,
+    targetNoteId?: string
+  ) => {
+    const id = targetNoteId ?? activeNoteId();
+    if (!id) return;
+    updateNoteById(id, (n) => {
+      const next: Partial<NoteLocalSettings> = { ...(n.settings ?? {}) };
+      for (const [key, val] of Object.entries(patch)) {
+        const k = key as keyof NoteLocalSettings;
+        if (val === undefined) {
+          delete next[k];
+        } else {
+          (next as Record<string, unknown>)[k] = val;
+        }
+      }
+      const hasAny = Object.keys(next).length > 0;
+      const updatedNote: Note = {
+        ...n,
+        updatedAt: Date.now(),
+      };
+      if (hasAny) {
+        updatedNote.settings = next;
+      } else {
+        delete updatedNote.settings;
+      }
+      return updatedNote;
+    });
+  };
+
+  const resetNoteSettings = (targetNoteId?: string) => {
+    const id = targetNoteId ?? activeNoteId();
+    if (!id) return;
+    updateNoteById(id, (n) => {
+      const next = { ...n, updatedAt: Date.now() };
+      delete next.settings;
+      return next;
+    });
+    showToast('Lokale Notiz-Einstellungen auf Global zurückgesetzt');
+  };
 
   const getDescendantFolderIds = (rootFolderId: string): Set<string> => {
     const result = new Set<string>([rootFolderId]);
@@ -378,10 +493,32 @@ export function createNotesStore() {
         : filterMode() === 'folder'
           ? selectedFolderId()
           : null;
-    const note = createEmptyNote('', targetFolderId);
+    const s = settings();
+    const preset = PAGE_SIZE_PRESETS.find((p) => p.id === s.defaultPagePresetId);
+    const now = Date.now();
+    const firstPage = createCanvasPage({
+      title: 'Seite 1',
+      width: preset?.width,
+      height: preset?.height,
+      paperConfig: { ...s.defaultPaperConfig },
+    });
+    const note: Note = {
+      id: generateId(),
+      title: '',
+      content: '',
+      tags: [],
+      pinned: false,
+      folderId: targetFolderId,
+      attachments: [],
+      pages: [firstPage],
+      activePageId: firstPage.id,
+      createdAt: now,
+      updatedAt: now,
+    };
     setNotes((prev) => [note, ...prev]);
     setOpenTabIds((prev) => [...prev, note.id]);
     setActiveNoteId(note.id);
+    setViewMode(s.defaultViewMode);
     setActiveScreen('note');
     if (window.innerWidth < 900) {
       setSidebarOpen(false);
@@ -513,6 +650,7 @@ export function createNotesStore() {
       attachments: original.attachments.map((a) => ({ ...a })),
       pages: clonedPages,
       activePageId: clonedPages[0].id,
+      ...(original.settings ? { settings: { ...original.settings } } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -1202,6 +1340,18 @@ export function createNotesStore() {
     activeNoteId,
     setActiveNoteId,
     activeScreen,
+    settingsTab,
+    setSettingsTab,
+    openSettings,
+    closeSettings,
+    settings,
+    effectiveSettings,
+    activeNoteLocalOverrideCount,
+    updateSettings,
+    updateDefaultPaperConfig,
+    resetSettings,
+    updateNoteSettings,
+    resetNoteSettings,
     openHome,
     openFolderInHome,
     openTabIds,

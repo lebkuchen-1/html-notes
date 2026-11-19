@@ -6,6 +6,7 @@ import {
   IconMoon,
   IconPalette,
   IconPin,
+  IconSettings,
   IconSidebar,
   IconSplit,
   IconSun,
@@ -198,15 +199,37 @@ export function NoteHeader(props: NoteHeaderProps) {
 
         <Show when={note()}>
           {(current) => (
-            <button
-              type="button"
-              class="icon-btn"
-              classList={{ 'is-accent': current().pinned }}
-              onClick={() => props.store.togglePin(current().id)}
-              title={current().pinned ? 'Nicht mehr anpinnen' : 'Notiz anpinnen'}
-            >
-              <IconPin size={17} filled={current().pinned} />
-            </button>
+            <>
+              <button
+                type="button"
+                class="icon-btn"
+                classList={{ 'is-accent': current().pinned }}
+                onClick={() => props.store.togglePin(current().id)}
+                title={current().pinned ? 'Nicht mehr anpinnen' : 'Notiz anpinnen'}
+              >
+                <IconPin size={17} filled={current().pinned} />
+              </button>
+
+              <button
+                type="button"
+                class="icon-btn note-settings-btn"
+                classList={{
+                  'has-overrides': props.store.activeNoteLocalOverrideCount() > 0,
+                }}
+                onClick={() => props.store.openSettings('local')}
+                title={
+                  props.store.activeNoteLocalOverrideCount() > 0
+                    ? `Notiz- & globale Einstellungen (${props.store.activeNoteLocalOverrideCount()} lokale Anpassungen) · Strg+,`
+                    : 'Notiz- & globale Einstellungen öffnen (Strg+,)'
+                }
+                aria-label="Einstellungen für diese Notiz"
+              >
+                <IconSettings size={17} />
+                <Show when={props.store.activeNoteLocalOverrideCount() > 0}>
+                  <span class="override-dot" />
+                </Show>
+              </button>
+            </>
           )}
         </Show>
 

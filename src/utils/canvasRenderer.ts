@@ -743,19 +743,20 @@ export function isPointHittingImage(
 export async function exportCanvasToPng(
   page: CanvasPage,
   theme: ThemeMode,
-  filename: string
+  filename: string,
+  exportScale = 2
 ) {
   const sources = page.images.map((i) => i.src);
   if (page.backgroundImage?.src) sources.push(page.backgroundImage.src);
   await ensureImagesLoaded(sources);
-  const exportScale = 2;
+  const scale = Math.max(1, Math.min(3, exportScale));
   const offscreen = document.createElement('canvas');
-  offscreen.width = Math.round(page.width * exportScale);
-  offscreen.height = Math.round(page.height * exportScale);
+  offscreen.width = Math.round(page.width * scale);
+  offscreen.height = Math.round(page.height * scale);
   const ctx = offscreen.getContext('2d');
   if (!ctx) return;
 
-  renderFullCanvas(ctx, page, null, theme, exportScale);
+  renderFullCanvas(ctx, page, null, theme, scale);
 
   const url = offscreen.toDataURL('image/png');
   const a = document.createElement('a');

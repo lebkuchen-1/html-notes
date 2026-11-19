@@ -41,7 +41,6 @@ import {
   type EditingTextState,
   type SelectedImageState,
 } from './CanvasPageSheet';
-import type { StabilizationLevel } from '../utils/strokeStabilizer';
 import {
   IconArrow,
   IconChevronLeft,
@@ -144,13 +143,6 @@ interface AppleTouch extends Touch {
 const MIN_ZOOM = 0.45;
 const MAX_ZOOM = 3.5;
 
-const STABILIZATION_ORDER: StabilizationLevel[] = ['off', 'light', 'medium'];
-const STABILIZATION_LABELS: Record<StabilizationLevel, string> = {
-  off: 'Aus',
-  light: 'Leicht',
-  medium: 'Mittel',
-};
-
 export function DrawingCanvas(props: DrawingCanvasProps) {
   const [tool, setTool] = createSignal<DrawingTool>('pen');
   const [penColor, setPenColor] = createSignal<string>('auto');
@@ -162,12 +154,61 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [textFontFamily, setTextFontFamily] = createSignal<CanvasFontFamily>('sans');
   const [textBold, setTextBold] = createSignal<boolean>(false);
 
-  const [stylusOnly, setStylusOnly] = createSignal<boolean>(false);
-  const [stabilization, setStabilization] = createSignal<StabilizationLevel>('light');
   const [zoom, setZoom] = createSignal<number>(1);
   const [liveZoomPreview, setLiveZoomPreview] = createSignal<number | null>(null);
   const [viewportWidth, setViewportWidth] = createSignal<number>(720);
   const [lastPointerType, setLastPointerType] = createSignal<string | null>(null);
+
+  const effSettings = () => props.store.effectiveSettings();
+  const stylusOnly = () => effSettings().stylusOnly;
+  const stabilization = () => effSettings().stabilization;
+  const pressureSensitivity = () => effSettings().pressureSensitivity;
+  const oneFingerScroll = () => effSettings().oneFingerScroll;
+  const palmSensitivity = () => effSettings().palmSensitivity;
+  const pinchZoomEnabled = () => effSettings().pinchZoomEnabled;
+  const scrollMomentum = () => effSettings().scrollMomentum;
+  const showSheetHeaders = () => effSettings().showSheetHeaders;
+
+  const palmProfile = createMemo(() => {
+    const level = palmSensitivity();
+    if (level === 'low') {
+      return {
+        touchRadius: 42,
+        growRadius: 46,
+        pointerWidth: 50,
+        postPenThreshold: 10,
+        snapWindowMs: 180,
+        snapMaxPx: 24,
+      };
+    }
+    if (level === 'high') {
+      return {
+        touchRadius: 26,
+        growRadius: 30,
+        pointerWidth: 32,
+        postPenThreshold: 20,
+        snapWindowMs: 380,
+        snapMaxPx: 52,
+      };
+    }
+    return {
+      touchRadius: 34,
+      growRadius: 38,
+      pointerWidth: 42,
+      postPenThreshold: 14,
+      snapWindowMs: 260,
+      snapMaxPx: 36,
+    };
+  });
+
+  const setStylusOnlyPersisted = (next: boolean) => {
+    const currNote = props.store.activeNote();
+    if (currNote?.settings?.stylusOnly !== undefined) {
+      props.store.updateNoteSettings({ stylusOnly: next }, currNote.id);
+    } else {
+      props.store.updateSettings({ stylusOnly: next });
+    }
+  };
 
   const [paperMenuOpen, setPaperMenuOpen] = createSignal<boolean>(false);
   const [sizeMenuOpen, setSizeMenuOpen] = createSignal<boolean>(false);
@@ -198,13 +239,14 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     setLastPointerType(pointerType);
     if (
       pointerType === 'pen' &&
+      props.store.settings().autoEnableStylusOnly &&
       !autoEnabledStylusOnce &&
       !stylusOnly() &&
       typeof navigator !== 'undefined' &&
       navigator.maxTouchPoints > 0
     ) {
       autoEnabledStylusOnce = true;
-      setStylusOnly(true);
+      setStylusOnlyPersisted(true);
       props.store.showToast(
         'Stift erkannt — Stift schreibt · 1 Finger scrollt · 2 Finger zoomen'
       );
@@ -304,19 +346,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     for (const fn of touchAbortCallbacks.values()) {
       fn();
     }
-  };
-
-  const cycleStabilization = () => {
-    const idx = STABILIZATION_ORDER.indexOf(stabilization());
-    const next = STABILIZATION_ORDER[(idx + 1) % STABILIZATION_ORDER.length];
-    setStabilization(next);
-    props.store.showToast(
-      next === 'off'
-        ? 'Schrift-Stabilisierung: Aus'
-        : next === 'light'
-          ? 'Schrift-Stabilisierung: Leicht (empfohlen)'
-          : 'Schrift-Stabilisierung: Mittel'
-    );
   };
 
   const scrollToPage = (pageId: string, behavior: ScrollBehavior = 'smooth') => {
@@ -469,6 +498,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
     const startMomentum = (vx: number, vy: number) => {
       stopMomentum();
+      if (!scrollMomentum()) return;
       if (Math.hypot(vx, vy) < 1.2) return;
       momentumVx = Math.max(-56, Math.min(56, vx));
       momentumVy = Math.max(-56, Math.min(56, vy));
@@ -520,7 +550,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       const onCanvas =
         target instanceof Element && Boolean(target.closest('.drawing-canvas'));
       if (!onCanvas) return true;
-      if (stylusOnly()) return true;
+      if (stylusOnly()) return oneFingerScroll();
       return tool() === 'select';
     };
 
@@ -640,13 +670,14 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (oneFingerPan) {
         const pan = oneFingerPan;
         oneFingerPan = null;
+        const profile = palmProfile();
         // If a resting palm nudged scroll right before Apple Pencil landed, gently snap it back
-        if (pan.engaged && performance.now() - pan.startTime < 260) {
+        if (pan.engaged && performance.now() - pan.startTime < profile.snapWindowMs) {
           const drift = Math.hypot(
             vp.scrollLeft - pan.startScrollLeft,
             vp.scrollTop - pan.startScrollTop
           );
-          if (drift < 36) {
+          if (drift < profile.snapMaxPx) {
             vp.scrollLeft = pan.startScrollLeft;
             vp.scrollTop = pan.startScrollTop;
           }
@@ -685,12 +716,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
     const handleTouchStart = (e: TouchEvent) => {
       stopMomentum();
+      const profile = palmProfile();
 
       for (let i = 0; i < e.changedTouches.length; i++) {
         const ct = e.changedTouches[i] as AppleTouch;
         if (ct.touchType !== 'stylus') {
           activeNonStylusTouchIds.add(ct.identifier);
-          if (isAnyPenStrokeActive() || isPalmSizedTouch(ct, 34)) {
+          if (isAnyPenStrokeActive() || isPalmSizedTouch(ct, profile.touchRadius)) {
             ignoredPalmTouchIds.add(ct.identifier);
           }
         }
@@ -706,7 +738,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
       const fingerTouches = getCleanFingerTouches(e.touches);
 
-      // 2 clean fingers -> instant Pinch-to-Zoom + simultaneous Pan (no deadzone!)
+      // 2 clean fingers -> instant Pinch-to-Zoom + simultaneous Pan (or pure 2-finger pan if zoom disabled)
       if (fingerTouches.length >= 2 && !isAnyPenStrokeActive()) {
         e.preventDefault();
         beginPinch(fingerTouches[0], fingerTouches[1]);
@@ -740,7 +772,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             lastMoveTs: performance.now(),
             velX: 0,
             velY: 0,
-            threshold: penJustUsed ? 14 : 7,
+            threshold: penJustUsed ? profile.postPenThreshold : 7,
           };
 
           // Prevent Safari Scribble / selection magnifier on drawing canvas while allowing native
@@ -776,7 +808,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       // If a pending 1-finger touch spreads out into a palm footprint before scrolling starts, ignore it
       if (oneFingerPan && !oneFingerPan.engaged) {
         const t = findTouchById(e.touches, oneFingerPan.touchId);
-        if (t && isPalmSizedTouch(t, 38)) {
+        if (t && isPalmSizedTouch(t, palmProfile().growRadius)) {
           ignoredPalmTouchIds.add(t.identifier);
           oneFingerPan = null;
         }
@@ -801,6 +833,17 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
         const midX = (t0.clientX + t1.clientX) / 2;
         const midY = (t0.clientY + t1.clientY) / 2;
+
+        if (!pinchZoomEnabled()) {
+          const dx = midX - g.lastMidX;
+          const dy = midY - g.lastMidY;
+          g.lastMidX = midX;
+          g.lastMidY = midY;
+          vp.scrollLeft -= dx;
+          vp.scrollTop -= dy;
+          return;
+        }
+
         const dist = Math.max(12, Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY));
 
         const nextZoom = Math.max(
@@ -1140,7 +1183,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     await exportCanvasToPng(
       currentPage,
       props.store.theme(),
-      `${safeName || 'skizze'}.png`
+      `${safeName || 'skizze'}.png`,
+      effSettings().pngExportScale
     );
     props.store.showToast(`Seite „${currentPage.title}“ als PNG exportiert`);
   };
@@ -1700,28 +1744,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </div>
           </Show>
 
-          <Show when={tool() === 'pen'}>
-            <button
-              type="button"
-              class="tool-pill"
-              classList={{ 'is-active': stabilization() !== 'off' }}
-              onClick={cycleStabilization}
-              title={`Schrift-Stabilisierung: ${STABILIZATION_LABELS[stabilization()]} (Klicken zum Wechseln: Aus / Leicht / Mittel)`}
-            >
-              <span class="stab-dot" data-level={stabilization()} />
-              <span class="hide-compact">
-                Glättung: {STABILIZATION_LABELS[stabilization()]}
-              </span>
-            </button>
-          </Show>
-
           <button
             type="button"
             class="tool-pill"
             classList={{ 'is-active': stylusOnly() }}
             onClick={() => {
               const next = !stylusOnly();
-              setStylusOnly(next);
+              setStylusOnlyPersisted(next);
               props.store.showToast(
                 next
                   ? 'Nur-Stift-Modus aktiv (Stift schreibt · 1 Finger scrollt · 2 Finger zoomen)'
@@ -2070,6 +2099,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   textBold={textBold()}
                   stylusOnly={stylusOnly()}
                   stabilization={stabilization()}
+                  pressureSensitivity={pressureSensitivity()}
+                  palmRadiusLimit={palmProfile().pointerWidth}
+                  showSheetHeader={showSheetHeaders()}
                   editingText={editingText()}
                   selectedImage={selectedImage()}
                   onPointerTypeChange={handlePointerTypeDetected}

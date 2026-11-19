@@ -16,6 +16,7 @@ import {
   IconPin,
   IconPlus,
   IconSearch,
+  IconSettings,
   IconTrash,
   IconUpload,
   IconX,
@@ -479,6 +480,22 @@ export function Sidebar(props: SidebarProps) {
             {props.store.notes().filter((n) => n.pinned).length}
           </span>
         </button>
+
+        <button
+          type="button"
+          class="nav-item"
+          classList={{
+            'is-active': props.store.activeScreen() === 'settings',
+          }}
+          onClick={() => {
+            props.store.openSettings('global');
+            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+          }}
+          title="Globale & lokale Einstellungen (Strg+,)"
+        >
+          <IconSettings size={15} />
+          <span class="nav-item-label">Einstellungen</span>
+        </button>
       </nav>
 
       {/* Slim Tree Filter */}
@@ -693,7 +710,11 @@ export function Sidebar(props: SidebarProps) {
           type="button"
           class="footer-action"
           onClick={() => {
-            exportNotesAsJson(props.store.notes(), props.store.folders());
+            exportNotesAsJson(
+              props.store.notes(),
+              props.store.folders(),
+              props.store.settings()
+            );
             props.store.showToast('JSON-Backup exportiert');
           }}
           title="Alle Notizen & Ordner als JSON sichern"
