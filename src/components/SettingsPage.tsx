@@ -2,6 +2,7 @@ import { createMemo, For, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
 import {
   PAGE_SIZE_PRESETS,
+  type CanvasMode,
   type EditorFontFamily,
   type NoteLocalSettings,
   type PalmSensitivity,
@@ -30,6 +31,11 @@ import {
 interface SettingsPageProps {
   store: NotesStore;
 }
+
+const CANVAS_MODE_OPTIONS: { value: CanvasMode; label: string }[] = [
+  { value: 'pages', label: 'Seiten' },
+  { value: 'infinite', label: 'Unendlich (OneNote)' },
+];
 
 const STABILIZATION_OPTIONS: { value: StabilizationLevel; label: string }[] = [
   { value: 'off', label: 'Aus' },
@@ -469,6 +475,37 @@ export function SettingsPage(props: SettingsPageProps) {
             </div>
 
             <div class="settings-list">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <div class="setting-label-row">
+                    <span class="setting-label">Canvas-Modus</span>
+                    {renderLocalMeta('canvasMode')}
+                  </div>
+                  <span class="setting-desc">
+                    Klassische mehrseitige Dokumente oder ein endloses Whiteboard wie in OneNote.
+                    Bestehende Inhalte bleiben beim Wechseln vollständig erhalten.
+                  </span>
+                </div>
+                <div class="setting-control">
+                  <div class="segmented-control">
+                    <For each={CANVAS_MODE_OPTIONS}>
+                      {(opt) => (
+                        <button
+                          type="button"
+                          class="seg-btn"
+                          classList={{
+                            'is-active': currentValues().canvasMode === opt.value,
+                          }}
+                          onClick={() => setShared('canvasMode', opt.value)}
+                        >
+                          {opt.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </div>
+
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-label-row">

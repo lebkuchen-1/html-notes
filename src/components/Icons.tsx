@@ -425,3 +425,28 @@ export const IconSliders = (p: IconProps) => (
     <line x1="17" y1="16" x2="23" y2="16" />
   </svg>
 );
+
+export const IconInfinity = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M18.178 8c5.096 0 5.096 8 0 8-5.095 0-7.133-8-12.739-8-4.585 0-4.585 8 0 8 5.606 0 7.644-8 12.74-8z" />
+  </svg>
+);
+
+export const IconCrosshair = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <circle cx="12" cy="12" r="7" />
+    <line x1="12" y1="2" x2="12" y2="6" />
+    <line x1="12" y1="18" x2="12" y2="22" />
+    <line x1="2" y1="12" x2="6" y2="12" />
+    <line x1="18" y1="12" x2="22" y2="12" />
+  </svg>
+);
+
+export const IconMaximize = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+  </svg>
+);

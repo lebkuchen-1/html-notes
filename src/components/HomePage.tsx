@@ -7,13 +7,18 @@ import {
   type Note,
   type ThemeMode,
 } from '../types';
-import { renderFullCanvas } from '../utils/canvasRenderer';
+import {
+  computePageContentBounds,
+  renderFullCanvas,
+  renderInfiniteCanvas,
+} from '../utils/canvasRenderer';
 import { importFilesAsPages, stripFileExtension } from '../utils/pageImport';
 import {
   IconCopy,
   IconFileUp,
   IconFolder,
   IconFolderPlus,
+  IconInfinity,
   IconMoon,
   IconPen,
   IconPin,
@@ -65,7 +70,11 @@ function getExcerpt(content: string): string {
   return cleaned.length > 105 ? `${cleaned.slice(0, 105)}…` : cleaned;
 }
 
-function NotePreviewCanvas(props: { page: CanvasPage; theme: ThemeMode }) {
+function NotePreviewCanvas(props: {
+  page: CanvasPage;
+  theme: ThemeMode;
+  isInfinite?: boolean;
+}) {
   let canvasEl: HTMLCanvasElement | undefined;
 
   const draw = () => {
@@ -83,6 +92,40 @@ function NotePreviewCanvas(props: { page: CanvasPage; theme: ThemeMode }) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    if (props.isInfinite) {
+      const bounds = computePageContentBounds(props.page, ctx);
+      if (bounds) {
+        const pad = 42;
+        const bw = Math.max(260, bounds.maxX - bounds.minX + pad * 2);
+        const bh = Math.max(140, bounds.maxY - bounds.minY + pad * 2);
+        const zoom = Math.min(cssW / bw, cssH / bh);
+        const cx = (bounds.minX + bounds.maxX) / 2;
+        const cy = (bounds.minY + bounds.maxY) / 2;
+        renderInfiniteCanvas(
+          ctx,
+          props.page,
+          cssW,
+          cssH,
+          { x: cx - cssW / (2 * zoom), y: cy - cssH / (2 * zoom), zoom },
+          props.theme,
+          dpr,
+          { onImageLoad: draw }
+        );
+      } else {
+        renderInfiniteCanvas(
+          ctx,
+          props.page,
+          cssW,
+          cssH,
+          { x: 0, y: 0, zoom: 0.55 },
+          props.theme,
+          dpr,
+          { onImageLoad: draw }
+        );
+      }
+      return;
+    }
+
     // Fit full page width into preview card (showing top portion of tall pages cleanly)
     const scale = targetW / Math.max(1, props.page.width);
     renderFullCanvas(ctx, props.page, null, props.theme, scale, {
@@ -99,6 +142,7 @@ function NotePreviewCanvas(props: { page: CanvasPage; theme: ThemeMode }) {
     void props.page.paperConfig;
     void props.page.backgroundImage;
     void props.theme;
+    void props.isInfinite;
     requestAnimationFrame(draw);
   });
 
@@ -248,6 +292,8 @@ export function HomePage(props: HomePageProps) {
   const renderNoteCard = (note: Note) => {
     const firstPage = () => note.pages[0];
     const folder = () => (note.folderId ? folderMap().get(note.folderId) : undefined);
+    const isInf = () =>
+      (note.settings?.canvasMode ?? props.store.settings().canvasMode) === 'infinite';
 
     return (
       <article
@@ -256,10 +302,22 @@ export function HomePage(props: HomePageProps) {
       >
         <div class="home-note-preview">
           <Show when={firstPage()}>
-            {(p) => <NotePreviewCanvas page={p()} theme={props.store.theme()} />}
+            {(p) => (
+              <NotePreviewCanvas
+                page={p()}
+                theme={props.store.theme()}
+                isInfinite={isInf()}
+              />
+            )}
           </Show>
           <div class="home-note-preview-badges">
-            <Show when={note.pages.length > 1}>
+            <Show when={isInf()}>
+              <span class="hnp-badge is-infinite" title="Unendlicher Canvas (OneNote-Modus)">
+                <IconInfinity size={12} />
+                <span>Unendlich</span>
+              </span>
+            </Show>
+            <Show when={!isInf() && note.pages.length > 1}>
               <span class="hnp-badge">{note.pages.length} Seiten</span>
             </Show>
             <Show when={note.pinned}>
@@ -524,6 +582,34 @@ export function HomePage(props: HomePageProps) {
                 <span class="tpl-preview tpl-cream" />
                 <span class="tpl-title">Leere Notiz</span>
                 <span class="tpl-sub">A4 Hoch · Text &amp; Canvas</span>
+              </button>
+
+              <button
+                type="button"
+                class="template-card"
+                onClick={() =>
+                  props.store.createNoteFromTemplate({
+                    title: 'Unendliches Board',
+                    pageTitle: 'Endlos-Fläche',
+                    paperConfig: {
+                      pattern: 'dots',
+                      backgroundColor: '#fcf9f2',
+                      lineColor: '#9c8c74',
+                      spacing: 32,
+                      lineOpacity: 0.24,
+                      showMargin: false,
+                    },
+                    viewMode: 'canvas',
+                    settings: { canvasMode: 'infinite' },
+                    folderId: homeFilter() === 'folder' ? homeFolderId() : null,
+                  })
+                }
+              >
+                <span class="tpl-preview tpl-infinite">
+                  <IconInfinity size={22} />
+                </span>
+                <span class="tpl-title">Unendliches Board</span>
+                <span class="tpl-sub">Wie OneNote · Grenzenlos</span>
               </button>
 
               <button

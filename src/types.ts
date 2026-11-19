@@ -23,8 +23,11 @@ export type PalmSensitivity = 'low' | 'normal' | 'high';
 
 export type EditorFontFamily = 'sans' | 'serif' | 'mono';
 
+export type CanvasMode = 'pages' | 'infinite';
+
 /** Settings that can be configured globally and optionally overridden per note */
 export interface NoteLocalSettings {
+  canvasMode: CanvasMode;
   stabilization: StabilizationLevel;
   pressureSensitivity: boolean;
   stylusOnly: boolean;
@@ -210,6 +213,7 @@ export const DEFAULT_PAPER_CONFIG: PaperConfig = {
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
+  canvasMode: 'pages',
   stabilization: 'light',
   pressureSensitivity: true,
   stylusOnly: false,

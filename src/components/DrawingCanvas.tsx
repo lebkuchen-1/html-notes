@@ -21,6 +21,7 @@ import {
 } from '../types';
 import {
   exportCanvasToPng,
+  exportInfiniteCanvasToPng,
   isPaperDark,
   resolvePaperBackgroundColor,
 } from '../utils/canvasRenderer';
@@ -42,9 +43,14 @@ import {
   type SelectedImageState,
 } from './CanvasPageSheet';
 import {
+  InfiniteCanvasView,
+  type InfiniteCanvasHandle,
+} from './InfiniteCanvasView';
+import {
   IconArrow,
   IconChevronLeft,
   IconChevronRight,
+  IconCrosshair,
   IconDownload,
   IconEllipse,
   IconEraser,
@@ -52,7 +58,9 @@ import {
   IconGrid,
   IconHighlighter,
   IconImage,
+  IconInfinity,
   IconLine,
+  IconMaximize,
   IconPages,
   IconPen,
   IconPlus,
@@ -155,11 +163,15 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [textBold, setTextBold] = createSignal<boolean>(false);
 
   const [zoom, setZoom] = createSignal<number>(1);
+  const [infiniteZoom, setInfiniteZoom] = createSignal<number>(1);
   const [liveZoomPreview, setLiveZoomPreview] = createSignal<number | null>(null);
   const [viewportWidth, setViewportWidth] = createSignal<number>(720);
+  const [viewportEl, setViewportEl] = createSignal<HTMLDivElement | undefined>(undefined);
   const [lastPointerType, setLastPointerType] = createSignal<string | null>(null);
 
   const effSettings = () => props.store.effectiveSettings();
+  const canvasMode = () => effSettings().canvasMode;
+  const isInfiniteMode = () => canvasMode() === 'infinite';
   const stylusOnly = () => effSettings().stylusOnly;
   const stabilization = () => effSettings().stabilization;
   const pressureSensitivity = () => effSettings().pressureSensitivity;
@@ -223,6 +235,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   let viewportRef: HTMLDivElement | undefined;
   let scrollContentRef: HTMLDivElement | undefined;
   let zoomStageRef: HTMLDivElement | undefined;
+  let infiniteHandle: InfiniteCanvasHandle | null = null;
   let paperMenuRef: HTMLDivElement | undefined;
   let sizeMenuRef: HTMLDivElement | undefined;
   let imageFileInputRef: HTMLInputElement | undefined;
@@ -410,9 +423,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     });
   }
 
-  // Observe continuous viewport width continuously
-  onMount(() => {
-    const el = viewportRef;
+  // Observe continuous viewport width continuously (remount-safe when toggling infinite <-> pages)
+  createEffect(() => {
+    const el = viewportEl();
     if (!el) return;
     if (el.clientWidth > 0) {
       setViewportWidth(el.clientWidth);
@@ -428,15 +441,15 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     onCleanup(() => ro.disconnect());
   });
 
-  // Unified iPad / Touch Gesture Controller on .canvas-viewport:
+  // Unified iPad / Touch Gesture Controller on .canvas-viewport (remount-safe):
   // - 1-Finger Scroll (in Nur-Stift-Modus / Select / Außenrand) with 120Hz-normalized momentum
   // - Smart Palm Rejection: tracks resting palms by touch.identifier + contact radius + active pen,
   //   with automatic micro-drift snap-back if a palm lands right before Apple Pencil touches down
   // - Instant 2-Finger Pinch-to-Zoom + simultaneous Pan (zero deadzone, locked scroll dimensions
   //   during pinch so Safari never clamps scrollLeft/scrollTop, sub-pixel re-anchor on release)
   // - Trackpad / Ctrl+Wheel zoom anchored to cursor
-  onMount(() => {
-    const vp = viewportRef;
+  createEffect(() => {
+    const vp = viewportEl();
     if (!vp) return;
 
     interface SheetAnchor {
@@ -1049,7 +1062,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         let x: number;
         let y: number;
 
-        if (dropLogicalPoint) {
+        if (isInfiniteMode()) {
+          const anchor =
+            dropLogicalPoint ??
+            infiniteHandle?.getViewportCenterWorld() ?? { x: 360, y: 260 };
+          x = Math.round(anchor.x - w / 2 + offset);
+          y = Math.round(anchor.y - h / 2 + offset);
+        } else if (dropLogicalPoint) {
           x = Math.max(
             12,
             Math.min(targetPage.width - w - 12, dropLogicalPoint.x - w / 2 + offset)
@@ -1180,13 +1199,24 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       .toLowerCase()
       .replace(/[^a-z0-9äöüß_-]+/gi, '-')
       .replace(/^-+|-+$/g, '');
-    await exportCanvasToPng(
-      currentPage,
-      props.store.theme(),
-      `${safeName || 'skizze'}.png`,
-      effSettings().pngExportScale
-    );
-    props.store.showToast(`Seite „${currentPage.title}“ als PNG exportiert`);
+    const filename = `${safeName || 'skizze'}.png`;
+    if (isInfiniteMode()) {
+      await exportInfiniteCanvasToPng(
+        currentPage,
+        props.store.theme(),
+        filename,
+        effSettings().pngExportScale
+      );
+      props.store.showToast('Unendlicher Canvas als PNG exportiert');
+    } else {
+      await exportCanvasToPng(
+        currentPage,
+        props.store.theme(),
+        filename,
+        effSettings().pngExportScale
+      );
+      props.store.showToast(`Seite „${currentPage.title}“ als PNG exportiert`);
+    }
   };
 
   const goToAdjacentPage = (delta: -1 | 1) => {
@@ -1820,80 +1850,192 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         </div>
       </div>
 
-      {/* Continuous Scroll Page Controls Bar (Overview + Active Page Indicator + Format + Add) */}
+      {/* Page & Infinite Canvas Mode Controls Bar */}
       <div class="page-strip">
         <div class="page-strip-left">
-          <button
-            type="button"
-            class="tool-pill page-overview-btn"
-            classList={{ 'is-active': overviewOpen() }}
-            onClick={() => {
-              if (editingText()) commitEditingText();
-              setSizeMenuOpen(false);
-              setPaperMenuOpen(false);
-              setOverviewAutoCreator(false);
-              setOverviewOpen((v) => !v);
-            }}
-            title="Horizontale Seitenübersicht ein-/ausblenden"
+          {/* Compact Per-Note Mode Switch: Seiten vs Unendlich (OneNote) */}
+          <div
+            class="canvas-mode-switch"
+            role="tablist"
+            aria-label="Canvas-Modus für diese Notiz"
           >
-            <IconPages size={14} />
-            <span>
-              Seitenübersicht ({pageIndex() + 1}/{pages().length})
-            </span>
-          </button>
-
-          <div class="page-nav-arrows">
             <button
               type="button"
-              class="tool-btn"
-              disabled={pageIndex() <= 0}
-              onClick={() => goToAdjacentPage(-1)}
-              title="Zur vorherigen Seite scrollen"
-              aria-label="Vorherige Seite"
+              role="tab"
+              aria-selected={!isInfiniteMode()}
+              class="cms-btn"
+              classList={{ 'is-active': !isInfiniteMode() }}
+              onClick={() => {
+                if (isInfiniteMode()) {
+                  if (editingText()) commitEditingText();
+                  setSelectedImage(null);
+                  props.store.updateNoteSettings({ canvasMode: 'pages' });
+                  props.store.showToast('Seiten-Modus aktiv');
+                }
+              }}
+              title="Klassischer Seiten-Modus (mehrere Seiten)"
             >
-              <IconChevronLeft size={15} />
+              <IconPages size={13} />
+              <span class="hide-compact">Seiten</span>
             </button>
             <button
               type="button"
-              class="tool-btn"
-              disabled={pageIndex() >= pages().length - 1}
-              onClick={() => goToAdjacentPage(1)}
-              title="Zur nächsten Seite scrollen"
-              aria-label="Nächste Seite"
+              role="tab"
+              aria-selected={isInfiniteMode()}
+              class="cms-btn"
+              classList={{ 'is-active': isInfiniteMode() }}
+              onClick={() => {
+                if (!isInfiniteMode()) {
+                  if (editingText()) commitEditingText();
+                  setSelectedImage(null);
+                  setOverviewOpen(false);
+                  setSizeMenuOpen(false);
+                  props.store.updateNoteSettings({ canvasMode: 'infinite' });
+                  props.store.showToast('Unendlicher Canvas (wie OneNote) aktiv');
+                }
+              }}
+              title="Unendlicher Canvas wie in OneNote (grenzenlos in alle Richtungen)"
             >
-              <IconChevronRight size={15} />
+              <IconInfinity size={14} />
+              <span class="hide-compact">Unendlich</span>
             </button>
           </div>
 
-          <Show when={page()}>
-            {(currPage) => (
-              <div class="active-page-indicator" title="Aktuell sichtbare / aktive Seite">
-                <span class="api-dot" />
-                <span class="api-name">{currPage().title}</span>
-              </div>
-            )}
+          <Show
+            when={!isInfiniteMode()}
+            fallback={
+              <>
+                <div class="active-page-indicator is-infinite-pill" title="Unendliche Zeichenfläche aktiv">
+                  <span class="api-dot" />
+                  <span class="api-name">Unendliche Fläche</span>
+                </div>
+                <Show when={pages().length > 1}>
+                  <div class="page-nav-arrows">
+                    <button
+                      type="button"
+                      class="tool-btn"
+                      disabled={pageIndex() <= 0}
+                      onClick={() => goToAdjacentPage(-1)}
+                      title="Vorheriges Blatt"
+                      aria-label="Vorheriges Blatt"
+                    >
+                      <IconChevronLeft size={15} />
+                    </button>
+                    <span class="inf-page-count">
+                      {pageIndex() + 1}/{pages().length}
+                    </span>
+                    <button
+                      type="button"
+                      class="tool-btn"
+                      disabled={pageIndex() >= pages().length - 1}
+                      onClick={() => goToAdjacentPage(1)}
+                      title="Nächstes Blatt"
+                      aria-label="Nächstes Blatt"
+                    >
+                      <IconChevronRight size={15} />
+                    </button>
+                  </div>
+                </Show>
+              </>
+            }
+          >
+            <button
+              type="button"
+              class="tool-pill page-overview-btn"
+              classList={{ 'is-active': overviewOpen() }}
+              onClick={() => {
+                if (editingText()) commitEditingText();
+                setSizeMenuOpen(false);
+                setPaperMenuOpen(false);
+                setOverviewAutoCreator(false);
+                setOverviewOpen((v) => !v);
+              }}
+              title="Horizontale Seitenübersicht ein-/ausblenden"
+            >
+              <IconPages size={14} />
+              <span>
+                Übersicht ({pageIndex() + 1}/{pages().length})
+              </span>
+            </button>
+
+            <div class="page-nav-arrows">
+              <button
+                type="button"
+                class="tool-btn"
+                disabled={pageIndex() <= 0}
+                onClick={() => goToAdjacentPage(-1)}
+                title="Zur vorherigen Seite scrollen"
+                aria-label="Vorherige Seite"
+              >
+                <IconChevronLeft size={15} />
+              </button>
+              <button
+                type="button"
+                class="tool-btn"
+                disabled={pageIndex() >= pages().length - 1}
+                onClick={() => goToAdjacentPage(1)}
+                title="Zur nächsten Seite scrollen"
+                aria-label="Nächste Seite"
+              >
+                <IconChevronRight size={15} />
+              </button>
+            </div>
+
+            <Show when={page()}>
+              {(currPage) => (
+                <div class="active-page-indicator" title="Aktuell sichtbare / aktive Seite">
+                  <span class="api-dot" />
+                  <span class="api-name">{currPage().title}</span>
+                </div>
+              )}
+            </Show>
           </Show>
         </div>
 
         <div class="page-strip-right">
-          <Show when={page()}>
-            {(currPage) => (
-              <div class="paper-menu-anchor" ref={sizeMenuRef}>
+          <Show
+            when={!isInfiniteMode()}
+            fallback={
+              <>
                 <button
                   type="button"
-                  class="tool-pill page-size-btn"
-                  classList={{ 'is-active': sizeMenuOpen() }}
-                  onClick={() => {
-                    setPaperMenuOpen(false);
-                    setSizeMenuOpen((v) => !v);
-                  }}
-                  title="Individuelle Breite & Höhe dieser Seite festlegen"
+                  class="tool-pill"
+                  onClick={() => infiniteHandle?.fitToContent()}
+                  title="Alle Inhalte auf der unendlichen Fläche einpassen"
                 >
-                  <IconRuler size={14} />
-                  <span>
-                    {currPage().width} × {currPage().height}
-                  </span>
+                  <IconMaximize size={13} />
+                  <span class="hide-compact">Einpassen</span>
                 </button>
+                <button
+                  type="button"
+                  class="tool-pill"
+                  onClick={() => infiniteHandle?.resetView()}
+                  title="Ansicht zum Ursprung (100 %) zurücksetzen"
+                >
+                  <IconCrosshair size={13} />
+                  <span class="hide-compact">Ursprung</span>
+                </button>
+              </>
+            }
+          >
+            <Show when={page()}>
+              {(currPage) => (
+                <div class="paper-menu-anchor" ref={sizeMenuRef}>
+                  <button
+                    type="button"
+                    class="tool-pill page-size-btn"
+                    classList={{ 'is-active': sizeMenuOpen() }}
+                    onClick={() => {
+                      setPaperMenuOpen(false);
+                      setSizeMenuOpen((v) => !v);
+                    }}
+                    title="Individuelle Breite & Höhe dieser Seite festlegen"
+                  >
+                    <IconRuler size={14} />
+                    <span>
+                      {currPage().width} × {currPage().height}
+                    </span>
+                  </button>
 
                 <Show when={sizeMenuOpen()}>
                   <div
@@ -2023,6 +2165,17 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             <IconFileUp size={14} />
             <span class="hide-compact">PDF / Bild</span>
           </button>
+
+          <button
+            type="button"
+            class="tool-pill page-add-btn"
+            onClick={() => handleAppendPage()}
+            title="Neue Seite unten anhängen"
+          >
+            <IconPlus size={14} />
+            <span class="hide-compact">Seite</span>
+          </button>
+          </Show>
           <input
             ref={pageImportInputRef}
             type="file"
@@ -2035,21 +2188,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               e.currentTarget.value = '';
             }}
           />
-
-          <button
-            type="button"
-            class="tool-pill page-add-btn"
-            onClick={() => handleAppendPage()}
-            title="Neue Seite unten anhängen"
-          >
-            <IconPlus size={14} />
-            <span class="hide-compact">Seite</span>
-          </button>
         </div>
       </div>
 
-      {/* Horizontal Docked Page Overview Strip (above continuous document!) */}
-      <Show when={overviewOpen()}>
+      {/* Horizontal Docked Page Overview Strip (Pages Mode only) */}
+      <Show when={!isInfiniteMode() && overviewOpen()}>
         <PageOverview
           store={props.store}
           initialShowCreator={overviewAutoCreator()}
@@ -2062,22 +2205,75 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         />
       </Show>
 
-      {/* Continuous Scroll Multi-Page Document */}
-      <div
-        ref={viewportRef}
-        class="canvas-viewport continuous-viewport"
-        onScroll={handleViewportScroll}
-        onPointerDown={(e) => {
-          if (
-            e.target === viewportRef ||
-            e.target === scrollContentRef ||
-            e.target === zoomStageRef
-          ) {
-            if (editingText()) commitEditingText();
-            if (selectedImage()) setSelectedImage(null);
-          }
-        }}
+      {/* Main Canvas Area: Infinite OneNote-style Canvas OR Continuous Multi-Page Document */}
+      <Show
+        when={!isInfiniteMode()}
+        fallback={
+          <Show when={page()}>
+            {(currPage) => (
+              <InfiniteCanvasView
+                store={props.store}
+                pageId={currPage().id}
+                tool={tool()}
+                penColor={penColor()}
+                highlighterColor={highlighterColor()}
+                penWidth={penWidth()}
+                highlighterWidth={highlighterWidth()}
+                eraserSize={eraserSize()}
+                textFontSize={textFontSize()}
+                textFontFamily={textFontFamily()}
+                textBold={textBold()}
+                stylusOnly={stylusOnly()}
+                oneFingerScroll={oneFingerScroll()}
+                pinchZoomEnabled={pinchZoomEnabled()}
+                scrollMomentum={scrollMomentum()}
+                palmSensitivity={palmSensitivity()}
+                stabilization={stabilization()}
+                pressureSensitivity={pressureSensitivity()}
+                editingText={editingText()}
+                selectedImage={selectedImage()}
+                onPointerTypeChange={handlePointerTypeDetected}
+                onZoomChange={setInfiniteZoom}
+                onSetEditingText={setEditingText}
+                onCommitEditingText={commitEditingText}
+                onSetSelectedImage={setSelectedImage}
+                onSyncTextStyle={(patch) => {
+                  if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
+                  if (patch.fontFamily !== undefined) setTextFontFamily(patch.fontFamily);
+                  if (patch.bold !== undefined) setTextBold(patch.bold);
+                }}
+                onImportFilesAt={(targetId, files, dropPt) => {
+                  void importImagesToPage(targetId, files, dropPt);
+                }}
+                onImportPagesFiles={(files) => {
+                  void handleImportFilesAsPages(files);
+                }}
+                registerHandle={(h) => {
+                  infiniteHandle = h;
+                }}
+              />
+            )}
+          </Show>
+        }
       >
+        <div
+          ref={(el) => {
+            viewportRef = el;
+            setViewportEl(el);
+          }}
+          class="canvas-viewport continuous-viewport"
+          onScroll={handleViewportScroll}
+          onPointerDown={(e) => {
+            if (
+              e.target === viewportRef ||
+              e.target === scrollContentRef ||
+              e.target === zoomStageRef
+            ) {
+              if (editingText()) commitEditingText();
+              if (selectedImage()) setSelectedImage(null);
+            }
+          }}
+        >
         <div ref={scrollContentRef} class="canvas-scroll-content">
           <div ref={zoomStageRef} class="canvas-zoom-stage">
             <For each={pageIds()}>
@@ -2178,9 +2374,10 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      </Show>
 
-      <Show when={liveZoomPreview() !== null}>
+      <Show when={!isInfiniteMode() && liveZoomPreview() !== null}>
         <div class="pinch-zoom-badge" aria-live="polite">
           {Math.round((liveZoomPreview() ?? zoom()) * 100)}%
         </div>
@@ -2205,13 +2402,18 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       </Show>
 
       <div class="pane-statusbar">
-        <span>
-          Seite {pageIndex() + 1}/{pages().length}: {page()?.title}
-        </span>
-        <span class="status-dot">·</span>
-        <span>
-          {page()?.width ?? 0} × {page()?.height ?? 0} px
-        </span>
+        <Show
+          when={!isInfiniteMode()}
+          fallback={<span>Unendlicher Canvas</span>}
+        >
+          <span>
+            Seite {pageIndex() + 1}/{pages().length}: {page()?.title}
+          </span>
+          <span class="status-dot">·</span>
+          <span>
+            {page()?.width ?? 0} × {page()?.height ?? 0} px
+          </span>
+        </Show>
         <span class="status-dot">·</span>
         <span>{page()?.strokes.length ?? 0} Striche</span>
         <span class="status-dot">·</span>
@@ -2229,9 +2431,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           <button
             type="button"
             class="zoom-btn"
-            onClick={() =>
-              setZoom((z) => Math.max(MIN_ZOOM, Math.round((z - 0.15) * 100) / 100))
-            }
+            onClick={() => {
+              if (isInfiniteMode()) {
+                infiniteHandle?.zoomBy(-0.15);
+              } else {
+                setZoom((z) => Math.max(MIN_ZOOM, Math.round((z - 0.15) * 100) / 100));
+              }
+            }}
             title="Verkleinern"
           >
             <IconZoomOut size={13} />
@@ -2239,17 +2445,30 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           <button
             type="button"
             class="zoom-value"
-            onClick={() => setZoom(1)}
-            title="Zoom zurücksetzen"
+            onClick={() => {
+              if (isInfiniteMode()) {
+                infiniteHandle?.setZoom(1);
+              } else {
+                setZoom(1);
+              }
+            }}
+            title="Zoom zurücksetzen (100 %)"
           >
-            {Math.round((liveZoomPreview() ?? zoom()) * 100)}%
+            {Math.round(
+              (isInfiniteMode() ? infiniteZoom() : liveZoomPreview() ?? zoom()) * 100
+            )}
+            %
           </button>
           <button
             type="button"
             class="zoom-btn"
-            onClick={() =>
-              setZoom((z) => Math.min(MAX_ZOOM, Math.round((z + 0.15) * 100) / 100))
-            }
+            onClick={() => {
+              if (isInfiniteMode()) {
+                infiniteHandle?.zoomBy(0.15);
+              } else {
+                setZoom((z) => Math.min(MAX_ZOOM, Math.round((z + 0.15) * 100) / 100));
+              }
+            }}
             title="Vergrößern"
           >
             <IconZoomIn size={13} />

@@ -690,6 +690,9 @@ export function normalizeNoteSettings(raw: unknown): Partial<NoteLocalSettings> 
   const obj = raw as Record<string, unknown>;
   const out: Partial<NoteLocalSettings> = {};
 
+  if (obj.canvasMode === 'pages' || obj.canvasMode === 'infinite') {
+    out.canvasMode = obj.canvasMode;
+  }
   if (obj.stabilization === 'off' || obj.stabilization === 'light' || obj.stabilization === 'medium') {
     out.stabilization = obj.stabilization as StabilizationLevel;
   }

@@ -537,6 +537,7 @@ export function createNotesStore() {
     height?: number;
     paperConfig?: Partial<PaperConfig>;
     viewMode?: ViewMode;
+    settings?: Partial<NoteLocalSettings>;
   }) => {
     const now = Date.now();
     const targetFolderId =
@@ -561,6 +562,9 @@ export function createNotesStore() {
       attachments: [],
       pages: [firstPage],
       activePageId: firstPage.id,
+      ...(options.settings && Object.keys(options.settings).length > 0
+        ? { settings: { ...options.settings } }
+        : {}),
       createdAt: now,
       updatedAt: now,
     };

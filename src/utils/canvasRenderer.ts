@@ -766,3 +766,365 @@ export async function exportCanvasToPng(
   a.click();
   document.body.removeChild(a);
 }
+
+// ==================== INFINITE CANVAS ENGINE (ONENOTE-STYLE) ====================
+
+export interface InfiniteCamera {
+  /** World X coordinate at viewport top-left */
+  x: number;
+  /** World Y coordinate at viewport top-left */
+  y: number;
+  /** World-to-CSS-px zoom scale (e.g. 0.25 .. 4.0) */
+  zoom: number;
+}
+
+export interface ContentBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function getStrokeBounds(stroke: Stroke): ContentBounds | null {
+  const pts = stroke.points;
+  if (pts.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const pad = Math.max(4, stroke.width * 0.8 + 4);
+  return {
+    minX: minX - pad,
+    minY: minY - pad,
+    maxX: maxX + pad,
+    maxY: maxY + pad,
+  };
+}
+
+export function computePageContentBounds(
+  page: CanvasPage,
+  ctx?: CanvasRenderingContext2D | null
+): ContentBounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  const include = (x1: number, y1: number, x2: number, y2: number) => {
+    if (x1 < minX) minX = x1;
+    if (y1 < minY) minY = y1;
+    if (x2 > maxX) maxX = x2;
+    if (y2 > maxY) maxY = y2;
+  };
+
+  if (page.backgroundImage?.src) {
+    include(0, 0, page.width, page.height);
+  }
+
+  for (const img of page.images) {
+    include(img.x, img.y, img.x + img.width, img.y + img.height);
+  }
+
+  for (const stroke of page.strokes) {
+    const b = getStrokeBounds(stroke);
+    if (b) include(b.minX, b.minY, b.maxX, b.maxY);
+  }
+
+  for (const item of page.texts) {
+    if (!item.text) continue;
+    if (ctx) {
+      const b = measureCanvasTextBounds(ctx, item);
+      include(b.x - 4, b.y - 4, b.x + b.width + 4, b.y + b.height + 4);
+    } else {
+      const lines = item.text.split('\n');
+      const maxLen = Math.max(4, ...lines.map((l) => l.length));
+      const estW = maxLen * item.fontSize * 0.62;
+      const estH = lines.length * item.fontSize * 1.35;
+      include(item.x - 4, item.y - 4, item.x + estW + 4, item.y + estH + 4);
+    }
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+export function drawInfinitePaperBackground(
+  ctx: CanvasRenderingContext2D,
+  vpWidth: number,
+  vpHeight: number,
+  cam: InfiniteCamera,
+  paperConfig: PaperConfig,
+  theme: ThemeMode,
+  dpr = 1
+) {
+  const bg = resolvePaperBackgroundColor(paperConfig, theme);
+  const dark = isColorDark(bg);
+  const opacity = Math.max(0.06, Math.min(0.9, paperConfig.lineOpacity ?? 0.24));
+  const baseStep = Math.max(16, Math.min(96, paperConfig.spacing || 34));
+
+  const baseLineHex =
+    paperConfig.lineColor && paperConfig.lineColor !== 'auto'
+      ? paperConfig.lineColor
+      : dark
+        ? '#cbd5e1'
+        : '#64748b';
+
+  const lineStroke = colorWithAlpha(baseLineHex, opacity);
+  const majorStroke = colorWithAlpha(baseLineHex, Math.min(0.9, opacity * 1.45));
+  const dotFill = colorWithAlpha(baseLineHex, Math.min(0.95, opacity * 1.45));
+  const marginStroke = dark
+    ? 'rgba(248, 113, 113, 0.34)'
+    : 'rgba(239, 68, 68, 0.3)';
+
+  const totalScale = dpr * cam.zoom;
+  const worldMinX = cam.x;
+  const worldMinY = cam.y;
+  const worldMaxX = cam.x + vpWidth / cam.zoom;
+  const worldMaxY = cam.y + vpHeight / cam.zoom;
+
+  ctx.save();
+  // Fill full backing store with paper background
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, Math.ceil(vpWidth * dpr), Math.ceil(vpHeight * dpr));
+
+  // Adaptive LOD step so zooming far out never turns grid/dots into dense visual noise
+  let effectiveStep = baseStep;
+  while (effectiveStep * cam.zoom < 10) {
+    effectiveStep *= 2;
+  }
+
+  // Transform directly into world coordinates
+  ctx.scale(totalScale, totalScale);
+  ctx.translate(-cam.x, -cam.y);
+
+  const lineWidthWorld = 1 / Math.max(0.35, cam.zoom);
+
+  if (paperConfig.pattern === 'grid') {
+    const startX = Math.floor(worldMinX / effectiveStep) * effectiveStep;
+    const startY = Math.floor(worldMinY / effectiveStep) * effectiveStep;
+
+    ctx.strokeStyle = lineStroke;
+    ctx.lineWidth = lineWidthWorld;
+    ctx.beginPath();
+    for (let x = startX; x <= worldMaxX + effectiveStep; x += effectiveStep) {
+      ctx.moveTo(x, worldMinY);
+      ctx.lineTo(x, worldMaxY);
+    }
+    for (let y = startY; y <= worldMaxY + effectiveStep; y += effectiveStep) {
+      ctx.moveTo(worldMinX, y);
+      ctx.lineTo(worldMaxX, y);
+    }
+    ctx.stroke();
+
+    // Subtle major grid accent every 5 squares
+    const majorStep = effectiveStep * 5;
+    const majorStartX = Math.floor(worldMinX / majorStep) * majorStep;
+    const majorStartY = Math.floor(worldMinY / majorStep) * majorStep;
+    ctx.strokeStyle = majorStroke;
+    ctx.lineWidth = lineWidthWorld;
+    ctx.beginPath();
+    for (let x = majorStartX; x <= worldMaxX + majorStep; x += majorStep) {
+      ctx.moveTo(x, worldMinY);
+      ctx.lineTo(x, worldMaxY);
+    }
+    for (let y = majorStartY; y <= worldMaxY + majorStep; y += majorStep) {
+      ctx.moveTo(worldMinX, y);
+      ctx.lineTo(worldMaxX, y);
+    }
+    ctx.stroke();
+  } else if (paperConfig.pattern === 'lined') {
+    const startY = Math.floor(worldMinY / effectiveStep) * effectiveStep;
+    ctx.strokeStyle = lineStroke;
+    ctx.lineWidth = lineWidthWorld;
+    ctx.beginPath();
+    for (let y = startY; y <= worldMaxY + effectiveStep; y += effectiveStep) {
+      ctx.moveTo(worldMinX, y);
+      ctx.lineTo(worldMaxX, y);
+    }
+    ctx.stroke();
+  } else if (paperConfig.pattern === 'dots') {
+    let dotStep = baseStep;
+    while (dotStep * cam.zoom < 12) {
+      dotStep *= 2;
+    }
+    const startX = Math.floor(worldMinX / dotStep) * dotStep;
+    const startY = Math.floor(worldMinY / dotStep) * dotStep;
+    const radius = Math.max(1.2, Math.min(2.4, baseStep * 0.045)) / Math.min(1.4, Math.max(0.55, cam.zoom));
+
+    ctx.fillStyle = dotFill;
+    ctx.beginPath();
+    for (let y = startY; y <= worldMaxY + dotStep; y += dotStep) {
+      for (let x = startX; x <= worldMaxX + dotStep; x += dotStep) {
+        ctx.moveTo(x + radius, y);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+      }
+    }
+    ctx.fill();
+  }
+
+  if (paperConfig.showMargin) {
+    const marginX = 82;
+    if (marginX >= worldMinX - 4 && marginX <= worldMaxX + 4) {
+      ctx.strokeStyle = marginStroke;
+      ctx.lineWidth = 1.5 / Math.max(0.35, cam.zoom);
+      ctx.beginPath();
+      ctx.moveTo(marginX, worldMinY);
+      ctx.lineTo(marginX, worldMaxY);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+export function renderInfiniteCanvas(
+  ctx: CanvasRenderingContext2D,
+  page: CanvasPage,
+  vpWidth: number,
+  vpHeight: number,
+  cam: InfiniteCamera,
+  theme: ThemeMode,
+  dpr: number,
+  options?: {
+    editingTextId?: string | null;
+    hoveredTextId?: string | null;
+    onImageLoad?: () => void;
+  }
+) {
+  // 0. Infinite seamless paper background
+  drawInfinitePaperBackground(ctx, vpWidth, vpHeight, cam, page.paperConfig, theme, dpr);
+
+  const totalScale = dpr * cam.zoom;
+  const cullPad = 48 / Math.max(0.25, cam.zoom);
+  const viewMinX = cam.x - cullPad;
+  const viewMinY = cam.y - cullPad;
+  const viewMaxX = cam.x + vpWidth / cam.zoom + cullPad;
+  const viewMaxY = cam.y + vpHeight / cam.zoom + cullPad;
+
+  ctx.save();
+  ctx.scale(totalScale, totalScale);
+  ctx.translate(-cam.x, -cam.y);
+
+  // 0b. Optional locked page background image (if user switched a PDF/image page into infinite mode)
+  if (
+    page.backgroundImage?.src &&
+    page.width >= viewMinX &&
+    0 <= viewMaxX &&
+    page.height >= viewMinY &&
+    0 <= viewMaxY
+  ) {
+    drawPageBackgroundImage(ctx, page, options?.onImageLoad);
+  }
+
+  // 1. Imported movable images (viewport-culled)
+  for (const imgItem of page.images) {
+    if (
+      imgItem.x + imgItem.width < viewMinX ||
+      imgItem.x > viewMaxX ||
+      imgItem.y + imgItem.height < viewMinY ||
+      imgItem.y > viewMaxY
+    ) {
+      continue;
+    }
+    drawCanvasImage(ctx, imgItem, options?.onImageLoad);
+  }
+
+  // 2. Highlighters (viewport-culled)
+  for (const stroke of page.strokes) {
+    if (stroke.tool !== 'highlighter') continue;
+    const b = getStrokeBounds(stroke);
+    if (
+      b &&
+      (b.maxX < viewMinX || b.minX > viewMaxX || b.maxY < viewMinY || b.minY > viewMaxY)
+    ) {
+      continue;
+    }
+    drawStroke(ctx, stroke, page.paperConfig, theme);
+  }
+
+  // 3. Pen & geometric strokes (viewport-culled)
+  for (const stroke of page.strokes) {
+    if (stroke.tool === 'highlighter') continue;
+    const b = getStrokeBounds(stroke);
+    if (
+      b &&
+      (b.maxX < viewMinX || b.minX > viewMaxX || b.maxY < viewMinY || b.minY > viewMaxY)
+    ) {
+      continue;
+    }
+    drawStroke(ctx, stroke, page.paperConfig, theme);
+  }
+
+  // 4. Canvas Text Items
+  const editingId = options?.editingTextId ?? null;
+  const hoveredId = options?.hoveredTextId ?? null;
+  for (const textItem of page.texts) {
+    if (textItem.id === editingId) continue;
+    drawCanvasText(
+      ctx,
+      textItem,
+      page.paperConfig,
+      theme,
+      textItem.id === hoveredId
+    );
+  }
+
+  ctx.restore();
+}
+
+export async function exportInfiniteCanvasToPng(
+  page: CanvasPage,
+  theme: ThemeMode,
+  filename: string,
+  exportScale = 2
+) {
+  const sources = page.images.map((i) => i.src);
+  if (page.backgroundImage?.src) sources.push(page.backgroundImage.src);
+  await ensureImagesLoaded(sources);
+
+  const measureCanvas = document.createElement('canvas');
+  const measureCtx = measureCanvas.getContext('2d');
+  const bounds = computePageContentBounds(page, measureCtx);
+
+  const pad = 64;
+  const minX = bounds ? bounds.minX - pad : 0;
+  const minY = bounds ? bounds.minY - pad : 0;
+  const rawW = bounds ? Math.max(400, bounds.maxX - bounds.minX + pad * 2) : 1200;
+  const rawH = bounds ? Math.max(300, bounds.maxY - bounds.minY + pad * 2) : 800;
+
+  // Keep offscreen canvas safely within browser max dimension limits
+  const maxPx = 6000;
+  const desiredScale = Math.max(1, Math.min(3, exportScale));
+  const safeScale = Math.min(desiredScale, maxPx / Math.max(rawW, rawH));
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = Math.max(1, Math.round(rawW * safeScale));
+  offscreen.height = Math.max(1, Math.round(rawH * safeScale));
+  const ctx = offscreen.getContext('2d');
+  if (!ctx) return;
+
+  renderInfiniteCanvas(
+    ctx,
+    page,
+    rawW,
+    rawH,
+    { x: minX, y: minY, zoom: 1 },
+    theme,
+    safeScale
+  );
+
+  const url = offscreen.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename.endsWith('.png') ? filename : `${filename}.png`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
