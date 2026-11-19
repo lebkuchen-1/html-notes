@@ -918,13 +918,11 @@ export interface LoadedWorkspaceResult {
   notes: Note[];
   folders: Folder[];
   backend: StorageBackend;
-  migratedFromLocalStorage: boolean;
 }
 
 /**
- * Loads the workspace from IndexedDB (no ~5 MB localStorage limit!).
- * Automatically migrates any existing localStorage notes/folders on first run,
- * and gracefully falls back to localStorage if IndexedDB is unavailable.
+ * Loads the workspace from IndexedDB (no ~5 MB localStorage limit!),
+ * with a clean fallback to localStorage if IndexedDB is unavailable.
  */
 export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
   if (isIndexedDbAvailable()) {
@@ -936,68 +934,17 @@ export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
         return {
           ...clean,
           backend: 'indexeddb',
-          migratedFromLocalStorage: false,
         };
       }
 
-      // First run with IndexedDB: check for legacy localStorage data to migrate seamlessly
-      let legacyRawNotes: string | null = null;
-      let legacyRawFolders: string | null = null;
-      try {
-        legacyRawNotes = localStorage.getItem(STORAGE_KEYS.NOTES);
-        legacyRawFolders = localStorage.getItem(STORAGE_KEYS.FOLDERS);
-      } catch {
-        // ignore
-      }
-
-      if (legacyRawNotes) {
-        let parsedNotes: unknown[] = [];
-        let parsedFolders: unknown[] = [];
-        try {
-          const n = JSON.parse(legacyRawNotes);
-          if (Array.isArray(n)) parsedNotes = n;
-        } catch {
-          // ignore
-        }
-        try {
-          if (legacyRawFolders) {
-            const f = JSON.parse(legacyRawFolders);
-            if (Array.isArray(f)) parsedFolders = f;
-          }
-        } catch {
-          // ignore
-        }
-
-        const migrated = sanitizeNormalizedWorkspace(parsedNotes, parsedFolders);
-        const savedOk = await saveFullWorkspaceToIndexedDb(
-          migrated.notes,
-          migrated.folders
-        );
-        if (savedOk) {
-          // Free bulky legacy blobs from localStorage only AFTER IndexedDB commit succeeded
-          try {
-            localStorage.removeItem(STORAGE_KEYS.NOTES);
-            localStorage.removeItem(STORAGE_KEYS.FOLDERS);
-          } catch {
-            // ignore
-          }
-          return {
-            ...migrated,
-            backend: 'indexeddb',
-            migratedFromLocalStorage: true,
-          };
-        }
-      } else {
-        // Brand-new workspace: seed starter notes/folders directly into IndexedDB
-        const starter = createDefaultStarterWorkspace();
-        const savedOk = await saveFullWorkspaceToIndexedDb(starter.notes, starter.folders);
-        if (savedOk) {
-          return {
-            ...starter,
-            backend: 'indexeddb',
-            migratedFromLocalStorage: false,
-          };
-        }
+      // Brand-new workspace: seed starter notes/folders directly into IndexedDB
+      const starter = createDefaultStarterWorkspace();
+      const savedOk = await saveFullWorkspaceToIndexedDb(starter.notes, starter.folders);
+      if (savedOk) {
+        return {
+          ...starter,
+          backend: 'indexeddb',
+        };
       }
     } catch {
       // Fall back cleanly to localStorage below
@@ -1008,7 +955,6 @@ export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
   return {
     ...fallback,
     backend: 'localstorage',
-    migratedFromLocalStorage: false,
   };
 }
 

@@ -197,7 +197,7 @@ export function createNotesStore() {
     toastTimer = window.setTimeout(() => setToastMessage(null), 2600);
   };
 
-  // Async IndexedDB hydration (with automatic one-time migration from localStorage)
+  // Async IndexedDB hydration
   void loadWorkspaceAsync().then((loaded) => {
     const savedActiveId = loadActiveNoteId();
     const initialActiveId =
@@ -234,9 +234,6 @@ export function createNotesStore() {
 
     if (loaded.backend === 'indexeddb') {
       void requestPersistentStorage();
-    }
-    if (loaded.migratedFromLocalStorage) {
-      showToast('Notizen automatisch auf IndexedDB übertragen (großer Speicher aktiv)');
     }
   });
 
