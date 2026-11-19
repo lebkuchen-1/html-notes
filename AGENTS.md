@@ -29,8 +29,9 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 
 | Datei | Verantwortung |
 | --- | --- |
-| `src/types.ts` | Datenmodelle: `Note` (inkl. lokaler `settings?: Partial<NoteLocalSettings>`), `Folder`, `CanvasPage`, `Stroke`, `CanvasTextItem`, `CanvasImageItem`, `PageBackgroundImage`, `PaperConfig`, `AppSettings`, `NoteLocalSettings`, `PAGE_SIZE_PRESETS`, `FOLDER_COLORS`. |
-| `src/store/notesStore.ts` | Zentraler SolidJS-Store (`createNotesStore`): Notizen, verschachtelte Ordner, offene Notiz-Tabs (`openTabIds`), aktiver Screen (`'home' \| 'note' \| 'settings'`), globale & lokale Einstellungen (`settings`, `effectiveSettings`), aktive Seite, seitenbezogenes Undo/Redo (`${noteId}:${pageId}`), debounced Autosave. |
+| `index.html` & `public/manifest.json` | Viewport mit `viewport-fit=cover`, `apple-mobile-web-app-capable`, dynamische `theme-color` und PWA-Manifest (`display: "standalone"`) für randlosen iPad-Home-Bildschirm-Betrieb ohne Safari-Leisten. |
+| `src/types.ts` | Datenmodelle: `Note` (inkl. lokaler `settings?: Partial<NoteLocalSettings>`), `Folder`, `CanvasPage`, `Stroke`, `CanvasTextItem`, `CanvasImageItem`, `PageBackgroundImage`, `PaperConfig`, `CanvasMode` (`'pages' \| 'infinite'`), `AppSettings`, `NoteLocalSettings`, `PAGE_SIZE_PRESETS`, `FOLDER_COLORS`. |
+| `src/store/notesStore.ts` | Zentraler SolidJS-Store (`createNotesStore`): Async-IndexedDB-Hydration (`isHydrated`), Notizen, verschachtelte Ordner, offene Notiz-Tabs (`openTabIds`), aktiver Screen (`'home' \| 'note' \| 'settings'`), Vollbildmodus (`isFullscreen` + Fullscreen-API-Sync), globale & lokale Einstellungen (`settings`, `effectiveSettings`), aktive Seite, seitenbezogenes Undo/Redo (`${noteId}:${pageId}`), inkrementelles Delta-Autosave inkl. `visibilitychange`/`pagehide`-Flush. |
 | `src/utils/db.ts` | IndexedDB-Schicht (`notizblock-db` v1 mit Stores `notes`, `folders`, `meta`): inkrementelle Delta-Speicherung pro geänderter Notiz (`syncNotesDeltaToIndexedDb`), automatischer WebKit-Reconnect-Retry bei geschlossener Verbindung, `navigator.storage.estimate()` & `persist()`. |
 | `src/utils/storage.ts` | Async-Workspace-Lader (`loadWorkspaceAsync`) über IndexedDB (mit `localStorage`-Fallback), kleine UI-Prefs (`theme`, `settings`, `openTabs`) in `localStorage`, abwärtskompatible Daten-Normalisierung, JSON-Backup v2 & Markdown-Export. |
 | `src/utils/canvasRenderer.ts` | HiDPI-Canvas-Engine: Papierhintergrund (gebatchtes Punktraster, Kästchen mit 5er-Hauptgitter, Zeilen, Randlinie), unendlicher Kamera-Renderer (`renderInfiniteCanvas` mit Viewport-Culling & adaptivem LOD, `computePageContentBounds`), gesperrtes `backgroundImage` (PDF/Bild), bewegliche Bilder, Textmarker unter Tinte, variable Stiftstriche (`drawPenDot`, `drawPenIncrementalSegment`), Formen, Canvas-Text, Hit-Testing, async PNG-Export (`exportCanvasToPng` & `exportInfiniteCanvasToPng`). |
@@ -38,12 +39,12 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 | `src/utils/imageImport.ts` | Clientseitige Bildskalierung/-kompression (WebP/PNG bei Alpha, JPEG `0.84` bei Fotos) + Clipboard/DragDrop-Extraktion. |
 | `src/utils/pageImport.ts` | Lazy-geladenes `pdfjs-dist` + `pdf.worker.min.mjs?url`; rendert PDF-Seiten und Bilder in eigenständige `CanvasPage`s im exakten Seitenverhältnis. |
 | `src/utils/markdown.ts` | XSS-sicherer Markdown-Renderer mit anklickbaren Checklisten (`data-line-index`) und `note-img://<id>`-Bildauflösung aus `note.attachments`. |
-| `src/components/HomePage.tsx` | Startseite/Übersichtsseite (fester `Übersicht`-Tab): Begrüßung, Statistiken, Suche, Schnellstart-Vorlagen (inkl. PDF/Bild-Import als neue Notiz), Ordnerkarten, Live-Canvas-Vorschaukarten. Teilt `filterMode` & `selectedFolderId` mit der Sidebar. |
-| `src/components/NoteTabs.tsx` | Obere Tab-Leiste für geöffnete Notizen + fester `Übersicht`-Tab links, Drag-&-Drop-Umsortierung, Mittelklick zum Schließen, Doppelklick für neuen Tab. |
-| `src/components/Sidebar.tsx` | Schlanke `252px`-Explorer-Seitenleiste: Hauptnavigation (`Startseite`, `Angepinnt`), Schnellfilter, Favoriten, einheitlicher rekursiver Ordner- & Notizbaum (Notizen leben direkt in ihren Ordnern), Drag & Drop von Notizen in Ordner / „Weitere Notizen“, Backup/Import. |
-| `src/components/NoteHeader.tsx` | Kopfleiste in der Notizansicht: Titel, hierarchischer Ordner-Wähler, `#Tags`, Ansichtsmodus (`Kombiniert` / `Text` / `Canvas`), Pin, Hell-/Dunkelmodus. |
-| `src/components/TextEditor.tsx` | Markdown-Editor mit Formatierungsleiste, interaktiver Vorschau, Bild-Import (Button, Drag & Drop, `Strg+V`) und `.md`-Export. |
-| `src/components/DrawingCanvas.tsx` | Werkzeugleiste, konfigurierbares Papier-/Hintergrund-Popover (inkl. PDF/Bild-Hintergrund-Deckkraft), Seiten-Leiste, Format-Popover (`B × H`), angedockte horizontale `PageOverview`, kontinuierliche Scroll-Ansicht aller Seiten im einheitlichen `docScale`. |
+| `src/components/HomePage.tsx` | Startseite/Übersichtsseite (fester `Übersicht`-Tab): Begrüßung, Statistiken, Suche, Vollbild- & Theme-Toggle, Schnellstart-Vorlagen (inkl. *Unendliches Board* & PDF/Bild-Import), Ordnerkarten, Live-Canvas-Vorschaukarten (mit `∞`-Badge & Content-Fit für Infinite-Notizen). Teilt `filterMode` & `selectedFolderId` mit der Sidebar. |
+| `src/components/NoteTabs.tsx` | Obere Tab-Leiste für geöffnete Notizen + fester `Übersicht`-Tab links, Drag-&-Drop-Umsortierung, Mittelklick zum Schließen, Doppelklick für neuen Tab. Im Vollbildmodus ausgeblendet. |
+| `src/components/Sidebar.tsx` | Schlanke `252px`-Explorer-Seitenleiste: Hauptnavigation (`Startseite`, `Angepinnt`, `Einstellungen`), Schnellfilter, Favoriten, einheitlicher rekursiver Ordner- & Notizbaum (Notizen leben direkt in ihren Ordnern), Drag & Drop von Notizen in Ordner / „Weitere Notizen“, Backup/Import. |
+| `src/components/NoteHeader.tsx` | Kopfleiste in der Notizansicht: Titel, hierarchischer Ordner-Wähler, `#Tags`, Ansichtsmodus (`Kombiniert` / `Text` / `Canvas`), Pin, lokale Einstellungen (mit Override-Punkt), Vollbild-Toggle, Hell-/Dunkelmodus. Schrumpft im Vollbildmodus auf eine kompakte `36px`-Zeile. |
+| `src/components/TextEditor.tsx` | Markdown-Editor mit Formatierungsleiste, interaktiver Vorschau, einstellbarer Typografie/Rechtschreibprüfung, Bild-Import (Button, Drag & Drop, `Strg+V`) und `.md`-Export. |
+| `src/components/DrawingCanvas.tsx` | Werkzeugleiste, konfigurierbares Papier-/Hintergrund-Popover (inkl. PDF/Bild-Hintergrund-Deckkraft), Seiten- & Modus-Leiste (`Seiten` \| `Unendlich`), Format-Popover (`B × H`), angedockte horizontale `PageOverview`, kontinuierliche Scroll-Ansicht (`docScale`) oder `<InfiniteCanvasView>`. |
 | `src/components/CanvasPageSheet.tsx` | Einzelne Seite in der kontinuierlichen Ansicht mit **Dual-Layer-Canvas**, iPad-Palm-Rejection, Inline-Texteditor, Bild-Verschieben/Skalieren und Seiten-Kopfzeile (`#N`, `PDF`/`Bild`-Badge, `B × H`, `+H`, `↑`/`↓`, Duplizieren, Löschen). |
 | `src/components/InfiniteCanvasView.tsx` | Optionaler unendlicher OneNote-Canvas pro Notiz (`canvasMode: 'infinite'`): viewport-großes Dual-Layer-Canvas mit 2D-Weltkamera (`25%`–`400%`), nahtlosem Endlos-Papiermuster, Viewport-Culling, 1-Finger-Pan + Palm Rejection, Weltanker-Pinch-Zoom, `Space`/Mittelklick/Trackpad-Navigation, unbegrenztem Text-/Bild-Overlay und „Zurück zum Inhalt“-Pill. |
 | `src/components/PageOverview.tsx` | Horizontaler angedockter Filmstreifen oberhalb des kontinuierlichen Dokuments mit proportionalen Live-Thumbnails, Drag-&-Drop-Seitenverschiebung (`reorderPage`), Verschieben in andere Notizen (`movePageToNote`) und einklappbarem Neue-Seite-Creator. |
@@ -80,7 +81,18 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - **Automatische Tintenfarbe (`'auto'`)** richtet sich nach der Helligkeit der gewählten Papierfarbe (`isPaperDark`), nicht nur nach dem App-Theme.
 - Beim Löschen eines Ordners bleiben alle Notizen erhalten (wandern in den Elternordner oder nach `folderId: null`).
 
-### 3. SolidJS & Library-Fallstricke
+### 3. Vollbildmodus, IndexedDB & Infinite Canvas (Invarianten)
+- **Vollbildmodus & iPadOS Safari:**
+  - WebKits native `requestFullscreen()`-Wischgeste (`WKFullScreenWindowController`) ist fest im iPadOS-UIKit verankert und per JS nicht geschwindigkeitsabhängig konfigurierbar. Deshalb nutzt `manifest.json` `"display": "standalone"` (iPad Home-Bildschirm-PWA ohne Safari-Leisten) und `enterFullscreen()` überspringt im Standalone-Modus `requestFullscreen()` bewusst.
+  - `.app-shell.is-fullscreen .pane-toolbar` darf **kein** `overflow-x: auto` erhalten, da sonst das absolut positionierte `.paper-popover` vertikal abgeschnitten wird.
+- **IndexedDB-Hydration (`notesStore.ts` / `db.ts`):**
+  - Alle Persistenz-Effekte (`saveNotesDeltaAsync`, `saveFoldersAsync`, `saveActiveNoteId`, `saveOpenTabIds`, `saveActiveScreen`) müssen mit `if (!isHydrated()) return;` geschützt bleiben, damit der leere Startzustand niemals bestehende Daten/Tabs überschreibt.
+  - Es existiert bewusst **kein** `localStorage` → IndexedDB-Migrationscode mehr (nur kleine UI-Prefs liegen in `localStorage`).
+- **Unendlicher Canvas (`InfiniteCanvasView.tsx` & `DrawingCanvas.tsx`):**
+  - `DrawingCanvas.tsx` bindet `ResizeObserver` und den Touch-/Pinch-Controller per `createEffect` an ein `viewportEl`-Signal (nicht `onMount`), damit Umschalten `Seiten ↔ Unendlich` die Listener sauber neu anhängt.
+  - `<InfiniteCanvasView>` hält die `<canvas>`-Backing-Stores strikt viewport-groß (konstanter iPad-GPU-Speicher) und merkt sich die Kamera pro `${noteId}:${pageId}` in `cameraCache`.
+
+### 4. SolidJS & Library-Fallstricke
 - `props` in SolidJS-Komponenten niemals destrukturieren.
 - Listen mit editierbaren Inputs (`PageOverview`, `NoteTabs`, `CanvasPageSheet`-Liste) über **String-IDs** (`<For each={pageIds()}>`) iterieren, damit Objekt-Updates keinen Fokusverlust verursachen.
 - Kontrollierte `<input>`/`<textarea>` (Titel, Texteditor) nur synchronisieren, wenn `el.value !== next` (verhindert Cursor-Sprünge).
