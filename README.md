@@ -4,6 +4,13 @@ Eine schnelle, lokale Web-Notiz-App mit **Markdown-Texteditor** und **druckempfi
 
 **Live-Demo (GitHub Pages):** https://lebkuchen-1.github.io/html-notes/
 
+### Tipp für iPad (Vollbild ohne Safari-Leisten per Home-Bildschirm / PWA)
+Für maximalen Schreibplatz auf dem iPad empfiehlt es sich, die App als **Web-App auf dem Home-Bildschirm** abzulegen:
+1. Live-Demo in **Safari** auf dem iPad öffnen.
+2. Auf **Teilen** (Quadrat mit Pfeil nach oben) → **„Zum Home-Bildschirm“** tippen und hinzufügen.
+3. Über das neue App-Icon starten: Notizblock läuft im **Standalone-Modus komplett ohne Safari-Adress- und Tableiste** – und ohne Safaris empfindliche Fullscreen-Wischgeste beim Scrollen.
+4. Zusätzlich lässt sich in der App über den **Vollbild-Button** (`F11` / `Strg+Umschalt+F`) die App-UI (Titel, Tab-Leiste, Toolbar) weiter verkleinern.
+
 ---
 
 ## Funktionsumfang
@@ -22,8 +29,10 @@ Eine schnelle, lokale Web-Notiz-App mit **Markdown-Texteditor** und **druckempfi
 - **Export**: Einzelne Notizen als `.md`-Datei exportieren.
 
 ### Stifteingabe & Zeichenfläche (Canvas)
-- **Stift-, Touch- & Mauseingabe**: Pointer-Events-Engine mit echter Druckempfindlichkeit (`e.pressure` für Apple Pencil, Surface Pen, Wacom), `getCoalescedEvents()` für flüssige Kurven und geschwindigkeitsbasierter Strichdynamik für Maus/Touch.
-- **Nur-Stift-Modus (Handballenerkennung)**: Ignoriert Touch-Eingaben beim Zeichnen und ermöglicht gleichzeitig bequemes Scrollen mit dem Finger.
+- **Stift-, Touch- & Mauseingabe**: Dual-Layer-HiDPI-Canvas mit echter Druckempfindlichkeit (`e.pressure` für Apple Pencil, Surface Pen, Wacom), `getCoalescedEvents()` und zuschaltbarer **Schrift-Stabilisierung** (geschwindigkeitsadaptiver One-Euro-Filter: *Aus / Leicht / Mittel*).
+- **Nur-Stift-Modus, Palm Rejection & Gesten**: Erkennt den Apple Pencil automatisch, ignoriert ruhende Handballen zuverlässig und ermöglicht **1-Finger-Scrollen** (mit 120-Hz-Momentum) sowie **2-Finger Pinch-to-Zoom**.
+- **Unendlicher Canvas (wie OneNote)**: Optional pro Notiz (oder global) umschaltbar zwischen **Seiten** und **Unendlich** — grenzenloses Zeichnen in alle Richtungen (25 % – 400 % Zoom) bei vollem Erhalt aller bestehenden Inhalte.
+- **Globale & lokale Einstellungen**: Dedizierte Einstellungsseite (`Strg+,`) mit globalen Vorgaben und optionalen notizspezifischen Überschreibungen (Glättung, Druckempfindlichkeit, Palm-Rejection-Empfindlichkeit, 1-Finger-Scroll, Pinch-Zoom, Seiten-Kopfzeilen, Editor-Schrift, Standard-Papier/-Format, PNG-Auflösung, Autosave).
 - **Werkzeuge**:
   - **Auswahl-Werkzeug**: Bilder & Canvas-Texte anklicken, verschieben und skalieren
   - **Stift** & **Textmarker** (halbtransparent, unterhalb der Tinte gerendert)
@@ -41,8 +50,8 @@ Eine schnelle, lokale Web-Notiz-App mit **Markdown-Texteditor** und **druckempfi
 - **Horizontale Seitenübersicht**: Angedockter Filmstreifen oberhalb des Dokuments mit proportionalen Live-Thumbnails, **Drag-&-Drop-Neuanordnung**, Schnell-Verschieben (`←` / `→` bzw. `↑` / `↓`), Duplizieren, Löschen und Verschieben von Seiten in andere Notizen.
 - **PDF & Bilder als Seiten**: Mehrseitige PDFs (lokal im Browser via `pdfjs-dist` gerendert) und Bilder können als eigene Seiten im exakten Seitenverhältnis importiert und direkt annotiert werden — inklusive einstellbarer Hintergrund-Deckkraft.
 - **Bewegliche Bilder**: Bilder lassen sich zusätzlich frei auf Seiten platzieren, proportional skalieren, in der Deckkraft anpassen und zwischen Vorder-/Hintergrund wechseln.
-- **Export & Backup**: Einzelne Seiten als hochauflösendes **PNG (2×)** exportieren; automatisches lokales Speichern (`localStorage`) plus vollständiges **JSON-Backup (Export & Import)** inkl. Ordnern, Seiten, Zeichnungen und Bildern.
-- **Hell- & Dunkelmodus**: Umschaltbares Farbschema mit automatischer Tinten-Kontrastanpassung.
+- **Export & Speicher**: Einzelne Seiten oder komplette unendliche Canvases als hochauflösendes **PNG (1× / 2× / 3×)** exportieren; automatisches inkrementelles Speichern in **IndexedDB** (kein ~5-MB-`localStorage`-Limit) plus vollständiges **JSON-Backup (Export & Import)** inkl. Ordnern, Seiten, Zeichnungen, Bildern und Einstellungen.
+- **Vollbild- / Zen-Modus & Theme**: Vollbildmodus (`F11` / `Strg+Umschalt+F`) verkleinert Titel, Header & Toolbar für maximalen Schreibplatz; Hell- & Dunkelmodus mit automatischer Tinten-Kontrastanpassung.
 
 ---
 
@@ -56,6 +65,8 @@ Eine schnelle, lokale Web-Notiz-App mit **Markdown-Texteditor** und **druckempfi
 | --- | --- |
 | `Strg + Alt + N` | Neue Notiz in einem neuen Tab erstellen |
 | `Strg + Alt + W` | Aktiven Notiz-Tab schließen |
+| `F11` oder `Strg + Umschalt + F` | Vollbild- / Zen-Modus umschalten (Browser-UI ausblenden & App-UI verkleinern) |
+| `Strg + ,` | Globale & lokale Einstellungen öffnen / schließen (`Esc` schließt ebenfalls) |
 | `Doppelklick` (freie Tab-Leiste) | Neue Notiz in einem neuen Tab öffnen |
 | `Mittelklick` auf einen Tab | Tab schließen |
 | `Drag & Drop` auf Tabs | Geöffnete Tabs umsortieren |
@@ -73,6 +84,9 @@ Eine schnelle, lokale Web-Notiz-App mit **Markdown-Texteditor** und **druckempfi
 | `Stylus-Radierer-Taste` (gedrückt halten) | Schaltet temporär auf den Radierer um |
 | `Drag & Drop` (Bild auf Seite) | Bild direkt an der Zielposition einfügen |
 | `Drag & Drop` (PDF auf Canvas) | Alle Seiten der PDF-Datei als einzelne Canvas-Seiten importieren |
+| `1 Finger` *(iPad / Nur-Stift-Modus)* | Scrollen / Verschieben auf der Zeichenfläche |
+| `2 Finger Pinch` *(iPad)* / `Strg + Mausrad` | Stufenlos hinein- und herauszoomen |
+| `Leertaste + Ziehen` / `Mittelklick + Ziehen` | Unendlichen Canvas auf dem Desktop verschieben |
 
 ### Canvas-Textfeld (Inline-Bearbeitung)
 
