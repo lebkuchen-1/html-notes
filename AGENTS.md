@@ -61,10 +61,11 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - **Selbstheilendes Pointer-Handling (gegen zufälliges Schreib-Stoppen):**
   - `onLostPointerCapture` + `window`-Fallback (`pointerup`/`pointercancel`) stellen sicher, dass `activePointerId` niemals hängen bleibt.
   - Ein neues `pen`-`pointerdown` wird niemals durch eine verwaiste `activePointerId` blockiert: Ein hängengebliebener Vorgänger-Stiftstrich wird sauber abgeschlossen, ein vorheriger Touch-Ansatz (`< 450ms`) verworfen.
-- **Palm Rejection, 2-Finger-Scroll & Pinch-to-Zoom (zentral auf `.canvas-viewport` in `DrawingCanvas.tsx`):**
+- **Palm Rejection, 1-Finger-Scroll & 2-Finger-Pinch-to-Zoom (zentral auf `.canvas-viewport` in `DrawingCanvas.tsx`):**
   - `.drawing-canvas` **muss dauerhaft `touch-action: none` behalten** (niemals `pan-y`/`pinch-zoom` per CSS setzen!).
-  - Nicht-passive Touch-/Gesture-Listener (`touchstart`/`touchmove`/`gesturestart`/`gesturechange` mit `{ passive: false }`) auf `.canvas-viewport` blockieren Safari-Scroll/Bounce auf Canvas und (bei `stylusOnly`/aktivem Stift) auch auf den äußeren Rändern.
-  - **2-Finger-Gesten:** Funktionieren seitenübergreifend auf `.canvas-viewport` (ohne enge `radiusX`-Sperre, da normale Finger auf dem iPad >22px Radius melden) — reines Scrollen mit sanftem Auslaufen (Momentum) + GPU-beschleunigtes Pinch-to-Zoom (`translate3d` + `scale` auf `.canvas-zoom-stage`, 45%–350%) mit exaktem Ankerpunkt unter den Fingern.
+  - **1-Finger-Scroll:** Im `Nur-Stift`-Modus (automatisch aktiv nach erster Apple-Pencil-Erkennung), im `Auswählen`-Werkzeug und auf den äußeren Rändern scrollt 1 normaler Finger vertikal & horizontal mit 120Hz-normalisiertem Momentum.
+  - **Intelligente Palm Rejection:** Ruhende Handballen werden über `touch.identifier` (`ignoredPalmTouchIds`), Kontaktfläche (`radiusX/Y > 34`) und aktiven Stift (`isAnyPenStrokeActive`) erkannt und ignoriert, bis genau dieser Touch angehoben wird; driftet ein Handballen unmittelbar vor dem Stiftaufsetzen (`< 260ms`, `< 36px`), schnappt der Scroll-Offset zurück.
+  - **2-Finger Pinch-to-Zoom + Pan:** Sofort ohne Deadzone mit GPU-`translate3d`/`scale` auf `.canvas-zoom-stage` (45%–350%), eingefrorenen `.canvas-scroll-content`-Mindestmaßen gegen Safari-Scroll-Clamping beim Rauszoomen, exaktem Ankerpunkt-Re-Anchor beim Loslassen und `waitForAllFingersUp` gegen Nachruckler beim versetzten Finger-Abheben.
   - Bei `pointercancel` während eines echten `pen`-Strichs wird der bereits gezeichnete Strich erhalten statt verworfen.
 - **Schrift-Stabilisierung:** `StrokeStabilizer` (One-Euro-Filter, Standard: `Leicht`, umschaltbar `Aus` / `Leicht` / `Mittel`).
 

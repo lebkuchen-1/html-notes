@@ -107,6 +107,7 @@ interface CanvasPageSheetProps {
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   onPointerTypeChange: (type: string) => void;
+  onPenPointerDown: () => void;
   onSetEditingText: (next: EditingTextState | null) => void;
   onCommitEditingText: () => void;
   onSetSelectedImage: (next: SelectedImageState | null) => void;
@@ -651,6 +652,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     // Record Apple Pencil / stylus activity for automatic palm rejection
     if (e.pointerType === 'pen') {
       lastGlobalPenTimestamp = now;
+      props.onPenPointerDown();
     }
 
     // Palm Rejection for touch pointers on drawing tools:
