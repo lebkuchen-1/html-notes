@@ -563,27 +563,27 @@ export function ImportDialog(props: ImportDialogProps) {
                     <ol>
                       <li>
                         App <strong>Kurzbefehle</strong> → <strong>+</strong> → Name z. B.{' '}
-                        <em>„An Notizblock“</em> → unten ⓘ →{' '}
-                        <strong>„Im Share-Sheet anzeigen“</strong> aktivieren.
+                        <em>„An Notizblock“</em> → ⓘ →{' '}
+                        <strong>„Im Share-Sheet anzeigen“</strong> aktivieren (Eingabe:{' '}
+                        <em>URLs &amp; Safari-Webseiten</em>).
                       </li>
                       <li>
-                        Ganz oben auf <strong>„Beliebig“</strong> tippen →{' '}
-                        <strong>„Alle löschen“</strong> → <strong>nur „PDFs“, „Dateien“ &amp; „Bilder“</strong>{' '}
-                        wählen (<em>Safari-Webseiten</em> &amp; <em>URLs</em> deaktiviert lassen,
-                        damit Safari die echte PDF-Datei übergibt!).
+                        Aktion 1: <strong>Inhalt der URL abrufen</strong> (Eingabe:{' '}
+                        <em>Kurzbefehleingabe</em>) — lädt das echte PDF statt Safaris HTML-Viewer.
                       </li>
                       <li>
-                        Aktion 1: <strong>Base64 codieren</strong> (nach <em>„Base64“</em> suchen;
-                        Eingabe: <em>Kurzbefehleingabe</em>).
+                        Aktion 2: <strong>Base64 codieren</strong> (Eingabe:{' '}
+                        <em>Inhalt der URL</em>).
                       </li>
                       <li>
-                        Aktion 2: <strong>In Zwischenablage kopieren</strong>.
+                        Aktion 3: <strong>In Zwischenablage kopieren</strong> (Eingabe:{' '}
+                        <em>Base64-codiert</em>).
                       </li>
                     </ol>
                     <p>
-                      <em>Tipp für normale Webseiten:</em> Wenn du auch normale Safari-Seiten als
-                      PDF übernehmen willst, füge einfach die Aktion <strong>„PDF erstellen“</strong>{' '}
-                      (aus <em>Kurzbefehleingabe</em>) vor <strong>„Base64 codieren“</strong> ein.
+                      <em>Hinweis für lokale Dateien (Dateien-App) oder Login-PDFs:</em> In Safari
+                      unter <em>Teilen → Optionen → PDF</em> wählen (oder für Dateien-App einen
+                      Kurzbefehl nur mit <em>Base64 codieren → In Zwischenablage kopieren</em>).
                     </p>
                   </details>
                 </div>
