@@ -24,6 +24,7 @@ export type QuickImportPayload =
 export interface ClipboardReadResult {
   payload: QuickImportPayload | null;
   error?: 'permission' | 'empty' | 'unsupported';
+  foundTypes?: string[];
 }
 
 const IMAGE_MIME_PRIORITY = [
@@ -144,6 +145,11 @@ function base64ToFile(base64: string, mime: string, filename: string): File | nu
   }
 }
 
+function looksLikeBase64Sample(str: string): boolean {
+  const sample = str.slice(0, 256);
+  return sample.length >= 32 && /^[A-Za-z0-9+/=]+$/.test(sample);
+}
+
 function tryDecodeEmbeddedFileText(raw: string): File | null {
   const trimmed = raw.trim();
 
@@ -160,16 +166,43 @@ function tryDecodeEmbeddedFileText(raw: string): File | null {
     }
   }
 
-  // Standard data URI for PDF or Image
-  const dataUriMatch = trimmed.match(
-    /^data:(application\/pdf|image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i
-  );
-  if (dataUriMatch) {
-    const mime = dataUriMatch[1].toLowerCase();
-    const b64 = dataUriMatch[2];
-    const ext = mimeToExt(mime);
-    const name = mime === 'application/pdf' ? 'Zwischenablage.pdf' : `Bild.${ext}`;
-    return base64ToFile(b64, mime, name);
+  // Standard data URI for PDF or Image (checked via prefix to stay O(1) on large files)
+  if (trimmed.startsWith('data:')) {
+    const commaIdx = trimmed.indexOf(',');
+    if (commaIdx > 5 && commaIdx < 120) {
+      const header = trimmed.slice(5, commaIdx).toLowerCase();
+      if (header.endsWith(';base64')) {
+        const mime = header.slice(0, -';base64'.length).trim();
+        if (mime === 'application/pdf' || mime.startsWith('image/')) {
+          const b64 = trimmed.slice(commaIdx + 1);
+          const ext = mimeToExt(mime);
+          const name = mime === 'application/pdf' ? 'Zwischenablage.pdf' : `Bild.${ext}`;
+          return base64ToFile(b64, mime, name);
+        }
+      }
+    }
+  }
+
+  // Raw Base64 PDF / PNG / JPEG (enables a super-simple 2-step Apple Shortcut:
+  // 1. "Mit Base64 codieren" -> 2. "In Zwischenablage kopieren", with or without line breaks!)
+  if (trimmed.length >= 80) {
+    const head = trimmed.slice(0, 24).replace(/\s+/g, '');
+    if (head.startsWith('JVBERi0')) {
+      const compact = trimmed.replace(/\s+/g, '');
+      if (looksLikeBase64Sample(compact)) {
+        return base64ToFile(compact, 'application/pdf', 'Importiertes Dokument.pdf');
+      }
+    } else if (head.startsWith('iVBORw0KGgo')) {
+      const compact = trimmed.replace(/\s+/g, '');
+      if (looksLikeBase64Sample(compact)) {
+        return base64ToFile(compact, 'image/png', 'Zwischenablage.png');
+      }
+    } else if (head.startsWith('/9j/')) {
+      const compact = trimmed.replace(/\s+/g, '');
+      if (looksLikeBase64Sample(compact)) {
+        return base64ToFile(compact, 'image/jpeg', 'Zwischenablage.jpg');
+      }
+    }
   }
 
   return null;
@@ -289,14 +322,21 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
     try {
       const items = await navigator.clipboard.read();
       const files: File[] = [];
+      const foundTypes: string[] = [];
       let plainText = '';
       let htmlText = '';
+      let uriListText = '';
       let imgCounter = 0;
 
       for (const item of items) {
-        // Check PDF first
-        if (item.types.includes('application/pdf')) {
-          const blob = await item.getType('application/pdf');
+        for (const t of item.types) {
+          if (!foundTypes.includes(t)) foundTypes.push(t);
+        }
+
+        // Check PDF (exact or vendor/platform PDF mime type)
+        const pdfMime = item.types.find((t) => t.toLowerCase().includes('pdf'));
+        if (pdfMime) {
+          const blob = await item.getType(pdfMime);
           if (blob.size > 0) {
             files.push(
               new File([blob], `Dokument${files.length > 0 ? ` ${files.length + 1}` : ''}.pdf`, {
@@ -327,6 +367,10 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
           }
         }
 
+        if (!uriListText && item.types.includes('text/uri-list')) {
+          const blob = await item.getType('text/uri-list');
+          uriListText = await blob.text();
+        }
         if (!htmlText && item.types.includes('text/html')) {
           const blob = await item.getType('text/html');
           htmlText = await blob.text();
@@ -344,12 +388,19 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
             files,
             suggestedTitle: deriveTitleFromFiles(files),
           },
+          foundTypes,
         };
       }
 
-      if (plainText.trim()) {
-        const parsed = await parseClipboardTextPayload(plainText, htmlText);
-        return { payload: parsed, error: parsed ? undefined : 'empty' };
+      const firstUri = uriListText
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0 && !l.startsWith('#'));
+
+      const effectiveText = plainText.trim() || firstUri || '';
+      if (effectiveText) {
+        const parsed = await parseClipboardTextPayload(effectiveText, htmlText);
+        return { payload: parsed, error: parsed ? undefined : 'empty', foundTypes };
       }
 
       // Fallback if only HTML was present without text/plain
@@ -365,14 +416,14 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
             '';
           if (extracted) {
             const parsed = await parseClipboardTextPayload(extracted, htmlText);
-            return { payload: parsed, error: parsed ? undefined : 'empty' };
+            return { payload: parsed, error: parsed ? undefined : 'empty', foundTypes };
           }
         } catch {
           // ignore
         }
       }
 
-      return { payload: null, error: 'empty' };
+      return { payload: null, error: 'empty', foundTypes };
     } catch (err) {
       const name = err instanceof Error ? err.name : '';
       if (name === 'NotAllowedError' || name === 'SecurityError') {

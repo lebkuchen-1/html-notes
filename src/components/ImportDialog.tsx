@@ -212,7 +212,7 @@ export function ImportDialog(props: ImportDialogProps) {
         );
       } else {
         props.store.setImportDialogHint(
-          'Kein unterstützter Inhalt in der Zwischenablage gefunden. Tipp: In Safari „Teilen → Kopieren“ nutzen oder eine Datei wählen.'
+          'Kein lesbarer Inhalt in der Zwischenablage. Auf dem iPad blockiert Safari direkt kopierte PDF-Dateien – nutze den 2-Schritt-Apple-Kurzbefehl unten, Drag & Drop oder „PDF / Bild wählen“.'
         );
       }
     } finally {
@@ -543,7 +543,7 @@ export function ImportDialog(props: ImportDialogProps) {
                       ref={pasteInputRef}
                       type="text"
                       class="import-paste-input"
-                      placeholder="Oder hier antippen → „Einsetzen“ (auch für kopierte Dateien)…"
+                      placeholder="Oder hier antippen → „Einsetzen“ (Links, Bilder, Text, Base64-PDF)…"
                       onPaste={(e) => void handleDirectPaste(e)}
                       onInput={(e) => {
                         // Keep input clean if user accidentally types; paste handles payload
@@ -553,6 +553,28 @@ export function ImportDialog(props: ImportDialogProps) {
                       }}
                     />
                   </div>
+
+                  <details class="import-shortcut-guide">
+                    <summary>PDFs direkt über Safari „Teilen“ importieren (2-Schritt-Kurzbefehl)</summary>
+                    <ol>
+                      <li>
+                        App <strong>Kurzbefehle</strong> öffnen → <strong>+</strong> → Namen z. B.{' '}
+                        <em>„An Notizblock“</em> geben und in den Details (ⓘ){' '}
+                        <strong>„Im Share-Sheet anzeigen“</strong> aktivieren (Typ: <em>PDFs &amp; Dateien</em>).
+                      </li>
+                      <li>
+                        Aktion 1: <strong>Mit Base64 codieren</strong> (Eingabe: <em>Kurzbefehleingabe</em>).
+                      </li>
+                      <li>
+                        Aktion 2: <strong>In Zwischenablage kopieren</strong>.
+                      </li>
+                    </ol>
+                    <p>
+                      Danach erscheint <em>„An Notizblock“</em> direkt im Safari-Teilen-Menü: PDF
+                      teilen → hier auf <strong>Einfügen</strong> tippen → alle PDF-Seiten werden
+                      sofort mit Notiz- &amp; Ordnerwahl importiert!
+                    </p>
+                  </details>
                 </div>
               }
             >

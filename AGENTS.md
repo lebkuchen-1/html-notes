@@ -21,6 +21,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - `npm run build` — Produktions-Build nach `dist/`
 - `vite.config.ts`: `base: process.env.GITHUB_ACTIONS ? '/html-notes/' : './'` (wichtig, damit Assets & PDF.js-Worker auf `/html-notes/` und lokal funktionieren).
 - `.github/workflows/deploy.yml`: Baut und deployt bei jedem Push auf `main` automatisch auf GitHub Pages (`build_type: workflow`).
+- **Workflow-Regel (Nutzerwunsch):** Nach abgeschlossenen Änderungen und erfolgreichem `npm run typecheck` + `npm run build` immer **direkt committen und auf `main` pushen** (ohne Rückfrage), da der Nutzer direkt auf dem iPad über GitHub Pages testet.
 - **Umgebungs-Hinweis:** `node`, `npm` und `gh` liegen im Host-Nix-Profil (`~/.nix-profile/bin`) und sind in einer isolierten Sandbox ohne `/nix` nicht erreichbar.
 
 ---

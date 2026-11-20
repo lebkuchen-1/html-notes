@@ -939,7 +939,7 @@ export function createNotesStore() {
       result.error === 'permission'
         ? 'Zugriff auf Zwischenablage abgebrochen — tippe unten auf „Aus Zwischenablage einfügen“ oder füge direkt ins Feld ein.'
         : result.error === 'empty'
-          ? 'Die Zwischenablage ist leer oder enthält kein unterstütztes Format. Nutze in Safari „Teilen → Kopieren“ oder wähle direkt eine Datei.'
+          ? 'Kein lesbarer Inhalt in der Zwischenablage. Hinweis für iPadOS: Apple WebKit blockiert direkt kopierte PDF-Dateien in Web-Apps – nutze unten den 2-Schritt-Kurzbefehl (Teilen-Menü), Drag & Drop oder „PDF / Bild wählen“.'
           : 'Tippe unten ins Einfüge-Feld (→ „Einsetzen“) oder wähle eine PDF-/Bilddatei.';
 
     openImportDialog({
