@@ -309,19 +309,39 @@ function tryDecodeEmbeddedFileText(raw: string): EmbeddedBase64Result {
         if (file) return { kind: 'file', file };
       }
 
-      // 6. Base64-encoded plain URL or .webloc XML plist containing a URL
-      if (trimmed.length < 8192) {
+      // 6. Base64-encoded plain URL, .webloc XML plist, or Safari HTML wrapper with <embed src="...pdf">
+      if (trimmed.length < 32768) {
         const fullBytes = decodeBase64ToBytes(trimmed);
         if (fullBytes) {
           const decodedText = new TextDecoder().decode(fullBytes).trim();
           const url = isSingleHttpUrl(decodedText);
           if (url) return { kind: 'url', url };
+
           // Check XML .webloc plist (<key>URL</key><string>https://...</string>)
           const weblocMatch = decodedText.match(
             /<key>\s*URL\s*<\/key>\s*<string>\s*(https?:\/\/[^<\s]+)\s*<\/string>/i
           );
           if (weblocMatch?.[1]) {
             return { kind: 'url', url: weblocMatch[1] };
+          }
+
+          // Check HTML wrapper containing <embed src="https://...">, <iframe src="...">, or <object data="...">
+          if (/<html|<embed|<iframe|<object/i.test(decodedText)) {
+            try {
+              const doc = new DOMParser().parseFromString(decodedText, 'text/html');
+              const embedSrc =
+                doc.querySelector('embed[src]')?.getAttribute('src') ||
+                doc.querySelector('iframe[src]')?.getAttribute('src') ||
+                doc.querySelector('object[data]')?.getAttribute('data') ||
+                doc.querySelector('a[href*=".pdf" i]')?.getAttribute('href') ||
+                '';
+              const extractedUrl = isSingleHttpUrl(embedSrc);
+              if (extractedUrl) {
+                return { kind: 'url', url: extractedUrl };
+              }
+            } catch {
+              // ignore DOM parse errors
+            }
           }
         }
       }

@@ -564,12 +564,16 @@ export function ImportDialog(props: ImportDialogProps) {
                       <li>
                         App <strong>Kurzbefehle</strong> → <strong>+</strong> → Name z. B.{' '}
                         <em>„An Notizblock“</em> → ⓘ →{' '}
-                        <strong>„Im Share-Sheet anzeigen“</strong> aktivieren (Eingabe:{' '}
-                        <em>URLs &amp; Safari-Webseiten</em>).
+                        <strong>„Im Share-Sheet anzeigen“</strong> aktivieren.
+                      </li>
+                      <li>
+                        Ganz oben bei <em>Empfange …</em> auf <strong>Alle löschen</strong> tippen
+                        und <strong>nur „URLs“</strong> aktivieren (<em>Safari-Webseiten</em>{' '}
+                        unbedingt AUS lassen, sonst übergibt Safari den HTML-Viewer!).
                       </li>
                       <li>
                         Aktion 1: <strong>Inhalt der URL abrufen</strong> (Eingabe:{' '}
-                        <em>Kurzbefehleingabe</em>) — lädt das echte PDF statt Safaris HTML-Viewer.
+                        <em>Kurzbefehleingabe</em>).
                       </li>
                       <li>
                         Aktion 2: <strong>Base64 codieren</strong> (Eingabe:{' '}
@@ -581,9 +585,10 @@ export function ImportDialog(props: ImportDialogProps) {
                       </li>
                     </ol>
                     <p>
-                      <em>Hinweis für lokale Dateien (Dateien-App) oder Login-PDFs:</em> In Safari
-                      unter <em>Teilen → Optionen → PDF</em> wählen (oder für Dateien-App einen
-                      Kurzbefehl nur mit <em>Base64 codieren → In Zwischenablage kopieren</em>).
+                      <em>Hinweis für Login-PDFs (z. B. Moodle) oder lokale Dateien:</em> In der
+                      Dateien-App funktioniert ein Kurzbefehl mit Eingabe <em>PDFs &amp; Dateien</em>{' '}
+                      → <em>Base64 codieren</em> → <em>In Zwischenablage kopieren</em> (ohne{' '}
+                      <em>Inhalt der URL abrufen</em>).
                     </p>
                   </details>
                 </div>
