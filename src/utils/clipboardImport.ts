@@ -23,7 +23,7 @@ export type QuickImportPayload =
 
 export interface ClipboardReadResult {
   payload: QuickImportPayload | null;
-  error?: 'permission' | 'empty' | 'unsupported';
+  error?: 'permission' | 'empty' | 'unsupported' | 'shortcut_wrong_input';
   foundTypes?: string[];
 }
 
@@ -131,26 +131,64 @@ function isSingleHttpUrl(text: string): string | null {
   return null;
 }
 
-function base64ToFile(base64: string, mime: string, filename: string): File | null {
+function decodeBase64ToBytes(base64: string): Uint8Array<ArrayBuffer> | null {
   try {
-    const cleaned = base64.replace(/\s+/g, '');
+    let cleaned = base64.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    const mod = cleaned.length % 4;
+    if (mod === 2) cleaned += '==';
+    else if (mod === 3) cleaned += '=';
+    else if (mod === 1) return null;
+
     const binary = atob(cleaned);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new File([bytes], filename, { type: mime });
+    return bytes;
   } catch {
     return null;
   }
 }
 
-function looksLikeBase64Sample(str: string): boolean {
-  const sample = str.slice(0, 256);
-  return sample.length >= 32 && /^[A-Za-z0-9+/=]+$/.test(sample);
+function base64ToFile(base64: string, mime: string, filename: string): File | null {
+  const bytes = decodeBase64ToBytes(base64);
+  if (!bytes || bytes.length === 0) return null;
+  return new File([bytes], filename, { type: mime });
 }
 
-function tryDecodeEmbeddedFileText(raw: string): File | null {
+function looksLikeWholeBase64Blob(trimmed: string): boolean {
+  if (trimmed.length < 80) return false;
+  // Real prose has spaces between words; Base64 only has A-Z, a-z, 0-9, +, /, -, _, = and line breaks
+  const sampleHead = trimmed.slice(0, 320);
+  const sampleTail = trimmed.slice(-160);
+  const re = /^[A-Za-z0-9+/=_\-\r\n]+$/;
+  return re.test(sampleHead) && re.test(sampleTail);
+}
+
+function findPdfMagicOffset(bytes: Uint8Array): number {
+  // PDF spec allows %PDF- anywhere within the first 1024 bytes
+  const limit = Math.min(bytes.length - 5, 1024);
+  for (let i = 0; i <= limit; i++) {
+    if (
+      bytes[i] === 0x25 && // %
+      bytes[i + 1] === 0x50 && // P
+      bytes[i + 2] === 0x44 && // D
+      bytes[i + 3] === 0x46 && // F
+      bytes[i + 4] === 0x2d // -
+    ) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+type EmbeddedBase64Result =
+  | { kind: 'file'; file: File }
+  | { kind: 'url'; url: string }
+  | { kind: 'non_pdf_base64' }
+  | null;
+
+function tryDecodeEmbeddedFileText(raw: string): EmbeddedBase64Result {
   const trimmed = raw.trim();
 
   // Optional iOS Shortcut convention: NOTIZBLOCK_FILE_B64:<mime>:<filename>:<base64>
@@ -162,7 +200,8 @@ function tryDecodeEmbeddedFileText(raw: string): File | null {
       const mime = rest.slice(0, firstColon).trim() || 'application/pdf';
       const name = rest.slice(firstColon + 1, secondColon).trim() || `Import.${mimeToExt(mime)}`;
       const b64 = rest.slice(secondColon + 1);
-      return base64ToFile(b64, mime, name);
+      const file = base64ToFile(b64, mime, name);
+      if (file) return { kind: 'file', file };
     }
   }
 
@@ -177,30 +216,91 @@ function tryDecodeEmbeddedFileText(raw: string): File | null {
           const b64 = trimmed.slice(commaIdx + 1);
           const ext = mimeToExt(mime);
           const name = mime === 'application/pdf' ? 'Zwischenablage.pdf' : `Bild.${ext}`;
-          return base64ToFile(b64, mime, name);
+          const file = base64ToFile(b64, mime, name);
+          if (file) return { kind: 'file', file };
         }
       }
     }
   }
 
-  // Raw Base64 PDF / PNG / JPEG (enables a super-simple 2-step Apple Shortcut:
-  // 1. "Mit Base64 codieren" -> 2. "In Zwischenablage kopieren", with or without line breaks!)
-  if (trimmed.length >= 80) {
-    const head = trimmed.slice(0, 24).replace(/\s+/g, '');
-    if (head.startsWith('JVBERi0')) {
-      const compact = trimmed.replace(/\s+/g, '');
-      if (looksLikeBase64Sample(compact)) {
-        return base64ToFile(compact, 'application/pdf', 'Importiertes Dokument.pdf');
+  // Raw Base64 detection (for 2-step Apple Shortcut: Base64 codieren -> In Zwischenablage kopieren)
+  if (looksLikeWholeBase64Blob(trimmed)) {
+    // Inspect first ~1.5 KB cheaply first to check magic bytes before decoding huge files
+    const prefixChunk = trimmed.slice(0, 2048).replace(/\s+/g, '');
+    const alignedPrefixLen = Math.floor(prefixChunk.length / 4) * 4;
+    const headBytes = decodeBase64ToBytes(prefixChunk.slice(0, alignedPrefixLen));
+
+    if (headBytes && headBytes.length >= 8) {
+      // 1. PDF (%PDF- within first 1024 bytes)
+      const pdfOffset = findPdfMagicOffset(headBytes);
+      if (pdfOffset >= 0) {
+        const fullBytes = decodeBase64ToBytes(trimmed);
+        if (fullBytes && fullBytes.length > pdfOffset + 16) {
+          const slice = pdfOffset > 0 ? fullBytes.slice(pdfOffset) : fullBytes;
+          return {
+            kind: 'file',
+            file: new File([slice], 'Importiertes Dokument.pdf', { type: 'application/pdf' }),
+          };
+        }
       }
-    } else if (head.startsWith('iVBORw0KGgo')) {
-      const compact = trimmed.replace(/\s+/g, '');
-      if (looksLikeBase64Sample(compact)) {
-        return base64ToFile(compact, 'image/png', 'Zwischenablage.png');
+
+      // 2. PNG (89 50 4E 47)
+      if (
+        headBytes[0] === 0x89 &&
+        headBytes[1] === 0x50 &&
+        headBytes[2] === 0x4e &&
+        headBytes[3] === 0x47
+      ) {
+        const file = base64ToFile(trimmed, 'image/png', 'Zwischenablage.png');
+        if (file) return { kind: 'file', file };
       }
-    } else if (head.startsWith('/9j/')) {
-      const compact = trimmed.replace(/\s+/g, '');
-      if (looksLikeBase64Sample(compact)) {
-        return base64ToFile(compact, 'image/jpeg', 'Zwischenablage.jpg');
+
+      // 3. JPEG (FF D8 FF)
+      if (headBytes[0] === 0xff && headBytes[1] === 0xd8 && headBytes[2] === 0xff) {
+        const file = base64ToFile(trimmed, 'image/jpeg', 'Zwischenablage.jpg');
+        if (file) return { kind: 'file', file };
+      }
+
+      // 4. WebP (RIFF....WEBP)
+      if (
+        headBytes.length >= 12 &&
+        headBytes[0] === 0x52 &&
+        headBytes[1] === 0x49 &&
+        headBytes[2] === 0x46 &&
+        headBytes[3] === 0x46 &&
+        headBytes[8] === 0x57 &&
+        headBytes[9] === 0x45 &&
+        headBytes[10] === 0x42 &&
+        headBytes[11] === 0x50
+      ) {
+        const file = base64ToFile(trimmed, 'image/webp', 'Zwischenablage.webp');
+        if (file) return { kind: 'file', file };
+      }
+
+      // 5. GIF (GIF8)
+      if (
+        headBytes[0] === 0x47 &&
+        headBytes[1] === 0x49 &&
+        headBytes[2] === 0x46 &&
+        headBytes[3] === 0x38
+      ) {
+        const file = base64ToFile(trimmed, 'image/gif', 'Zwischenablage.gif');
+        if (file) return { kind: 'file', file };
+      }
+
+      // 6. Base64-encoded plain URL (happens when Shortcut encoded a Safari URL instead of PDF)
+      if (trimmed.length < 4096) {
+        const fullBytes = decodeBase64ToBytes(trimmed);
+        if (fullBytes) {
+          const decodedText = new TextDecoder().decode(fullBytes).trim();
+          const url = isSingleHttpUrl(decodedText);
+          if (url) return { kind: 'url', url };
+        }
+      }
+
+      // 7. Long Base64 blob that is NOT a PDF or image (e.g. Safari Webpage / HTML / plist from "Beliebig")
+      if (trimmed.length >= 256) {
+        return { kind: 'non_pdf_base64' };
       }
     }
   }
@@ -258,21 +358,36 @@ export async function parseClipboardTextPayload(
   plainText: string,
   htmlText = ''
 ): Promise<QuickImportPayload | null> {
-  const trimmed = plainText.trim();
-  if (!trimmed) return null;
+  const res = await parseClipboardTextDetailed(plainText, htmlText);
+  return res.payload;
+}
 
-  // 1. Check Base64 PDF / Image payload (e.g. from data URI or iOS Shortcut)
-  const decodedFile = tryDecodeEmbeddedFileText(trimmed);
-  if (decodedFile) {
+async function parseClipboardTextDetailed(
+  plainText: string,
+  htmlText = ''
+): Promise<{ payload: QuickImportPayload | null; wrongShortcutInput?: boolean }> {
+  const trimmed = plainText.trim();
+  if (!trimmed) return { payload: null };
+
+  // 1. Check Base64 PDF / Image / URL payload (e.g. from data URI or iOS Shortcut)
+  const decoded = tryDecodeEmbeddedFileText(trimmed);
+  if (decoded?.kind === 'file') {
     return {
-      kind: 'files',
-      files: [decodedFile],
-      suggestedTitle: deriveTitleFromFiles([decodedFile]),
+      payload: {
+        kind: 'files',
+        files: [decoded.file],
+        suggestedTitle: deriveTitleFromFiles([decoded.file]),
+      },
     };
   }
+  if (decoded?.kind === 'non_pdf_base64') {
+    return { payload: null, wrongShortcutInput: true };
+  }
+
+  const candidateText = decoded?.kind === 'url' ? decoded.url : trimmed;
 
   // 2. Check single HTTP(S) URL (typical result of Safari "Teilen -> Kopieren")
-  const singleUrl = isSingleHttpUrl(trimmed);
+  const singleUrl = isSingleHttpUrl(candidateText);
   if (singleUrl) {
     const isPdfUrl = looksLikeDirectPdfUrl(singleUrl);
     const isImgUrl = looksLikeDirectImageUrl(singleUrl);
@@ -281,30 +396,36 @@ export async function parseClipboardTextPayload(
       const fetched = await tryFetchDirectFileFromUrl(singleUrl);
       if (fetched) {
         return {
-          kind: 'files',
-          files: [fetched],
-          suggestedTitle: deriveTitleFromFiles([fetched]),
-          sourceUrl: singleUrl,
+          payload: {
+            kind: 'files',
+            files: [fetched],
+            suggestedTitle: deriveTitleFromFiles([fetched]),
+            sourceUrl: singleUrl,
+          },
         };
       }
     }
 
     const title = deriveTitleFromUrl(singleUrl, htmlText);
     return {
-      kind: 'link',
-      url: singleUrl,
-      title,
-      suggestedTitle: title,
-      isPdfUrl,
-      corsFetchFailed: isPdfUrl || isImgUrl,
+      payload: {
+        kind: 'link',
+        url: singleUrl,
+        title,
+        suggestedTitle: title,
+        isPdfUrl,
+        corsFetchFailed: isPdfUrl || isImgUrl,
+      },
     };
   }
 
   // 3. Regular text / article excerpt
   return {
-    kind: 'text',
-    text: trimmed,
-    suggestedTitle: deriveTitleFromText(trimmed),
+    payload: {
+      kind: 'text',
+      text: candidateText,
+      suggestedTitle: deriveTitleFromText(candidateText),
+    },
   };
 }
 
@@ -399,8 +520,16 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
 
       const effectiveText = plainText.trim() || firstUri || '';
       if (effectiveText) {
-        const parsed = await parseClipboardTextPayload(effectiveText, htmlText);
-        return { payload: parsed, error: parsed ? undefined : 'empty', foundTypes };
+        const parsed = await parseClipboardTextDetailed(effectiveText, htmlText);
+        return {
+          payload: parsed.payload,
+          error: parsed.payload
+            ? undefined
+            : parsed.wrongShortcutInput
+              ? 'shortcut_wrong_input'
+              : 'empty',
+          foundTypes,
+        };
       }
 
       // Fallback if only HTML was present without text/plain
@@ -437,8 +566,15 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
     try {
       const text = await navigator.clipboard.readText();
       if (!text.trim()) return { payload: null, error: 'empty' };
-      const parsed = await parseClipboardTextPayload(text, '');
-      return { payload: parsed, error: parsed ? undefined : 'empty' };
+      const parsed = await parseClipboardTextDetailed(text, '');
+      return {
+        payload: parsed.payload,
+        error: parsed.payload
+          ? undefined
+          : parsed.wrongShortcutInput
+            ? 'shortcut_wrong_input'
+            : 'empty',
+      };
     } catch (err) {
       const name = err instanceof Error ? err.name : '';
       if (name === 'NotAllowedError' || name === 'SecurityError') {
