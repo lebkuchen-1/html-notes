@@ -35,6 +35,16 @@ import {
 } from '../utils/pageImport';
 import { generateId, PAPER_PRESETS } from '../utils/storage';
 import {
+  createScrollAxisState,
+  filterScrollDelta,
+  getOneFingerPanThreshold,
+  getPalmProfile,
+  isHardPalmGrowTouch,
+  isHardPalmTouch,
+  stabilizeReleaseVelocity,
+  type ScrollAxisState,
+} from '../utils/touchScroll';
+import {
   CanvasPageSheet,
   getLastGlobalPenTimestamp,
   isAnyPenStrokeActive,
@@ -181,37 +191,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const scrollMomentum = () => effSettings().scrollMomentum;
   const showSheetHeaders = () => effSettings().showSheetHeaders;
 
-  const palmProfile = createMemo(() => {
-    const level = palmSensitivity();
-    if (level === 'low') {
-      return {
-        touchRadius: 42,
-        growRadius: 46,
-        pointerWidth: 50,
-        postPenThreshold: 10,
-        snapWindowMs: 180,
-        snapMaxPx: 24,
-      };
-    }
-    if (level === 'high') {
-      return {
-        touchRadius: 26,
-        growRadius: 30,
-        pointerWidth: 32,
-        postPenThreshold: 20,
-        snapWindowMs: 380,
-        snapMaxPx: 52,
-      };
-    }
-    return {
-      touchRadius: 34,
-      growRadius: 38,
-      pointerWidth: 42,
-      postPenThreshold: 14,
-      snapWindowMs: 260,
-      snapMaxPx: 36,
-    };
-  });
+  const palmProfile = createMemo(() => getPalmProfile(palmSensitivity()));
 
   const setStylusOnlyPersisted = (next: boolean) => {
     const currNote = props.store.activeNote();
@@ -472,6 +452,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       velX: number;
       velY: number;
       threshold: number;
+      axis: ScrollAxisState | null;
     }
 
     interface PinchGesture {
@@ -550,12 +531,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection, .paper-popover'
         )
       );
-    };
-
-    const isPalmSizedTouch = (t: AppleTouch, limit = 34): boolean => {
-      const rx = t.radiusX ?? 0;
-      const ry = t.radiusY ?? 0;
-      return rx > limit || ry > limit;
     };
 
     const canOneFingerScrollTarget = (target: EventTarget | null): boolean => {
@@ -735,7 +710,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         const ct = e.changedTouches[i] as AppleTouch;
         if (ct.touchType !== 'stylus') {
           activeNonStylusTouchIds.add(ct.identifier);
-          if (isAnyPenStrokeActive() || isPalmSizedTouch(ct, profile.touchRadius)) {
+          if (isAnyPenStrokeActive() || isHardPalmTouch(ct, profile)) {
             ignoredPalmTouchIds.add(ct.identifier);
           }
         }
@@ -772,6 +747,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
         if (canOneFingerScrollTarget(e.target)) {
           const penJustUsed = Date.now() - getLastGlobalPenTimestamp() < 350;
+          const now = performance.now();
           oneFingerPan = {
             touchId: t.identifier,
             engaged: false,
@@ -781,11 +757,12 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             lastY: t.clientY,
             startScrollLeft: vp.scrollLeft,
             startScrollTop: vp.scrollTop,
-            startTime: performance.now(),
-            lastMoveTs: performance.now(),
+            startTime: now,
+            lastMoveTs: now,
             velX: 0,
             velY: 0,
-            threshold: penJustUsed ? profile.postPenThreshold : 7,
+            threshold: getOneFingerPanThreshold(t, profile, penJustUsed),
+            axis: null,
           };
 
           // Prevent Safari Scribble / selection magnifier on drawing canvas while allowing native
@@ -818,10 +795,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         return;
       }
 
-      // If a pending 1-finger touch spreads out into a palm footprint before scrolling starts, ignore it
+      // Only reject a pending 1-finger touch if it spreads into a genuinely massive palm/wrist
+      // (thumbs and angled fingers flattening during a sideways swipe stay active)
       if (oneFingerPan && !oneFingerPan.engaged) {
         const t = findTouchById(e.touches, oneFingerPan.touchId);
-        if (t && isPalmSizedTouch(t, palmProfile().growRadius)) {
+        if (t && isHardPalmGrowTouch(t, palmProfile())) {
           ignoredPalmTouchIds.add(t.identifier);
           oneFingerPan = null;
         }
@@ -885,42 +863,62 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         return;
       }
 
-      // Active 1-finger Pan / Scroll
+      // Active 1-finger Pan / Scroll (with directional stabilization & thumb-arc tolerance)
       if (oneFingerPan && !isAnyPenStrokeActive() && !waitForAllFingersUp) {
         const t = findTouchById(e.touches, oneFingerPan.touchId);
         if (!t) return;
 
         const now = performance.now();
         if (!oneFingerPan.engaged) {
-          const moved = Math.hypot(
-            t.clientX - oneFingerPan.startX,
-            t.clientY - oneFingerPan.startY
-          );
+          const totalDx = t.clientX - oneFingerPan.startX;
+          const totalDy = t.clientY - oneFingerPan.startY;
+          const moved = Math.hypot(totalDx, totalDy);
           if (moved < oneFingerPan.threshold) {
+            oneFingerPan.lastMoveTs = now;
             if (e.cancelable) e.preventDefault();
             return;
           }
           oneFingerPan.engaged = true;
-          oneFingerPan.lastX = t.clientX;
-          oneFingerPan.lastY = t.clientY;
-          oneFingerPan.lastMoveTs = now;
+          const canScrollX = vp.scrollWidth > vp.clientWidth + 2;
+          const canScrollY = vp.scrollHeight > vp.clientHeight + 2;
+          oneFingerPan.axis = createScrollAxisState(
+            oneFingerPan.startX,
+            oneFingerPan.startY,
+            t.clientX,
+            t.clientY,
+            canScrollX,
+            canScrollY
+          );
+          const excessRatio = moved > 0 ? Math.max(0, (moved - oneFingerPan.threshold) / moved) : 0;
+          oneFingerPan.lastX = t.clientX - totalDx * excessRatio;
+          oneFingerPan.lastY = t.clientY - totalDy * excessRatio;
         }
 
         e.preventDefault();
 
-        const dx = t.clientX - oneFingerPan.lastX;
-        const dy = t.clientY - oneFingerPan.lastY;
+        const rawDx = t.clientX - oneFingerPan.lastX;
+        const rawDy = t.clientY - oneFingerPan.lastY;
         const dtMs = Math.max(4, Math.min(48, now - oneFingerPan.lastMoveTs));
         oneFingerPan.lastX = t.clientX;
         oneFingerPan.lastY = t.clientY;
         oneFingerPan.lastMoveTs = now;
 
-        vp.scrollLeft -= dx;
-        vp.scrollTop -= dy;
+        const { appliedDx, appliedDy } = oneFingerPan.axis
+          ? filterScrollDelta(oneFingerPan.axis, rawDx, rawDy, t.clientX, t.clientY)
+          : { appliedDx: rawDx, appliedDy: rawDy };
+
+        vp.scrollLeft -= appliedDx;
+        vp.scrollTop -= appliedDy;
 
         const norm = 16.67 / dtMs;
-        oneFingerPan.velX = oneFingerPan.velX * 0.35 + dx * norm * 0.65;
-        oneFingerPan.velY = oneFingerPan.velY * 0.35 + dy * norm * 0.65;
+        oneFingerPan.velX =
+          oneFingerPan.axis?.lock === 'y'
+            ? 0
+            : oneFingerPan.velX * 0.35 + appliedDx * norm * 0.65;
+        oneFingerPan.velY =
+          oneFingerPan.axis?.lock === 'x'
+            ? 0
+            : oneFingerPan.velY * 0.35 + appliedDy * norm * 0.65;
         return;
       }
 
@@ -963,7 +961,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           !isAnyPenStrokeActive() &&
           performance.now() - pan.lastMoveTs < 95
         ) {
-          startMomentum(pan.velX, pan.velY);
+          const { vx, vy } = stabilizeReleaseVelocity(pan.velX, pan.velY, pan.axis);
+          startMomentum(vx, vy);
         }
       }
 

@@ -40,6 +40,16 @@ import { extractPdfFilesFromTransfer } from '../utils/pageImport';
 import { generateId } from '../utils/storage';
 import { StrokeStabilizer } from '../utils/strokeStabilizer';
 import {
+  createScrollAxisState,
+  filterScrollDelta,
+  getOneFingerPanThreshold,
+  getPalmProfile,
+  isHardPalmGrowTouch,
+  isHardPalmTouch,
+  stabilizeReleaseVelocity,
+  type ScrollAxisState,
+} from '../utils/touchScroll';
+import {
   getLastGlobalPenTimestamp,
   markGlobalPenActivity,
   type EditingTextState,
@@ -192,37 +202,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
 
   const cacheKey = () => `${props.store.activeNoteId() ?? ''}:${props.pageId}`;
 
-  const palmProfile = createMemo(() => {
-    const level = props.palmSensitivity;
-    if (level === 'low') {
-      return {
-        touchRadius: 42,
-        growRadius: 46,
-        pointerWidth: 50,
-        postPenThreshold: 10,
-        snapWindowMs: 180,
-        snapMaxPx: 24,
-      };
-    }
-    if (level === 'high') {
-      return {
-        touchRadius: 26,
-        growRadius: 30,
-        pointerWidth: 32,
-        postPenThreshold: 20,
-        snapWindowMs: 380,
-        snapMaxPx: 52,
-      };
-    }
-    return {
-      touchRadius: 34,
-      growRadius: 38,
-      pointerWidth: 42,
-      postPenThreshold: 14,
-      snapWindowMs: 260,
-      snapMaxPx: 36,
-    };
-  });
+  const palmProfile = createMemo(() => getPalmProfile(props.palmSensitivity));
 
   const localEditingText = createMemo<CanvasTextItem | null>(() => {
     const ed = props.editingText;
@@ -826,6 +806,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       velX: number; // CSS px per 16.67ms
       velY: number;
       threshold: number;
+      axis: ScrollAxisState | null;
     }
 
     interface PinchState {
@@ -904,12 +885,6 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
           'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection'
         )
       );
-    };
-
-    const isPalmSizedTouch = (t: AppleTouch, limit: number): boolean => {
-      const rx = t.radiusX ?? 0;
-      const ry = t.radiusY ?? 0;
-      return rx > limit || ry > limit;
     };
 
     const canOneFingerPan = (target: EventTarget | null): boolean => {
@@ -1009,7 +984,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
         const ct = e.changedTouches[i] as AppleTouch;
         if (ct.touchType !== 'stylus') {
           activeNonStylusTouchIds.add(ct.identifier);
-          if (isPenDownNow || isPalmSizedTouch(ct, profile.touchRadius)) {
+          if (isPenDownNow || isHardPalmTouch(ct, profile)) {
             ignoredPalmTouchIds.add(ct.identifier);
           }
         }
@@ -1041,6 +1016,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
         if (canOneFingerPan(e.target)) {
           const penJustUsed = Date.now() - getLastGlobalPenTimestamp() < 350;
           const cam = camera();
+          const now = performance.now();
           oneFingerPan = {
             touchId: t.identifier,
             engaged: false,
@@ -1050,11 +1026,12 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
             lastY: t.clientY,
             startCamX: cam.x,
             startCamY: cam.y,
-            startTime: performance.now(),
-            lastMoveTs: performance.now(),
+            startTime: now,
+            lastMoveTs: now,
             velX: 0,
             velY: 0,
-            threshold: penJustUsed ? profile.postPenThreshold : 7,
+            threshold: getOneFingerPanThreshold(t, profile, penJustUsed),
+            axis: null,
           };
           if (isDrawingTool) e.preventDefault();
           return;
@@ -1078,9 +1055,11 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
         return;
       }
 
+      // Only reject a pending 1-finger touch if it spreads into a genuinely massive palm/wrist
+      // (thumbs and angled fingers flattening during a sideways swipe stay active)
       if (oneFingerPan && !oneFingerPan.engaged) {
         const t = findTouchById(e.touches, oneFingerPan.touchId);
-        if (t && isPalmSizedTouch(t, palmProfile().growRadius)) {
+        if (t && isHardPalmGrowTouch(t, palmProfile())) {
           ignoredPalmTouchIds.add(t.identifier);
           oneFingerPan = null;
         }
@@ -1140,46 +1119,64 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
         return;
       }
 
-      // 1-finger Pan
+      // 1-finger Pan (with directional stabilization & thumb-arc tolerance)
       if (oneFingerPan && !isPenDownNow && !waitForAllFingersUp) {
         const t = findTouchById(e.touches, oneFingerPan.touchId);
         if (!t) return;
 
         const now = performance.now();
         if (!oneFingerPan.engaged) {
-          const moved = Math.hypot(
-            t.clientX - oneFingerPan.startX,
-            t.clientY - oneFingerPan.startY
-          );
+          const totalDx = t.clientX - oneFingerPan.startX;
+          const totalDy = t.clientY - oneFingerPan.startY;
+          const moved = Math.hypot(totalDx, totalDy);
           if (moved < oneFingerPan.threshold) {
+            oneFingerPan.lastMoveTs = now;
             if (e.cancelable) e.preventDefault();
             return;
           }
           oneFingerPan.engaged = true;
-          oneFingerPan.lastX = t.clientX;
-          oneFingerPan.lastY = t.clientY;
-          oneFingerPan.lastMoveTs = now;
+          oneFingerPan.axis = createScrollAxisState(
+            oneFingerPan.startX,
+            oneFingerPan.startY,
+            t.clientX,
+            t.clientY,
+            true,
+            true
+          );
+          const excessRatio = moved > 0 ? Math.max(0, (moved - oneFingerPan.threshold) / moved) : 0;
+          oneFingerPan.lastX = t.clientX - totalDx * excessRatio;
+          oneFingerPan.lastY = t.clientY - totalDy * excessRatio;
         }
 
         e.preventDefault();
 
-        const dx = t.clientX - oneFingerPan.lastX;
-        const dy = t.clientY - oneFingerPan.lastY;
+        const rawDx = t.clientX - oneFingerPan.lastX;
+        const rawDy = t.clientY - oneFingerPan.lastY;
         const dtMs = Math.max(4, Math.min(48, now - oneFingerPan.lastMoveTs));
         oneFingerPan.lastX = t.clientX;
         oneFingerPan.lastY = t.clientY;
         oneFingerPan.lastMoveTs = now;
 
+        const { appliedDx, appliedDy } = oneFingerPan.axis
+          ? filterScrollDelta(oneFingerPan.axis, rawDx, rawDy, t.clientX, t.clientY)
+          : { appliedDx: rawDx, appliedDy: rawDy };
+
         const cam = camera();
         updateCamera({
-          x: cam.x - dx / cam.zoom,
-          y: cam.y - dy / cam.zoom,
+          x: cam.x - appliedDx / cam.zoom,
+          y: cam.y - appliedDy / cam.zoom,
           zoom: cam.zoom,
         });
 
         const norm = 16.67 / dtMs;
-        oneFingerPan.velX = oneFingerPan.velX * 0.35 + dx * norm * 0.65;
-        oneFingerPan.velY = oneFingerPan.velY * 0.35 + dy * norm * 0.65;
+        oneFingerPan.velX =
+          oneFingerPan.axis?.lock === 'y'
+            ? 0
+            : oneFingerPan.velX * 0.35 + appliedDx * norm * 0.65;
+        oneFingerPan.velY =
+          oneFingerPan.axis?.lock === 'x'
+            ? 0
+            : oneFingerPan.velY * 0.35 + appliedDy * norm * 0.65;
         return;
       }
 
@@ -1216,7 +1213,8 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
           !isPenDownNow &&
           performance.now() - pan.lastMoveTs < 95
         ) {
-          startMomentum(pan.velX, pan.velY);
+          const { vx, vy } = stabilizeReleaseVelocity(pan.velX, pan.velY, pan.axis);
+          startMomentum(vx, vy);
         }
       }
 
