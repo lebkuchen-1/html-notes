@@ -1064,6 +1064,46 @@ export function SettingsPage(props: SettingsPageProps) {
                     </button>
                   </div>
                 </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-label-row">
+                      <span class="setting-label">App-Version</span>
+                      <span class="setting-scope-tag is-inherited">
+                        #{typeof __APP_COMMIT__ !== 'undefined' ? __APP_COMMIT__ : 'dev'}
+                      </span>
+                    </div>
+                    <span class="setting-desc">
+                      Build:{' '}
+                      {typeof __APP_BUILD_TIME__ !== 'undefined' ? __APP_BUILD_TIME__ : 'lokal'} ·
+                      Lädt im Home-Screen-Modus die neueste Version, ohne deine Notizen zu löschen.
+                    </span>
+                  </div>
+                  <div class="setting-control">
+                    <button
+                      type="button"
+                      class="tool-pill"
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            if ('caches' in window) {
+                              const keys = await caches.keys();
+                              await Promise.all(keys.map((k) => caches.delete(k)));
+                            }
+                          } catch {
+                            // ignore cache API errors
+                          }
+                          const url = new URL(window.location.href);
+                          url.searchParams.set('reload', String(Date.now()));
+                          window.location.replace(url.toString());
+                        })();
+                      }}
+                    >
+                      <IconRotateCcw size={13} />
+                      <span>Neu laden</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </section>
           </Show>
