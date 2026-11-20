@@ -563,7 +563,8 @@ export function ImportDialog(props: ImportDialogProps) {
                         <strong>„Im Share-Sheet anzeigen“</strong> aktivieren (Typ: <em>PDFs &amp; Dateien</em>).
                       </li>
                       <li>
-                        Aktion 1: <strong>Mit Base64 codieren</strong> (Eingabe: <em>Kurzbefehleingabe</em>).
+                        Aktion 1: <strong>Base64 codieren</strong> (einfach nach <em>„Base64“</em>{' '}
+                        suchen; Eingabe: <em>Kurzbefehleingabe</em>).
                       </li>
                       <li>
                         Aktion 2: <strong>In Zwischenablage kopieren</strong>.
