@@ -25,6 +25,7 @@ export interface ClipboardReadResult {
   payload: QuickImportPayload | null;
   error?: 'permission' | 'empty' | 'unsupported' | 'shortcut_wrong_input';
   foundTypes?: string[];
+  diagnostic?: string;
 }
 
 const IMAGE_MIME_PRIORITY = [
@@ -182,10 +183,23 @@ function findPdfMagicOffset(bytes: Uint8Array): number {
   return -1;
 }
 
+function formatBytesDiagnostic(bytes: Uint8Array, totalChars: number): string {
+  const sample = bytes.slice(0, 48);
+  let ascii = '';
+  for (let i = 0; i < sample.length; i++) {
+    const b = sample[i];
+    ascii += b >= 32 && b <= 126 ? String.fromCharCode(b) : '·';
+  }
+  const hex = Array.from(bytes.slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join(' ');
+  return `${totalChars} Zeichen Base64 · Bytes: [${hex}] · Vorschau: „${ascii.trim().slice(0, 40)}“`;
+}
+
 type EmbeddedBase64Result =
   | { kind: 'file'; file: File }
   | { kind: 'url'; url: string }
-  | { kind: 'non_pdf_base64' }
+  | { kind: 'non_pdf_base64'; diagnostic: string }
   | null;
 
 function tryDecodeEmbeddedFileText(raw: string): EmbeddedBase64Result {
@@ -234,7 +248,14 @@ function tryDecodeEmbeddedFileText(raw: string): EmbeddedBase64Result {
       // 1. PDF (%PDF- within first 1024 bytes)
       const pdfOffset = findPdfMagicOffset(headBytes);
       if (pdfOffset >= 0) {
-        const fullBytes = decodeBase64ToBytes(trimmed);
+        // Also tolerate multiple Base64 chunks separated by '=' padding if Shortcuts joined items
+        const cleanedOnly = trimmed.replace(/[^A-Za-z0-9+/=_-]/g, '');
+        const padIdx = cleanedOnly.indexOf('=');
+        const firstChunk =
+          padIdx > 0
+            ? cleanedOnly.slice(0, padIdx + (cleanedOnly[padIdx + 1] === '=' ? 2 : 1))
+            : cleanedOnly;
+        const fullBytes = decodeBase64ToBytes(trimmed) ?? decodeBase64ToBytes(firstChunk);
         if (fullBytes && fullBytes.length > pdfOffset + 16) {
           const slice = pdfOffset > 0 ? fullBytes.slice(pdfOffset) : fullBytes;
           return {
@@ -288,19 +309,29 @@ function tryDecodeEmbeddedFileText(raw: string): EmbeddedBase64Result {
         if (file) return { kind: 'file', file };
       }
 
-      // 6. Base64-encoded plain URL (happens when Shortcut encoded a Safari URL instead of PDF)
-      if (trimmed.length < 4096) {
+      // 6. Base64-encoded plain URL or .webloc XML plist containing a URL
+      if (trimmed.length < 8192) {
         const fullBytes = decodeBase64ToBytes(trimmed);
         if (fullBytes) {
           const decodedText = new TextDecoder().decode(fullBytes).trim();
           const url = isSingleHttpUrl(decodedText);
           if (url) return { kind: 'url', url };
+          // Check XML .webloc plist (<key>URL</key><string>https://...</string>)
+          const weblocMatch = decodedText.match(
+            /<key>\s*URL\s*<\/key>\s*<string>\s*(https?:\/\/[^<\s]+)\s*<\/string>/i
+          );
+          if (weblocMatch?.[1]) {
+            return { kind: 'url', url: weblocMatch[1] };
+          }
         }
       }
 
-      // 7. Long Base64 blob that is NOT a PDF or image (e.g. Safari Webpage / HTML / plist from "Beliebig")
+      // 7. Long Base64 blob that is NOT a PDF or image (e.g. Safari Webpage / HTML / plist)
       if (trimmed.length >= 256) {
-        return { kind: 'non_pdf_base64' };
+        return {
+          kind: 'non_pdf_base64',
+          diagnostic: formatBytesDiagnostic(headBytes, trimmed.length),
+        };
       }
     }
   }
@@ -365,7 +396,11 @@ export async function parseClipboardTextPayload(
 async function parseClipboardTextDetailed(
   plainText: string,
   htmlText = ''
-): Promise<{ payload: QuickImportPayload | null; wrongShortcutInput?: boolean }> {
+): Promise<{
+  payload: QuickImportPayload | null;
+  wrongShortcutInput?: boolean;
+  diagnostic?: string;
+}> {
   const trimmed = plainText.trim();
   if (!trimmed) return { payload: null };
 
@@ -381,7 +416,7 @@ async function parseClipboardTextDetailed(
     };
   }
   if (decoded?.kind === 'non_pdf_base64') {
-    return { payload: null, wrongShortcutInput: true };
+    return { payload: null, wrongShortcutInput: true, diagnostic: decoded.diagnostic };
   }
 
   const candidateText = decoded?.kind === 'url' ? decoded.url : trimmed;
@@ -529,6 +564,7 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
               ? 'shortcut_wrong_input'
               : 'empty',
           foundTypes,
+          diagnostic: parsed.diagnostic,
         };
       }
 
@@ -574,6 +610,7 @@ export async function readQuickImportFromClipboard(): Promise<ClipboardReadResul
           : parsed.wrongShortcutInput
             ? 'shortcut_wrong_input'
             : 'empty',
+        diagnostic: parsed.diagnostic,
       };
     } catch (err) {
       const name = err instanceof Error ? err.name : '';

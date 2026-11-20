@@ -208,7 +208,7 @@ export function ImportDialog(props: ImportDialogProps) {
         props.store.setImportDialogHint(null);
       } else if (res.error === 'shortcut_wrong_input') {
         props.store.setImportDialogHint(
-          'In der Zwischenablage liegt Base64 ohne PDF-Daten (Safari hat vermutlich eine Webseite/URL statt der PDF-Datei übergeben). Im Kurzbefehl oben bei „Empfangen“ nur „PDFs“ & „Dateien“ aktivieren — oder „PDF erstellen“ vor „Base64 codieren“ einfügen.'
+          `Base64 erkannt, aber kein PDF-Header (%PDF-). ${res.diagnostic ? `(${res.diagnostic}) ` : ''}Prüfe im Kurzbefehl, was an „Base64 codieren“ übergeben wird.`
         );
       } else if (res.error === 'permission') {
         props.store.setImportDialogHint(

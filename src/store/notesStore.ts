@@ -937,7 +937,7 @@ export function createNotesStore() {
 
     const hint =
       result.error === 'shortcut_wrong_input'
-        ? 'In der Zwischenablage liegt ein Base64-String, der keine PDF-Datei enthält (z. B. eine Safari-Webseite/URL). Tipp: Im Kurzbefehl oben bei „Empfangen“ auf „Alle löschen“ tippen und NUR „PDFs“, „Dateien“ & „Bilder“ aktivieren (oder vor „Base64 codieren“ die Aktion „PDF erstellen“ einfügen).'
+        ? `Base64 erkannt, aber kein PDF-Header (%PDF-). ${result.diagnostic ? `(${result.diagnostic}) ` : ''}Tipp: Im Kurzbefehl bei „Base64 codieren“ prüfen, ob als Eingabe wirklich die PDF-Datei verbunden ist.`
         : result.error === 'permission'
           ? 'Zugriff auf Zwischenablage abgebrochen — tippe unten auf „Aus Zwischenablage einfügen“ oder füge direkt ins Feld ein.'
           : result.error === 'empty'
