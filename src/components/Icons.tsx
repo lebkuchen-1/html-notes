@@ -459,3 +459,20 @@ export const IconExitFullscreen = (p: IconProps) => (
     <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
   </svg>
 );
+
+export const IconClipboardPaste = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M15 2H9a1 1 0 0 0-1 1v2c0 .6.4 1 1 1h6c.6 0 1-.4 1-1V3c0-.6-.4-1-1-1Z" />
+    <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    <path d="M16 4h2a2 2 0 0 1 2 2v4" />
+    <path d="M21 14H11" />
+    <path d="m15 10-4 4 4 4" />
+  </svg>
+);
+
+export const IconLink = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+  </svg>
+);

@@ -12,8 +12,12 @@ import {
   renderFullCanvas,
   renderInfiniteCanvas,
 } from '../utils/canvasRenderer';
-import { importFilesAsPages, stripFileExtension } from '../utils/pageImport';
 import {
+  createFilesQuickImportPayload,
+  parseQuickImportFromDataTransfer,
+} from '../utils/clipboardImport';
+import {
+  IconClipboardPaste,
   IconCopy,
   IconExitFullscreen,
   IconFileUp,
@@ -156,39 +160,30 @@ export function HomePage(props: HomePageProps) {
   const [creatingFolder, setCreatingFolder] = createSignal(false);
   const [folderName, setFolderName] = createSignal('');
   const [folderColor, setFolderColor] = createSignal<string>(FOLDER_COLORS[0]);
-  const [importStatus, setImportStatus] = createSignal<string | null>(null);
+  const [isHomeDragOver, setIsHomeDragOver] = createSignal(false);
   let homeImportInputRef: HTMLInputElement | undefined;
 
   const homeFilter = () => props.store.filterMode();
   const homeFolderId = () => props.store.selectedFolderId();
 
-  const handleImportAsNewNote = async (files: File[]) => {
-    if (files.length === 0) return;
-    setImportStatus('Dateien werden vorbereitet…');
-    try {
-      const importedPages = await importFilesAsPages(files, (status) => {
-        setImportStatus(status);
-      });
-      if (importedPages.length === 0) {
-        props.store.showToast('Keine gültigen PDF- oder Bilddateien gefunden');
-        return;
-      }
-      const noteTitle =
-        files.length === 1
-          ? stripFileExtension(files[0].name)
-          : `${stripFileExtension(files[0].name)} (+${files.length - 1})`;
-      const hasPdf = files.some(
-        (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
-      );
-      props.store.createNoteWithPages(noteTitle, importedPages, {
-        folderId: homeFilter() === 'folder' ? homeFolderId() : null,
-        viewMode: 'canvas',
-        tags: hasPdf ? ['PDF'] : ['Bilder'],
-      });
-    } catch {
-      props.store.showToast('Fehler beim Importieren der Datei(en)');
-    } finally {
-      setImportStatus(null);
+  const handleFilesForImportDialog = (files: File[]) => {
+    const payload = createFilesQuickImportPayload(files);
+    if (!payload) {
+      props.store.showToast('Keine gültigen PDF- oder Bilddateien gefunden');
+      return;
+    }
+    props.store.openImportDialog({
+      payload,
+      defaultTarget: 'new',
+    });
+  };
+
+  const handleHomeDrop = async (e: DragEvent) => {
+    e.preventDefault();
+    setIsHomeDragOver(false);
+    const payload = await parseQuickImportFromDataTransfer(e.dataTransfer);
+    if (payload) {
+      props.store.openImportDialog({ payload, defaultTarget: 'new' });
     }
   };
 
@@ -388,7 +383,18 @@ export function HomePage(props: HomePageProps) {
   };
 
   return (
-    <div class="home-page">
+    <div
+      class="home-page"
+      classList={{ 'is-drag-over': isHomeDragOver() }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsHomeDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setIsHomeDragOver(false);
+      }}
+      onDrop={(e) => void handleHomeDrop(e)}
+    >
       {/* Top Bar */}
       <header class="home-topbar">
         <div class="home-topbar-left">
@@ -427,9 +433,18 @@ export function HomePage(props: HomePageProps) {
         <div class="home-topbar-right">
           <button
             type="button"
+            class="tool-pill is-accent-pill"
+            onClick={() => void props.store.quickImportFromClipboard('new')}
+            title="Aus Zwischenablage importieren (Safari: Teilen → Kopieren) · Strg+Umschalt+V"
+          >
+            <IconClipboardPaste size={14} />
+            <span class="hide-compact">Einfügen</span>
+          </button>
+          <button
+            type="button"
             class="tool-pill"
             onClick={() => homeImportInputRef?.click()}
-            title="PDF oder Bilder als neue Notiz mit Seiten importieren"
+            title="PDF oder Bilder importieren (mit Notiz- & Ordnerwahl)"
           >
             <IconFileUp size={14} />
             <span class="hide-compact">PDF / Bild</span>
@@ -442,7 +457,7 @@ export function HomePage(props: HomePageProps) {
             class="sr-only"
             onChange={(e) => {
               const files = Array.from(e.currentTarget.files ?? []);
-              if (files.length > 0) void handleImportAsNewNote(files);
+              if (files.length > 0) handleFilesForImportDialog(files);
               e.currentTarget.value = '';
             }}
           />
@@ -721,25 +736,27 @@ export function HomePage(props: HomePageProps) {
               <button
                 type="button"
                 class="template-card"
+                onClick={() => void props.store.quickImportFromClipboard('new')}
+              >
+                <span class="tpl-preview tpl-clipboard-import">
+                  <IconClipboardPaste size={22} />
+                </span>
+                <span class="tpl-title">Aus Zwischenablage</span>
+                <span class="tpl-sub">Teilen → Kopieren &amp; einfügen</span>
+              </button>
+              <button
+                type="button"
+                class="template-card"
                 onClick={() => homeImportInputRef?.click()}
               >
                 <span class="tpl-preview tpl-pdf-import">
                   <IconFileUp size={22} />
                 </span>
                 <span class="tpl-title">PDF / Bilder importieren</span>
-                <span class="tpl-sub">Jede Seite direkt annotieren</span>
+                <span class="tpl-sub">Mit Notiz- &amp; Ordnerwahl</span>
               </button>
             </div>
           </section>
-
-          <Show when={importStatus()}>
-            {(status) => (
-              <div class="import-progress-banner is-inline" role="status" aria-live="polite">
-                <span class="import-spinner" />
-                <span>{status()}</span>
-              </div>
-            )}
-          </Show>
 
           {/* Folders Section */}
           <Show when={props.store.folders().length > 0}>

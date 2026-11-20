@@ -5,6 +5,7 @@ import { exportNotesAsJson } from '../utils/storage';
 import {
   IconChevronDown,
   IconChevronRight,
+  IconClipboardPaste,
   IconCopy,
   IconDownload,
   IconEdit,
@@ -479,6 +480,19 @@ export function Sidebar(props: SidebarProps) {
           <span class="nav-item-count">
             {props.store.notes().filter((n) => n.pinned).length}
           </span>
+        </button>
+
+        <button
+          type="button"
+          class="nav-item"
+          onClick={() => {
+            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+            void props.store.quickImportFromClipboard();
+          }}
+          title="Aus Zwischenablage importieren (Teilen → Kopieren · Strg+Umschalt+V)"
+        >
+          <IconClipboardPaste size={15} />
+          <span class="nav-item-label">Schnellimport</span>
         </button>
 
         <button

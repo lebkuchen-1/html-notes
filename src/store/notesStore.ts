@@ -5,6 +5,7 @@ import {
   PAGE_SIZE_PRESETS,
   type AppSettings,
   type CanvasImageItem,
+  type CanvasMode,
   type CanvasPage,
   type CanvasSnapshot,
   type CanvasTextItem,
@@ -19,6 +20,10 @@ import {
   type ThemeMode,
   type ViewMode,
 } from '../types';
+import {
+  readQuickImportFromClipboard,
+  type QuickImportPayload,
+} from '../utils/clipboardImport';
 import { requestPersistentStorage } from '../utils/db';
 import {
   clampPageHeight,
@@ -72,6 +77,13 @@ export function createNotesStore() {
   );
   const [isFullscreen, setIsFullscreen] = createSignal<boolean>(false);
   const [toastMessage, setToastMessage] = createSignal<string | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = createSignal<boolean>(false);
+  const [importDialogPayload, setImportDialogPayload] =
+    createSignal<QuickImportPayload | null>(null);
+  const [importDialogHint, setImportDialogHint] = createSignal<string | null>(null);
+  const [importDialogDefaultTarget, setImportDialogDefaultTarget] = createSignal<
+    'new' | 'existing'
+  >('new');
 
   let enteredNativeFullscreen = false;
   let sidebarWasOpenBeforeFullscreen = false;
@@ -203,7 +215,7 @@ export function createNotesStore() {
       if (
         target instanceof Element &&
         target.closest(
-          '.note-textarea, .markdown-preview, .settings-scroll, .home-scroll, .sidebar-explorer, .paper-popover, .page-overview-strip, input[type="range"]'
+          '.note-textarea, .markdown-preview, .settings-scroll, .home-scroll, .sidebar-explorer, .paper-popover, .page-overview-strip, .import-modal-body, .import-note-list, .import-paste-input, input[type="range"]'
         )
       ) {
         return;
@@ -661,7 +673,8 @@ export function createNotesStore() {
   const createFolder = (
     name: string,
     color?: string,
-    parentId: string | null = null
+    parentId: string | null = null,
+    selectAfter = true
   ) => {
     const trimmed = name.trim();
     if (!trimmed) return null;
@@ -673,7 +686,9 @@ export function createNotesStore() {
       createdAt: Date.now(),
     };
     setFolders((prev) => [...prev, folder]);
-    selectFolder(folder.id);
+    if (selectAfter) {
+      selectFolder(folder.id);
+    }
     showToast(`Ordner „${folder.name}“ erstellt`);
     return folder;
   };
@@ -834,7 +849,14 @@ export function createNotesStore() {
   const createNoteWithPages = (
     title: string,
     pages: CanvasPage[],
-    options?: { folderId?: string | null; viewMode?: ViewMode; tags?: string[] }
+    options?: {
+      folderId?: string | null;
+      viewMode?: ViewMode;
+      tags?: string[];
+      content?: string;
+      canvasMode?: CanvasMode;
+      attachments?: NoteImageAttachment[];
+    }
   ) => {
     if (pages.length === 0) return null;
     const now = Date.now();
@@ -844,16 +866,21 @@ export function createNotesStore() {
         : filterMode() === 'folder'
           ? selectedFolderId()
           : null;
+    const localSettings: Partial<NoteLocalSettings> | undefined =
+      options?.canvasMode && options.canvasMode !== settings().canvasMode
+        ? { canvasMode: options.canvasMode }
+        : undefined;
     const note: Note = {
       id: generateId(),
       title: title.trim() || 'Importiertes Dokument',
-      content: '',
+      content: options?.content ?? '',
       tags: options?.tags ?? [],
       pinned: false,
       folderId: targetFolderId,
-      attachments: [],
+      attachments: options?.attachments ?? [],
       pages,
       activePageId: pages[0].id,
+      ...(localSettings ? { settings: localSettings } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -873,6 +900,151 @@ export function createNotesStore() {
         : `Notiz „${note.title}“ mit ${pages.length} Seiten erstellt`
     );
     return note;
+  };
+
+  const openImportDialog = (options?: {
+    payload?: QuickImportPayload | null;
+    hint?: string | null;
+    defaultTarget?: 'new' | 'existing';
+  }) => {
+    const resolvedTarget: 'new' | 'existing' =
+      options?.defaultTarget ??
+      (activeScreen() === 'note' && activeNote() ? 'existing' : 'new');
+    setImportDialogPayload(options?.payload ?? null);
+    setImportDialogHint(options?.hint ?? null);
+    setImportDialogDefaultTarget(resolvedTarget);
+    setImportDialogOpen(true);
+  };
+
+  const closeImportDialog = () => {
+    setImportDialogOpen(false);
+    setImportDialogHint(null);
+  };
+
+  const quickImportFromClipboard = async (defaultTarget?: 'new' | 'existing') => {
+    const resolvedTarget: 'new' | 'existing' =
+      defaultTarget ??
+      (activeScreen() === 'note' && activeNote() ? 'existing' : 'new');
+    const result = await readQuickImportFromClipboard();
+    if (result.payload) {
+      openImportDialog({
+        payload: result.payload,
+        hint: null,
+        defaultTarget: resolvedTarget,
+      });
+      return;
+    }
+
+    const hint =
+      result.error === 'permission'
+        ? 'Zugriff auf Zwischenablage abgebrochen — tippe unten auf „Aus Zwischenablage einfügen“ oder füge direkt ins Feld ein.'
+        : result.error === 'empty'
+          ? 'Die Zwischenablage ist leer oder enthält kein unterstütztes Format. Nutze in Safari „Teilen → Kopieren“ oder wähle direkt eine Datei.'
+          : 'Tippe unten ins Einfüge-Feld (→ „Einsetzen“) oder wähle eine PDF-/Bilddatei.';
+
+    openImportDialog({
+      payload: null,
+      hint,
+      defaultTarget: resolvedTarget,
+    });
+  };
+
+  const appendPagesToNote = (noteId: string, newPages: CanvasPage[]) => {
+    const target = notes().find((n) => n.id === noteId);
+    if (!target || newPages.length === 0) return null;
+
+    updateNoteById(noteId, (curr) => ({
+      ...curr,
+      pages: [...curr.pages, ...newPages],
+      activePageId: newPages[0].id,
+      updatedAt: Date.now(),
+    }));
+    openNote(noteId);
+    if (viewMode() === 'text') {
+      setViewMode('canvas');
+    }
+    if (window.innerWidth < 900) {
+      setSidebarOpen(false);
+    }
+    const label = target.title.trim() || 'Unbenannte Notiz';
+    showToast(
+      newPages.length === 1
+        ? `1 Seite zu „${label}“ hinzugefügt`
+        : `${newPages.length} Seiten zu „${label}“ hinzugefügt`
+    );
+    return newPages[0];
+  };
+
+  const appendTextToNote = (
+    noteId: string,
+    markdownBlock: string,
+    options?: { tags?: string[]; attachments?: NoteImageAttachment[] }
+  ) => {
+    const target = notes().find((n) => n.id === noteId);
+    const block = markdownBlock.trim();
+    if (!target || !block) return;
+
+    updateNoteById(noteId, (curr) => {
+      const existing = curr.content.trimEnd();
+      const nextContent = existing ? `${existing}\n\n${block}\n` : `${block}\n`;
+      const nextTags = [...curr.tags];
+      for (const t of options?.tags ?? []) {
+        if (!nextTags.some((x) => x.toLowerCase() === t.toLowerCase())) {
+          nextTags.push(t);
+        }
+      }
+      return {
+        ...curr,
+        content: nextContent,
+        tags: nextTags,
+        attachments: options?.attachments?.length
+          ? [...curr.attachments, ...options.attachments]
+          : curr.attachments,
+        updatedAt: Date.now(),
+      };
+    });
+    openNote(noteId);
+    if (viewMode() === 'canvas') {
+      setViewMode('split');
+    }
+    if (window.innerWidth < 900) {
+      setSidebarOpen(false);
+    }
+    const label = target.title.trim() || 'Unbenannte Notiz';
+    showToast(`Inhalt zu „${label}“ hinzugefügt`);
+  };
+
+  const appendCanvasImagesToNote = (
+    noteId: string,
+    items: CanvasImageItem[],
+    targetPageId?: string
+  ) => {
+    const target = notes().find((n) => n.id === noteId);
+    if (!target || items.length === 0) return;
+    const page =
+      (targetPageId ? target.pages.find((p) => p.id === targetPageId) : undefined) ??
+      target.pages.find((p) => p.id === target.activePageId) ??
+      target.pages[0];
+    if (!page) return;
+
+    pushCanvasHistory(target.id, page.id, getPageSnapshot(page));
+    updatePageById(target.id, page.id, (p) => ({
+      ...p,
+      images: [...p.images, ...items],
+    }));
+    openNote(noteId);
+    if (viewMode() === 'text') {
+      setViewMode('canvas');
+    }
+    if (window.innerWidth < 900) {
+      setSidebarOpen(false);
+    }
+    const label = target.title.trim() || 'Unbenannte Notiz';
+    showToast(
+      items.length === 1
+        ? `Bild auf „${label}“ eingefügt`
+        : `${items.length} Bilder auf „${label}“ eingefügt`
+    );
   };
 
   const duplicateNote = (id: string) => {
@@ -1641,11 +1813,23 @@ export function createNotesStore() {
     toggleFullscreen,
     toastMessage,
     showToast,
+    importDialogOpen,
+    importDialogPayload,
+    setImportDialogPayload,
+    importDialogHint,
+    setImportDialogHint,
+    importDialogDefaultTarget,
+    openImportDialog,
+    closeImportDialog,
+    quickImportFromClipboard,
     canUndo,
     canRedo,
     createNote,
     createNoteFromTemplate,
     createNoteWithPages,
+    appendPagesToNote,
+    appendTextToNote,
+    appendCanvasImagesToNote,
     duplicateNote,
     deleteNote,
     togglePin,

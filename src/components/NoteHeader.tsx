@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
 import type { Folder, ViewMode } from '../types';
 import {
+  IconClipboardPaste,
   IconExitFullscreen,
   IconFolder,
   IconMaximize,
@@ -202,6 +203,16 @@ export function NoteHeader(props: NoteHeaderProps) {
         <Show when={note()}>
           {(current) => (
             <>
+              <button
+                type="button"
+                class="icon-btn"
+                onClick={() => void props.store.quickImportFromClipboard('existing')}
+                title="Schnellimport aus Zwischenablage (Safari: Teilen → Kopieren) · Strg+Umschalt+V"
+                aria-label="Aus Zwischenablage importieren"
+              >
+                <IconClipboardPaste size={17} />
+              </button>
+
               <button
                 type="button"
                 class="icon-btn"

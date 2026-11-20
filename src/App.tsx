@@ -1,6 +1,7 @@
 import { createSignal, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { HomePage } from './components/HomePage';
+import { ImportDialog } from './components/ImportDialog';
 import { NoteHeader } from './components/NoteHeader';
 import { NoteTabs } from './components/NoteTabs';
 import { SettingsPage } from './components/SettingsPage';
@@ -62,6 +63,18 @@ export function App() {
         } else {
           store.openSettings(store.activeScreen() === 'note' ? 'local' : 'global');
         }
+        return;
+      }
+
+      if (e.key === 'Escape' && store.importDialogOpen()) {
+        e.preventDefault();
+        store.closeImportDialog();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        void store.quickImportFromClipboard();
         return;
       }
 
@@ -179,6 +192,8 @@ export function App() {
           </Match>
         </Switch>
       </main>
+
+      <ImportDialog store={store} />
 
       <Show when={store.toastMessage()}>
         {(msg) => (
