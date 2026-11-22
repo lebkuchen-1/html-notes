@@ -1,6 +1,7 @@
 export type DrawingTool =
   | 'select'
   | 'pen'
+  | 'scribble'
   | 'highlighter'
   | 'text'
   | 'eraser'
@@ -8,6 +9,8 @@ export type DrawingTool =
   | 'arrow'
   | 'rect'
   | 'ellipse';
+
+export type SpellCheckLanguage = 'de-en' | 'de' | 'en';
 
 export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots';
 
@@ -39,6 +42,8 @@ export interface NoteLocalSettings {
   editorFontSize: number;
   editorFontFamily: EditorFontFamily;
   editorSpellCheck: boolean;
+  spellCheckEnabled: boolean;
+  spellCheckLanguage: SpellCheckLanguage;
 }
 
 export interface AppSettings extends NoteLocalSettings {
@@ -58,7 +63,7 @@ export interface StrokePoint {
 
 export interface Stroke {
   id: string;
-  tool: Exclude<DrawingTool, 'select' | 'eraser' | 'text'>;
+  tool: Exclude<DrawingTool, 'select' | 'eraser' | 'text' | 'scribble'>;
   /** 'auto' adapts to the canvas background luminance; otherwise hex color */
   color: string;
   width: number;
@@ -76,6 +81,8 @@ export interface CanvasTextItem {
   fontSize: number;
   fontFamily: CanvasFontFamily;
   bold: boolean;
+  /** Optional logical wrap width (used by Handwriting-to-Text / Scribble blocks) */
+  maxWidth?: number;
 }
 
 export interface CanvasImageItem {
@@ -225,6 +232,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   editorFontSize: 15,
   editorFontFamily: 'sans',
   editorSpellCheck: true,
+  spellCheckEnabled: true,
+  spellCheckLanguage: 'de-en',
   autoEnableStylusOnly: true,
   defaultViewMode: 'canvas',
   defaultPagePresetId: 'a4-p',

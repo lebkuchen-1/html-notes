@@ -22,6 +22,7 @@ import {
   type PalmSensitivity,
   type PaperConfig,
   type PaperPattern,
+  type SpellCheckLanguage,
   type StabilizationLevel,
   type Stroke,
   type ThemeMode,
@@ -524,6 +525,9 @@ function normalizeTexts(rawPage: Record<string, unknown> | undefined): CanvasTex
         ? t.fontFamily
         : 'sans') as CanvasFontFamily,
       bold: Boolean(t.bold),
+      ...(typeof t.maxWidth === 'number' && t.maxWidth >= 80
+        ? { maxWidth: Math.round(t.maxWidth) }
+        : {}),
     }))
     .filter((t) => t.text.trim().length > 0);
 }
@@ -759,6 +763,16 @@ export function normalizeNoteSettings(raw: unknown): Partial<NoteLocalSettings> 
   }
   if (typeof obj.editorSpellCheck === 'boolean') {
     out.editorSpellCheck = obj.editorSpellCheck;
+  }
+  if (typeof obj.spellCheckEnabled === 'boolean') {
+    out.spellCheckEnabled = obj.spellCheckEnabled;
+  }
+  if (
+    obj.spellCheckLanguage === 'de-en' ||
+    obj.spellCheckLanguage === 'de' ||
+    obj.spellCheckLanguage === 'en'
+  ) {
+    out.spellCheckLanguage = obj.spellCheckLanguage as SpellCheckLanguage;
   }
 
   return Object.keys(out).length > 0 ? out : undefined;

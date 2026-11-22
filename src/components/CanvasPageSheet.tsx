@@ -2,7 +2,6 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  For,
   onCleanup,
   onMount,
   Show,
@@ -15,6 +14,7 @@ import type {
   CanvasSnapshot,
   CanvasTextItem,
   DrawingTool,
+  SpellCheckLanguage,
   Stroke,
   StrokePoint,
 } from '../types';
@@ -22,7 +22,6 @@ import {
   drawPenDot,
   drawPenIncrementalSegment,
   drawStroke,
-  getCanvasFontFamilyCss,
   isPaperDark,
   isPointHittingImage,
   isPointHittingStroke,
@@ -33,18 +32,19 @@ import {
 } from '../utils/canvasRenderer';
 import { extractImageFilesFromTransfer } from '../utils/imageImport';
 import { extractPdfFilesFromTransfer } from '../utils/pageImport';
+import { getSpellCheckRevision } from '../utils/spellcheck';
 import { generateId } from '../utils/storage';
 import {
   StrokeStabilizer,
   type StabilizationLevel,
 } from '../utils/strokeStabilizer';
+import { CanvasTextOverlay } from './CanvasTextOverlay';
 import {
   IconBringFront,
   IconCheck,
   IconChevronDown,
   IconChevronUp,
   IconCopy,
-  IconMove,
   IconPlus,
   IconRuler,
   IconSendBack,
@@ -80,13 +80,6 @@ export function isAnyPenStrokeActive(): boolean {
   return activePenPageIds.size > 0;
 }
 
-const FONT_FAMILIES: { value: CanvasFontFamily; label: string }[] = [
-  { value: 'sans', label: 'Sans' },
-  { value: 'serif', label: 'Serif' },
-  { value: 'hand', label: 'Hand' },
-  { value: 'mono', label: 'Mono' },
-];
-
 interface CanvasPageSheetProps {
   store: NotesStore;
   pageId: string;
@@ -107,6 +100,8 @@ interface CanvasPageSheetProps {
   pressureSensitivity: boolean;
   palmRadiusLimit: number;
   showSheetHeader: boolean;
+  spellCheckEnabled: boolean;
+  spellCheckLanguage: SpellCheckLanguage;
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   onPointerTypeChange: (type: string) => void;
@@ -114,6 +109,7 @@ interface CanvasPageSheetProps {
   onSetEditingText: (next: EditingTextState | null) => void;
   onCommitEditingText: () => void;
   onSetSelectedImage: (next: SelectedImageState | null) => void;
+  onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onSyncTextStyle: (patch: {
     fontSize?: number;
     fontFamily?: CanvasFontFamily;
@@ -280,8 +276,14 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     renderFullCanvas(ctx, effectivePage, null, props.store.theme(), renderScale, {
       editingTextId: localEditingText()?.id ?? null,
       hoveredTextId:
-        props.tool === 'text' || props.tool === 'select' ? hoveredTextId() : null,
+        props.tool === 'text' || props.tool === 'scribble' || props.tool === 'select'
+          ? hoveredTextId()
+          : null,
       onImageLoad: scheduleBaseRender,
+      spellCheck: {
+        enabled: props.spellCheckEnabled,
+        language: props.spellCheckLanguage,
+      },
     });
 
     if (pendingLiveClearAfterBaseRender) {
@@ -398,6 +400,9 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     void localEditingText()?.id;
     void hoveredTextId();
     void props.tool;
+    void props.spellCheckEnabled;
+    void props.spellCheckLanguage;
+    void getSpellCheckRevision();
     scheduleBaseRender();
   });
 
@@ -602,7 +607,11 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     }
   };
 
-  const openTextEditorAt = (pt: StrokePoint, onlyExisting = false) => {
+  const openTextEditorAt = (
+    pt: StrokePoint,
+    onlyExisting = false,
+    asScribble = false
+  ) => {
     const p = page();
     if (!p) return false;
 
@@ -613,7 +622,14 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     const hit = findTextAtPoint(pt);
     if (hit) {
       props.onSetSelectedImage(null);
-      props.onSetEditingText({ pageId: props.pageId, item: { ...hit } });
+      const nextItem: CanvasTextItem =
+        asScribble && !hit.maxWidth
+          ? {
+              ...hit,
+              maxWidth: Math.max(240, Math.round(p.width - hit.x - 36)),
+            }
+          : { ...hit };
+      props.onSetEditingText({ pageId: props.pageId, item: nextItem });
       props.onSyncTextStyle({
         fontSize: hit.fontSize,
         fontFamily: hit.fontFamily,
@@ -625,8 +641,18 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     if (onlyExisting) return false;
 
-    const clampedX = Math.max(16, Math.min(p.width - 140, pt.x));
-    const clampedY = Math.max(12, Math.min(p.height - 50, pt.y - props.textFontSize * 0.5));
+    const minX = p.paperConfig.showMargin ? 92 : 36;
+    const clampedX = asScribble
+      ? Math.max(minX, Math.min(Math.max(minX, p.width - 280), Math.round(pt.x)))
+      : Math.max(16, Math.min(p.width - 140, pt.x));
+    const clampedY = Math.max(
+      16,
+      Math.min(p.height - (asScribble ? 120 : 50), pt.y - props.textFontSize * 0.5)
+    );
+    const scribbleWidth = asScribble
+      ? Math.max(240, Math.round(p.width - clampedX - 36))
+      : undefined;
+
     props.onSetSelectedImage(null);
     props.onSetEditingText({
       pageId: props.pageId,
@@ -639,6 +665,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
         fontSize: props.textFontSize,
         fontFamily: props.textFontFamily,
         bold: props.textBold,
+        ...(scribbleWidth ? { maxWidth: scribbleWidth } : {}),
       },
     });
     requestAnimationFrame(() => textInputRef?.focus());
@@ -662,7 +689,12 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     }
 
     // Palm Rejection for touch pointers on drawing tools:
-    if (e.pointerType === 'touch' && props.tool !== 'select' && props.tool !== 'text') {
+    if (
+      e.pointerType === 'touch' &&
+      props.tool !== 'select' &&
+      props.tool !== 'text' &&
+      props.tool !== 'scribble'
+    ) {
       const isLargePalm =
         e.width > props.palmRadiusLimit || e.height > props.palmRadiusLimit;
       const penRecentlyActive = now - lastGlobalPenTimestamp < 1200;
@@ -722,11 +754,11 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       return;
     }
 
-    if (props.tool === 'text' && !isStylusEraser) {
+    if ((props.tool === 'text' || props.tool === 'scribble') && !isStylusEraser) {
       e.preventDefault();
       props.onPointerTypeChange(e.pointerType);
       const pt = toLogicalPoint(e);
-      openTextEditorAt(pt, false);
+      openTextEditorAt(pt, false, props.tool === 'scribble');
       return;
     }
 
@@ -777,7 +809,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       return;
     }
 
-    if (currentTool === 'text' || currentTool === 'select') return;
+    if (currentTool === 'text' || currentTool === 'scribble' || currentTool === 'select') return;
 
     penDrawnCount = 0;
     pendingLiveClearAfterBaseRender = false;
@@ -805,7 +837,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
         eraserCursor = { x: pt.x, y: pt.y };
         scheduleLiveRender();
       } else if (
-        (props.tool === 'text' || props.tool === 'select') &&
+        (props.tool === 'text' || props.tool === 'scribble' || props.tool === 'select') &&
         e.pointerType !== 'touch'
       ) {
         const pt = toLogicalPoint(e, e.pointerType);
@@ -1229,7 +1261,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
               class="drawing-canvas drawing-canvas-live"
               classList={{
                 'is-eraser': props.tool === 'eraser',
-                'is-text-tool': props.tool === 'text',
+                'is-text-tool': props.tool === 'text' || props.tool === 'scribble',
                 'is-select-tool': props.tool === 'select',
               }}
               style={{
@@ -1398,169 +1430,54 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
               }}
             </Show>
 
-            {/* Inline Canvas Text Editor Overlay */}
+            {/* Inline Canvas Text & Handwriting-to-Text (Scribble) Overlay */}
             <Show when={localEditingText()}>
               {(item) => {
                 const scale = () => cssSize().scale;
-                const resolvedColor = () =>
-                  resolveStrokeColor(
-                    item().color,
-                    currPage().paperConfig,
-                    props.store.theme()
-                  );
-                const lineCount = () => Math.max(1, item().text.split('\n').length);
-                const longestLine = () =>
-                  Math.max(
-                    12,
-                    ...item()
-                      .text.split('\n')
-                      .map((l) => l.length + 2)
-                  );
-
                 return (
-                  <div
-                    class="canvas-text-overlay"
-                    style={{
-                      left: `${item().x * scale()}px`,
-                      top: `${item().y * scale()}px`,
+                  <CanvasTextOverlay
+                    item={item()}
+                    paperConfig={currPage().paperConfig}
+                    theme={props.store.theme()}
+                    leftPx={item().x * scale()}
+                    topPx={item().y * scale()}
+                    scale={scale()}
+                    isScribbleMode={props.tool === 'scribble'}
+                    spellCheckEnabled={props.spellCheckEnabled}
+                    spellCheckLanguage={props.spellCheckLanguage}
+                    onChangeItem={(next) =>
+                      props.onSetEditingText({ pageId: props.pageId, item: next })
+                    }
+                    onSyncTextStyle={props.onSyncTextStyle}
+                    onChangeSpellLanguage={props.onChangeSpellLanguage}
+                    onDelete={() => {
+                      const id = item().id;
+                      props.onSetEditingText(null);
+                      props.store.deleteCanvasText(id, props.pageId);
                     }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <div class="canvas-text-bar">
-                      <button
-                        type="button"
-                        class="ctb-btn ctb-drag"
-                        onPointerDown={startTextDrag}
-                        onPointerMove={moveTextDrag}
-                        onPointerUp={endTextDrag}
-                        onPointerCancel={endTextDrag}
-                        title="Textfeld verschieben"
-                      >
-                        <IconMove size={13} />
-                      </button>
-
-                      <button
-                        type="button"
-                        class="ctb-btn ctb-bold"
-                        classList={{ 'is-active': item().bold }}
-                        onClick={() => {
-                          const nextBold = !item().bold;
-                          props.onSyncTextStyle({ bold: nextBold });
-                          props.onSetEditingText({
-                            pageId: props.pageId,
-                            item: { ...item(), bold: nextBold },
-                          });
-                        }}
-                        title="Fett"
-                      >
-                        B
-                      </button>
-
-                      <select
-                        class="ctb-select"
-                        value={item().fontFamily}
-                        onChange={(e) => {
-                          const nextFamily = e.currentTarget.value as CanvasFontFamily;
-                          props.onSyncTextStyle({ fontFamily: nextFamily });
-                          props.onSetEditingText({
-                            pageId: props.pageId,
-                            item: { ...item(), fontFamily: nextFamily },
-                          });
-                        }}
-                        title="Schriftart"
-                      >
-                        <For each={FONT_FAMILIES}>
-                          {(f) => <option value={f.value}>{f.label}</option>}
-                        </For>
-                      </select>
-
-                      <button
-                        type="button"
-                        class="ctb-btn"
-                        onClick={() => {
-                          const nextSize = Math.max(14, item().fontSize - 3);
-                          props.onSyncTextStyle({ fontSize: nextSize });
-                          props.onSetEditingText({
-                            pageId: props.pageId,
-                            item: { ...item(), fontSize: nextSize },
-                          });
-                        }}
-                        title="Kleiner"
-                      >
-                        A-
-                      </button>
-                      <button
-                        type="button"
-                        class="ctb-btn"
-                        onClick={() => {
-                          const nextSize = Math.min(60, item().fontSize + 3);
-                          props.onSyncTextStyle({ fontSize: nextSize });
-                          props.onSetEditingText({
-                            pageId: props.pageId,
-                            item: { ...item(), fontSize: nextSize },
-                          });
-                        }}
-                        title="Größer"
-                      >
-                        A+
-                      </button>
-
-                      <button
-                        type="button"
-                        class="ctb-btn is-danger"
-                        onClick={() => {
-                          const id = item().id;
-                          props.onSetEditingText(null);
-                          props.store.deleteCanvasText(id, props.pageId);
-                        }}
-                        title="Text löschen"
-                      >
-                        <IconTrash size={13} />
-                      </button>
-
-                      <button
-                        type="button"
-                        class="ctb-btn is-confirm"
-                        onClick={props.onCommitEditingText}
-                        title="Übernehmen (Strg+Enter)"
-                      >
-                        <IconCheck size={13} />
-                      </button>
-                    </div>
-
-                    <textarea
-                      ref={(el) => {
-                        textInputRef = el;
-                        if (el.value !== item().text) el.value = item().text;
-                      }}
-                      class="canvas-text-input"
-                      rows={lineCount()}
-                      cols={Math.min(48, longestLine())}
-                      placeholder="Text eingeben…"
-                      style={{
-                        color: resolvedColor(),
-                        'font-size': `${item().fontSize * scale()}px`,
-                        'font-family': getCanvasFontFamilyCss(item().fontFamily),
-                        'font-weight': item().bold ? '700' : '400',
-                        'line-height': '1.35',
-                      }}
-                      onInput={(e) => {
-                        props.onSetEditingText({
-                          pageId: props.pageId,
-                          item: { ...item(), text: e.currentTarget.value },
-                        });
-                      }}
-                      onKeyDown={(e) => {
-                        if (
-                          e.key === 'Escape' ||
-                          ((e.ctrlKey || e.metaKey) && e.key === 'Enter')
-                        ) {
-                          e.preventDefault();
-                          props.onCommitEditingText();
-                        }
-                      }}
-                    />
-                  </div>
+                    onCommit={props.onCommitEditingText}
+                    onStartNewBlock={() => {
+                      const curr = item();
+                      const p = currPage();
+                      const lines = Math.max(2, curr.text.split('\n').length + 1);
+                      const nextY = Math.min(
+                        p.height - 130,
+                        Math.round(curr.y + lines * curr.fontSize * 1.35 + 24)
+                      );
+                      props.onCommitEditingText();
+                      openTextEditorAt(
+                        { x: curr.x, y: nextY + curr.fontSize * 0.5, pressure: 0.5 },
+                        false,
+                        true
+                      );
+                    }}
+                    onStartDrag={startTextDrag}
+                    onMoveDrag={moveTextDrag}
+                    onEndDrag={endTextDrag}
+                    registerTextarea={(el) => {
+                      textInputRef = el;
+                    }}
+                  />
                 );
               }}
             </Show>

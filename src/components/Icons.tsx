@@ -476,3 +476,21 @@ export const IconLink = (p: IconProps) => (
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
   </svg>
 );
+
+export const IconScribble = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M3 19c1.5-2.5 3-3.5 4.2-2.2 1 1.1-.4 3.2 1.1 3.2 1.2 0 2.2-1.4 3.2-2.5" />
+    <path d="m14 14 4.5-9 3.5 9" />
+    <path d="M15.2 11.4h5.6" />
+    <path d="M11.5 5.5 5 12l-.8 3.2 3.2-.8 6.5-6.5a1.7 1.7 0 0 0-2.4-2.4Z" />
+  </svg>
+);
+
+export const IconSpellCheck = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="m6 14 4-10 4 10" />
+    <path d="M7.4 11h5.2" />
+    <path d="m14 18 2.2 2.2L21 15.4" />
+    <path d="M4 19c1-1 2 1 3 0s2 1 3 0" />
+  </svg>
+);

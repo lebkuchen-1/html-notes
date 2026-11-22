@@ -7,21 +7,15 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Canvas als Standard-Ansicht (`src/types.ts`, `src/utils/storage.ts`, `src/store/notesStore.ts`, `HomePage.tsx`, `NoteHeader.tsx`, `SettingsPage.tsx`):**
-   - `DEFAULT_APP_SETTINGS.defaultViewMode` und `loadViewMode()`-Fallback auf `'canvas'` umgestellt inkl. einmaliger `localStorage`-Migration (`solid-notes:v2:canvasDefaultMigrated`), sodass bestehende Installationen direkt mit Canvas als Standard starten (spätere manuelle Umschaltung bleibt erhalten).
-   - Schnellstart-Vorlage *Leere Notiz* nutzt jetzt ebenfalls `defaultViewMode` (`Canvas`); Ansichts-Umschalter im Header und in den Einstellungen führt `Canvas` an erster Stelle.
-2. **Daumen-/Seitwärts-Scrollen & Richtungs-Stabilisierung (`src/utils/touchScroll.ts`, `DrawingCanvas.tsx`, `InfiniteCanvasView.tsx`):**
-   - Zweistufige Palm-/Daumen-Erkennung (geometrischer Radius), sodass Daumen und schräge/seitliche Finger beim 1-Finger-Scrollen und Pinch-Zoom nicht mehr als Handballen geblockt werden.
-   - Achsen-Stabilisierung (±35° Lock-Kegel mit Quer-Toleranz und sprungfreiem Breakout) für gerades vertikales & horizontales Scrollen inkl. sauberem Momentum.
-3. **GoodNotes-artiger Schnellimport-Dialog (`src/components/ImportDialog.tsx`, `src/utils/clipboardImport.ts`, `notesStore.ts`):**
-   - 1-Tap *Einfügen*-Zugang auf Startseite, Notiz-Header, Seitenleiste & `Strg+Umschalt+V` sowie bei *PDF / Bild* & Drag & Drop.
-   - Wahl zwischen **Neue Notiz** (Titel, Ordner inkl. Inline-Ordnererstellung, Seiten/Unendlich) und **Bestehende Notiz** (durchsuchbare Liste).
-4. **App-Versionscode & Cache-Reload (`vite.config.ts`, `SettingsPage.tsx`, `index.tsx`):**
-   - Commit-Hash (`#...`) + Build-Zeit ganz unten in *Einstellungen → Global* inkl. 1-Tap **`Neu laden`**-Button (umgeht Home-Screen-PWA-Cache ohne IndexedDB-Datenverlust).
-
-## Bekannter Stand / Abgehakt
-- **iPadOS Safari PDF-Teilen / Kurzbefehl:** Bestätigt nicht funktionsfähig (Apple WebKit blockiert `share_target` & `application/pdf` im Clipboard; Apple Kurzbefehle liefern aus dem Safari-PDF-Viewer nur `<html class="plugin-fits-content"><embed …>`). Dauerhaft in `AGENTS.md` dokumentiert und Hinweise in `ImportDialog.tsx` ehrlich angepasst.
-- **Funktionierender iPad-Workflow:** Bilder/Links/Text über *Teilen → Kopieren* → *Einfügen*; PDFs über *In „Dateien“ sichern → PDF / Bild wählen* oder *Split View Drag & Drop*.
+1. **DE/EN-Rechtschreibprüfung für Handschrift-zu-Text, Canvas-Texte, Notiztitel & Markdown-Editor (`src/utils/spellcheck.ts`, `public/dictionaries/`, `src/utils/canvasRenderer.ts`, `DrawingCanvas.tsx`, `NoteHeader.tsx`, `TextEditor.tsx`, `SettingsPage.tsx`):**
+   - Offline-fähige Hunspell-Engine (`nspell`) mit lazy-geladenen Deutsch- & Englisch-Wörterbüchern (`public/dictionaries/{de,en}.{aff,dic}`, Cache-API-gecacht) und 3 Modi: **`DE + EN`** (gemischt, Standard), **`Deutsch`** (`de-DE`) und **`Englisch`** (`en-US`).
+   - Unterstützt deutsche Komposita, Bindestrich-Wörter, englische Kontraktionen, Levenshtein-gerankte 1-Tap-Korrekturvorschläge und ein dauerhaftes **Persönliches Wörterbuch** (`+ Wörterbuch`, verwaltbar in *Einstellungen → Global*).
+   - Rote Wellenlinien direkt auf gerenderten Canvas-Texten (im Seiten- & Unendlich-Modus; beim PNG-Export sauber ausgeblendet) sowie Toolbar-Fehler-Popover mit 1-Tap-Korrektur für Canvas, Notiztitel und Markdown-Editor.
+   - Natives `spellcheck` + `lang` + `autocorrect="on"` auf allen Eingabefeldern (Notiztitel, Kritzeln-/Canvas-Textfeld, Texteditor) für optimales iPadOS-Kritzeln.
+2. **„Handschrift → Text“-Modus (Apple Pencil Kritzeln) auf dem Canvas (`src/components/CanvasTextOverlay.tsx`, `DrawingCanvas.tsx`, `CanvasPageSheet.tsx`, `InfiniteCanvasView.tsx`):**
+   - Neues Werkzeug **`H→Text`** (`scribble`) direkt neben dem Stift in der Canvas-Toolbar.
+   - Flexibler Ablauf (Seiten- & Unendlich-Modus): Beim Aktivieren öffnet sich sofort ein großzügiges, transparentes Kritzeln-Feld direkt über den Papierlinien (`maxWidth`-Zeilenumbruch synchron zwischen Textarea & Canvas-Renderer); per Tipp an beliebiger Stelle auf dem Blatt startet sofort ein neuer Textblock, per `+`-Button ein Folgeblock darunter.
+   - Integrierte schwebende Leiste mit Sprach-Umschalter (`DE·EN`/`DE`/`EN`), Schriftart/-größe/Fett und Live-Rechtschreib-Chip-Leiste direkt unter dem Schreibfeld.
 
 ## Offene Punkte
 - Keine offenen Aufgaben — bereit für das nächste Feature nach `/clear`.

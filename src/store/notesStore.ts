@@ -25,6 +25,7 @@ import {
   type QuickImportPayload,
 } from '../utils/clipboardImport';
 import { requestPersistentStorage } from '../utils/db';
+import { ensureSpellCheckerLoaded } from '../utils/spellcheck';
 import {
   clampPageHeight,
   clampPageWidth,
@@ -215,7 +216,7 @@ export function createNotesStore() {
       if (
         target instanceof Element &&
         target.closest(
-          '.note-textarea, .markdown-preview, .settings-scroll, .home-scroll, .sidebar-explorer, .paper-popover, .page-overview-strip, .import-modal-body, .import-note-list, .import-paste-input, input[type="range"]'
+          '.note-textarea, .markdown-preview, .settings-scroll, .home-scroll, .sidebar-explorer, .paper-popover, .page-overview-strip, .import-modal-body, .import-note-list, .import-paste-input, .canvas-text-input, .canvas-scribble-input, .spell-popover, .spell-suggestions-bar, input[type="range"]'
         )
       ) {
         return;
@@ -431,6 +432,13 @@ export function createNotesStore() {
     const local = activeNote()?.settings;
     if (!local) return g;
     return { ...g, ...local };
+  });
+
+  // Lazily preload DE / EN Hunspell dictionaries whenever spellcheck is active
+  createEffect(() => {
+    const eff = effectiveSettings();
+    if (!eff.spellCheckEnabled) return;
+    void ensureSpellCheckerLoaded(eff.spellCheckLanguage);
   });
 
   const activeNoteLocalOverrideCount = createMemo<number>(() => {

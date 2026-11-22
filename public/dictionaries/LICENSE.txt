@@ -1,0 +1,3 @@
+Hunspell dictionaries bundled from wooorm/dictionaries:
+- de.aff / de.dic: dictionary-de (igerman98) — GPL-2.0 OR GPL-3.0
+- en.aff / en.dic: dictionary-en — MIT AND BSD
