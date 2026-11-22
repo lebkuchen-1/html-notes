@@ -31,7 +31,6 @@ import {
   compactIndexedDbWorkspace,
   isIndexedDbAvailable,
   loadWorkspaceFromIndexedDb,
-  migrateWorkspaceToV2AndCleanupLegacy,
   replaceFoldersInIndexedDb,
   saveFullWorkspaceToIndexedDb,
   syncNotesDeltaToIndexedDb,
@@ -1054,13 +1053,10 @@ export interface LoadedWorkspaceResult {
   notes: Note[];
   folders: Folder[];
   backend: StorageBackend;
-  migratedFromV1?: boolean;
-  savedPointsOnMigration?: number;
 }
 
 /**
  * Loads the workspace from normalized IndexedDB v2 (binary packed stroke chunks + binary media blobs),
- * transparently migrating & deleting any bloated legacy v1 `notizblock-db` database on first load,
  * with a clean fallback to localStorage if IndexedDB is unavailable.
  */
 export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
@@ -1070,22 +1066,6 @@ export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
 
       if (dbData.initialized) {
         const clean = sanitizeNormalizedWorkspace(dbData.notes, dbData.folders);
-
-        if (dbData.needsMigrationFromV1) {
-          const optimized = optimizeWorkspaceStrokes(clean.notes);
-          const migratedOk = await migrateWorkspaceToV2AndCleanupLegacy(
-            optimized.notes,
-            clean.folders
-          );
-          return {
-            notes: migratedOk ? optimized.notes : clean.notes,
-            folders: clean.folders,
-            backend: 'indexeddb',
-            migratedFromV1: migratedOk,
-            savedPointsOnMigration: Math.max(0, optimized.beforePoints - optimized.afterPoints),
-          };
-        }
-
         return {
           ...clean,
           backend: 'indexeddb',

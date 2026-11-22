@@ -403,15 +403,6 @@ export function createNotesStore() {
     if (loaded.backend === 'indexeddb') {
       void requestPersistentStorage();
     }
-
-    if (loaded.migratedFromV1) {
-      const savedPts = loaded.savedPointsOnMigration ?? 0;
-      showToast(
-        savedPts > 0
-          ? `Speicherformat optimiert (${savedPts.toLocaleString('de-DE')} Punkte gespart) & Alt-DB bereinigt`
-          : 'Speicherformat auf binäre Chunks optimiert & Alt-Datenbank bereinigt'
-      );
-    }
   });
 
   let saveTimer: number | undefined;

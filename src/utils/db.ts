@@ -12,13 +12,9 @@ import type {
 } from '../types';
 import { decodeStrokesBinary, encodeStrokesBinary } from './strokeCodec';
 
-const LEGACY_DB_NAME = 'notizblock-db';
-const LEGACY_DB_VERSION = 1;
-
 const V2_DB_PREFIX = 'notizblock-db-v2';
 const V2_DB_VERSION = 1;
 const ACTIVE_SLOT_STORAGE_KEY = 'solid-notes:v2:activeDbSlot';
-const LEGACY_CLEANED_STORAGE_KEY = 'solid-notes:v2:legacyCleaned';
 
 const STORE_NOTES = 'notes';
 const STORE_PAGES = 'pages';
@@ -54,22 +50,6 @@ function readActiveSlot(): DbSlot {
 function writeActiveSlot(slot: DbSlot): void {
   try {
     localStorage.setItem(ACTIVE_SLOT_STORAGE_KEY, slot);
-  } catch {
-    // ignore
-  }
-}
-
-function isLegacyAlreadyCleaned(): boolean {
-  try {
-    return localStorage.getItem(LEGACY_CLEANED_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function markLegacyCleaned(): void {
-  try {
-    localStorage.setItem(LEGACY_CLEANED_STORAGE_KEY, '1');
   } catch {
     // ignore
   }
@@ -688,96 +668,10 @@ async function readWorkspaceFromV2Db(db: IDBDatabase): Promise<{
   };
 }
 
-/**
- * Safely probes the legacy `notizblock-db` v1 database WITHOUT creating it if it doesn't exist.
- */
-async function readLegacyV1WorkspaceIfPresent(): Promise<{
-  notes: unknown[];
-  folders: unknown[];
-  initialized: boolean;
-} | null> {
-  if (!isIndexedDbAvailable()) return null;
-
-  let legacyDb: IDBDatabase | null = null;
-  try {
-    let createdFresh = false;
-    legacyDb = await new Promise<IDBDatabase | null>((resolve) => {
-      try {
-        const req = indexedDB.open(LEGACY_DB_NAME, LEGACY_DB_VERSION);
-        req.onupgradeneeded = () => {
-          // Database did NOT exist previously — abort so we don't create an empty legacy DB!
-          createdFresh = true;
-          try {
-            req.transaction?.abort();
-          } catch {
-            // ignore
-          }
-        };
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(null);
-        req.onblocked = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
-
-    if (createdFresh || !legacyDb) {
-      return null;
-    }
-
-    if (
-      !legacyDb.objectStoreNames.contains(STORE_NOTES) ||
-      !legacyDb.objectStoreNames.contains(STORE_FOLDERS)
-    ) {
-      legacyDb.close();
-      return null;
-    }
-
-    const storeNames = legacyDb.objectStoreNames.contains(STORE_META)
-      ? [STORE_NOTES, STORE_FOLDERS, STORE_META]
-      : [STORE_NOTES, STORE_FOLDERS];
-    const tx = legacyDb.transaction(storeNames, 'readonly');
-
-    const notesReq = reqToPromise<unknown[]>(tx.objectStore(STORE_NOTES).getAll());
-    const foldersReq = reqToPromise<unknown[]>(tx.objectStore(STORE_FOLDERS).getAll());
-    const metaReq = legacyDb.objectStoreNames.contains(STORE_META)
-      ? reqToPromise<{ key: string; value: unknown } | undefined>(
-          tx.objectStore(STORE_META).get('initialized')
-        )
-      : Promise.resolve(undefined);
-
-    const [notes, folders, initRecord] = await Promise.all([notesReq, foldersReq, metaReq]);
-    legacyDb.close();
-    legacyDb = null;
-
-    const initialized =
-      Boolean(initRecord?.value) ||
-      (Array.isArray(notes) && notes.length > 0) ||
-      (Array.isArray(folders) && folders.length > 0);
-
-    return {
-      notes: Array.isArray(notes) ? notes : [],
-      folders: Array.isArray(folders) ? folders : [],
-      initialized,
-    };
-  } catch {
-    if (legacyDb) {
-      try {
-        legacyDb.close();
-      } catch {
-        // ignore
-      }
-    }
-    return null;
-  }
-}
-
 export interface RawIndexedDbWorkspace {
   notes: unknown[];
   folders: unknown[];
   initialized: boolean;
-  /** True when data was loaded from legacy v1 DB and needs migration to v2 + v1 deletion */
-  needsMigrationFromV1: boolean;
 }
 
 export async function loadWorkspaceFromIndexedDb(): Promise<RawIndexedDbWorkspace> {
@@ -786,19 +680,10 @@ export async function loadWorkspaceFromIndexedDb(): Promise<RawIndexedDbWorkspac
   if (primaryResult.initialized) {
     knownDbBlobHashes = primaryResult.blobHashes;
     rebuildTrackersFromNotes(primaryResult.notes);
-
-    // Ensure any leftover legacy v1 database is deleted in the background
-    if (!isLegacyAlreadyCleaned()) {
-      void deleteDatabaseByName(LEGACY_DB_NAME).then((ok) => {
-        if (ok) markLegacyCleaned();
-      });
-    }
-
     return {
       notes: primaryResult.notes,
       folders: primaryResult.folders,
       initialized: true,
-      needsMigrationFromV1: false,
     };
   }
 
@@ -818,29 +703,16 @@ export async function loadWorkspaceFromIndexedDb(): Promise<RawIndexedDbWorkspac
         notes: altResult.notes,
         folders: altResult.folders,
         initialized: true,
-        needsMigrationFromV1: false,
       };
     }
   } catch {
     // ignore
   }
 
-  // 3. Check legacy v1 `notizblock-db` for automatic lossless migration!
-  const legacy = await readLegacyV1WorkspaceIfPresent();
-  if (legacy && legacy.initialized) {
-    return {
-      notes: legacy.notes,
-      folders: legacy.folders,
-      initialized: true,
-      needsMigrationFromV1: true,
-    };
-  }
-
   return {
     notes: [],
     folders: [],
     initialized: false,
-    needsMigrationFromV1: false,
   };
 }
 
@@ -1016,28 +888,10 @@ export function saveFullWorkspaceToIndexedDb(
 }
 
 /**
- * Migrates a normalized workspace from legacy `notizblock-db` into v2,
- * verifies every note & folder is persisted, and ONLY THEN deletes the bloated legacy DB!
- */
-export async function migrateWorkspaceToV2AndCleanupLegacy(
-  notes: Note[],
-  folders: Folder[]
-): Promise<boolean> {
-  const ok = await saveFullWorkspaceToIndexedDb(notes, folders);
-  if (!ok) return false;
-
-  const deleted = await deleteDatabaseByName(LEGACY_DB_NAME);
-  if (deleted) {
-    markLegacyCleaned();
-  }
-  return true;
-}
-
-/**
  * True disk-space compaction (`VACUUM` equivalent for WebKit/iPadOS Safari IndexedDB):
  * Writes the entire clean workspace (only live blobs & packed binary stroke chunks) into
  * the alternate fresh IndexedDB slot, verifies counts, switches active slot, and deletes
- * the old bloated database so iPadOS immediately reclaims all SQLite WAL/freelist space!
+ * the old database so iPadOS immediately reclaims all SQLite WAL/freelist space!
  */
 export function compactIndexedDbWorkspace(
   notes: Note[],
@@ -1073,14 +927,8 @@ export function compactIndexedDbWorkspace(
       knownDbBlobHashes = result.blobHashes;
       rebuildTrackersFromNotes(notes);
 
-      // Delete old v2 DB + any leftover legacy v1 DB so Safari frees disk space immediately!
+      // Delete old v2 DB so Safari frees disk space immediately
       await deleteDatabaseByName(prevDbName);
-      if (!isLegacyAlreadyCleaned()) {
-        const cleaned = await deleteDatabaseByName(LEGACY_DB_NAME);
-        if (cleaned) markLegacyCleaned();
-      } else {
-        void deleteDatabaseByName(LEGACY_DB_NAME);
-      }
 
       return true;
     } catch {
