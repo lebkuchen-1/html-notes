@@ -208,7 +208,7 @@ export function ImportDialog(props: ImportDialogProps) {
         props.store.setImportDialogHint(null);
       } else if (res.error === 'shortcut_wrong_input') {
         props.store.setImportDialogHint(
-          `Base64 erkannt, aber kein PDF-Header (%PDF-). ${res.diagnostic ? `(${res.diagnostic}) ` : ''}Prüfe im Kurzbefehl, was an „Base64 codieren“ übergeben wird.`
+          `Base64 ohne PDF-Daten erkannt. ${res.diagnostic ? `(${res.diagnostic}) ` : ''}Auf iPadOS lassen sich PDFs aus Safari am zuverlässigsten über „PDF / Bild wählen“ oder per Drag & Drop im Split View importieren.`
         );
       } else if (res.error === 'permission') {
         props.store.setImportDialogHint(
@@ -216,7 +216,7 @@ export function ImportDialog(props: ImportDialogProps) {
         );
       } else {
         props.store.setImportDialogHint(
-          'Kein lesbarer Inhalt in der Zwischenablage. Auf dem iPad blockiert Safari direkt kopierte PDF-Dateien – nutze den 2-Schritt-Apple-Kurzbefehl unten, Drag & Drop oder „PDF / Bild wählen“.'
+          'Kein lesbarer Inhalt in der Zwischenablage. Auf iPadOS funktionieren Bilder, Links & Text über „Teilen → Kopieren“ — für PDF-Dateien nutze „PDF / Bild wählen“ oder Drag & Drop im Split View.'
         );
       }
     } finally {
@@ -559,36 +559,17 @@ export function ImportDialog(props: ImportDialogProps) {
                   </div>
 
                   <details class="import-shortcut-guide">
-                    <summary>PDFs direkt über Safari „Teilen“ importieren (Kurzbefehl)</summary>
-                    <ol>
-                      <li>
-                        App <strong>Kurzbefehle</strong> → <strong>+</strong> → Name z. B.{' '}
-                        <em>„An Notizblock“</em> → ⓘ →{' '}
-                        <strong>„Im Share-Sheet anzeigen“</strong> aktivieren.
-                      </li>
-                      <li>
-                        Ganz oben bei <em>Empfange …</em> auf <strong>Alle löschen</strong> tippen
-                        und <strong>nur „URLs“</strong> aktivieren (<em>Safari-Webseiten</em>{' '}
-                        unbedingt AUS lassen, sonst übergibt Safari den HTML-Viewer!).
-                      </li>
-                      <li>
-                        Aktion 1: <strong>Inhalt der URL abrufen</strong> (Eingabe:{' '}
-                        <em>Kurzbefehleingabe</em>).
-                      </li>
-                      <li>
-                        Aktion 2: <strong>Base64 codieren</strong> (Eingabe:{' '}
-                        <em>Inhalt der URL</em>).
-                      </li>
-                      <li>
-                        Aktion 3: <strong>In Zwischenablage kopieren</strong> (Eingabe:{' '}
-                        <em>Base64-codiert</em>).
-                      </li>
-                    </ol>
+                    <summary>Hinweis zu PDFs auf dem iPad (Safari-Einschränkung)</summary>
                     <p>
-                      <em>Hinweis für Login-PDFs (z. B. Moodle) oder lokale Dateien:</em> In der
-                      Dateien-App funktioniert ein Kurzbefehl mit Eingabe <em>PDFs &amp; Dateien</em>{' '}
-                      → <em>Base64 codieren</em> → <em>In Zwischenablage kopieren</em> (ohne{' '}
-                      <em>Inhalt der URL abrufen</em>).
+                      <strong>Bilder, Web-Links &amp; Text</strong> klappen direkt über{' '}
+                      <em>Teilen → Kopieren</em> und den <strong>Einfügen</strong>-Button.
+                    </p>
+                    <p style={{ 'margin-top': '6px' }}>
+                      <strong>PDF-Dateien</strong> werden auf iPadOS von Safari in der
+                      Web-Zwischenablage blockiert (und Apple Kurzbefehle übergeben aus dem
+                      Safari-PDF-Viewer leider nur einen HTML-Wrapper). Am schnellsten importierst
+                      du PDFs über <strong>In „Dateien“ sichern → „PDF / Bild wählen“</strong> oder
+                      direkt per <strong>Drag &amp; Drop im Split View</strong>.
                     </p>
                   </details>
                 </div>

@@ -937,11 +937,11 @@ export function createNotesStore() {
 
     const hint =
       result.error === 'shortcut_wrong_input'
-        ? `Base64 erkannt, aber kein PDF-Header (%PDF-). ${result.diagnostic ? `(${result.diagnostic}) ` : ''}Tipp: Im Kurzbefehl bei „Base64 codieren“ prüfen, ob als Eingabe wirklich die PDF-Datei verbunden ist.`
+        ? `Base64 ohne PDF-Daten erkannt. ${result.diagnostic ? `(${result.diagnostic}) ` : ''}Für PDFs auf iPadOS bitte „PDF / Bild wählen“ oder Drag & Drop im Split View nutzen.`
         : result.error === 'permission'
           ? 'Zugriff auf Zwischenablage abgebrochen — tippe unten auf „Aus Zwischenablage einfügen“ oder füge direkt ins Feld ein.'
           : result.error === 'empty'
-            ? 'Kein lesbarer Inhalt in der Zwischenablage. Hinweis für iPadOS: Apple WebKit blockiert direkt kopierte PDF-Dateien in Web-Apps – nutze unten den 2-Schritt-Kurzbefehl (Teilen-Menü), Drag & Drop oder „PDF / Bild wählen“.'
+            ? 'Kein lesbarer Inhalt in der Zwischenablage. Auf iPadOS funktionieren Bilder, Links & Text über „Teilen → Kopieren“ — für PDF-Dateien bitte „PDF / Bild wählen“ oder Drag & Drop im Split View nutzen.'
             : 'Tippe unten ins Einfüge-Feld (→ „Einsetzen“) oder wähle eine PDF-/Bilddatei.';
 
     openImportDialog({

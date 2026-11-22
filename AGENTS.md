@@ -19,9 +19,13 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - `npm run dev` — Lokaler Dev-Server auf Port `3000`
 - `npm run typecheck` — `tsc --noEmit` (vor jedem Commit/Push ausführen)
 - `npm run build` — Produktions-Build nach `dist/`
-- `vite.config.ts`: `base: process.env.GITHUB_ACTIONS ? '/html-notes/' : './'` (wichtig, damit Assets & PDF.js-Worker auf `/html-notes/` und lokal funktionieren).
+- `vite.config.ts`: `base: process.env.GITHUB_ACTIONS ? '/html-notes/' : './'` (wichtig, damit Assets & PDF.js-Worker auf `/html-notes/` und lokal funktionieren) und injiziert `__APP_COMMIT__` + `__APP_BUILD_TIME__` für die Versionsanzeige.
 - `.github/workflows/deploy.yml`: Baut und deployt bei jedem Push auf `main` automatisch auf GitHub Pages (`build_type: workflow`).
-- **Workflow-Regel (Nutzerwunsch):** Nach abgeschlossenen Änderungen und erfolgreichem `npm run typecheck` + `npm run build` immer **direkt committen und auf `main` pushen** (ohne Rückfrage), da der Nutzer direkt auf dem iPad über GitHub Pages testet.
+- **Workflow- & Kontext-Regeln (Nutzerwunsch):**
+  - Nach abgeschlossenen Änderungen und erfolgreichem `npm run typecheck` + `npm run build` immer **direkt committen und auf `main` pushen** (ohne Rückfrage), da der Nutzer direkt auf dem iPad über GitHub Pages testet.
+  - Nach jedem abgeschlossenen, nicht aufbauenden Feature (`git push`) wird der Gesprächskontext geleert (`/clear`).
+  - **Langfristiges Wissen** (Architektur, Invarianten, Plattform-Grenzen, Workflow-Regeln) kommt in `AGENTS.md`.
+  - **Kurzfristiger Stand** (letzte Änderungen, offene Punkte, nächste Schritte) kommt in `HANDOFF.md` und wird nach jeder Session überschrieben bzw. bereinigt, sobald Punkte erledigt sind.
 - **Umgebungs-Hinweis:** `node`, `npm` und `gh` liegen im Host-Nix-Profil (`~/.nix-profile/bin`) und sind in einer isolierten Sandbox ohne `/nix` nicht erreichbar.
 
 ---
@@ -52,7 +56,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 | `src/components/InfiniteCanvasView.tsx` | Optionaler unendlicher OneNote-Canvas pro Notiz (`canvasMode: 'infinite'`): viewport-großes Dual-Layer-Canvas mit 2D-Weltkamera (`25%`–`400%`), nahtlosem Endlos-Papiermuster, Viewport-Culling, 1-Finger-Pan + Palm Rejection, Weltanker-Pinch-Zoom, `Space`/Mittelklick/Trackpad-Navigation, unbegrenztem Text-/Bild-Overlay und „Zurück zum Inhalt“-Pill. |
 | `src/components/PageOverview.tsx` | Horizontaler angedockter Filmstreifen oberhalb des kontinuierlichen Dokuments mit proportionalen Live-Thumbnails, Drag-&-Drop-Seitenverschiebung (`reorderPage`), Verschieben in andere Notizen (`movePageToNote`) und einklappbarem Neue-Seite-Creator. |
 | `src/components/ImportDialog.tsx` | GoodNotes-artiger Schnellimport-Dialog (erreichbar über *Einfügen*-Buttons, *PDF / Bild* auf der Startseite, Drag & Drop und `Strg+Umschalt+V`) mit Wahl zwischen *Neue Notiz* (Titel, Ordner inkl. Inline-Ordnererstellung, Modus) und *Bestehende Notiz* (durchsuchbare Liste). |
-| `src/components/SettingsPage.tsx` | Einstellungsseite mit **Global**- und **Lokal (pro Notiz)**-Reiter (Vererbung + Einzel-/Komplett-Reset): Glättung, Druckempfindlichkeit, Nur-Stift, 1-Finger-Scroll, Palm-Rejection-Empfindlichkeit, Pinch-Zoom, Momentum, Seiten-Kopfzeilen, Editor-Typografie, Standard-Papier/-Format, PNG-Auflösung, Autosave & Speicher-Übersicht. |
+| `src/components/SettingsPage.tsx` | Einstellungsseite mit **Global**- und **Lokal (pro Notiz)**-Reiter (Vererbung + Einzel-/Komplett-Reset): Glättung, Druckempfindlichkeit, Nur-Stift, 1-Finger-Scroll, Palm-Rejection-Empfindlichkeit, Pinch-Zoom, Momentum, Seiten-Kopfzeilen, Editor-Typografie, Standard-Papier/-Format, PNG-Auflösung, Autosave, Speicher-Übersicht sowie App-Versionscode (`#commit` + Build-Zeit) & Cache-umgehender „Neu laden“-Button. |
 | `src/components/Icons.tsx` | Inline-SVG-Icons ohne externe Icon-Abhängigkeit. |
 | `src/styles.css` | Komplettes Designsystem mit CSS-Variablen für `[data-theme='light']` und `[data-theme='dark']`. |
 
@@ -95,6 +99,10 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - **Unendlicher Canvas (`InfiniteCanvasView.tsx` & `DrawingCanvas.tsx`):**
   - `DrawingCanvas.tsx` bindet `ResizeObserver` und den Touch-/Pinch-Controller per `createEffect` an ein `viewportEl`-Signal (nicht `onMount`), damit Umschalten `Seiten ↔ Unendlich` die Listener sauber neu anhängt.
   - `<InfiniteCanvasView>` hält die `<canvas>`-Backing-Stores strikt viewport-groß (konstanter iPad-GPU-Speicher) und merkt sich die Kamera pro `${noteId}:${pageId}` in `cameraCache`.
+- **iPadOS Teilen, Zwischenablage & PDF-Import (bestätigte Plattform-Grenzen — nicht erneut versuchen!):**
+  - iPadOS Safari unterstützt weder die **Web Share Target API** (`share_target` im `manifest.json`, sodass Home-Screen-PWAs nicht wie GoodNotes im Teilen-Menü erscheinen) noch `application/pdf` in `navigator.clipboard.read()` (WebKit erlaubt nur `text/plain`, `text/html`, `text/uri-list`, `image/png`). Zudem hat eine Home-Screen-PWA eine von Safari getrennte IndexedDB.
+  - **Bestätigt fehlgeschlagen:** Apple-Kurzbefehle aus dem Safari-PDF-Viewer (Base64-Brücke via Share Sheet — getestet mit `Beliebig`, nur `PDFs`/`Dateien`/`Bilder`, `PDF erstellen`, nur `URLs` und `Inhalte von URL abrufen`) liefern auf iPadOS statt der binären PDF-Datei nur Safaris internen HTML-Plugin-Wrapper (`<html class="plugin-fits-content"><embed …>`).
+  - **Funktionierende Wege auf dem iPad:** *Teilen → Kopieren* + *Einfügen*-Button für **Bilder, Links & Text** (sowie CORS-freie PDF-URLs); für **PDF-Dateien** am zuverlässigsten **„PDF / Bild wählen“** (nach *In „Dateien“ sichern*) oder **Drag & Drop im iPadOS Split View** — alle Wege münden in den GoodNotes-artigen `ImportDialog`.
 
 ### 4. SolidJS & Library-Fallstricke
 - `props` in SolidJS-Komponenten niemals destrukturieren.
@@ -110,6 +118,7 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - `F11` / `Strg+Umschalt+F`: Vollbildmodus (blendet Browser-UI per Fullscreen-API aus, versteckt Tab-Leiste & Tags, verkleinert Header/Toolbar/Seitenleiste für maximalen Schreibplatz auf dem iPad)
 - `Strg+,`: Einstellungen (lokal in Notiz / global auf Startseite) öffnen bzw. schließen (`Esc` schließt ebenfalls)
 - `Strg+Z` / `Strg+Umschalt+Z` (`Strg+Y`): Undo / Redo auf aktiver Canvas-Seite
+- `Strg+Umschalt+V`: Schnellimport-Dialog direkt aus der Zwischenablage öffnen
 - `Strg+V`: Bild aus Zwischenablage (im Canvas oder Text-Editor)
 - `Entf` / `Rücktaste`: Ausgewähltes Canvas-Bild löschen
 - `Esc`: Popovers / Seitenübersicht / Bildauswahl schließen bzw. Canvas-Text übernehmen
