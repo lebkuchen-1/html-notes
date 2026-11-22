@@ -518,6 +518,7 @@ export function renderFullCanvas(
     hoveredTextId?: string | null;
     onImageLoad?: () => void;
     hiddenIds?: CanvasHiddenIds;
+    skipPaperBackground?: boolean;
   }
 ) {
   ctx.save();
@@ -527,14 +528,16 @@ export function renderFullCanvas(
   const hiddenTexts = options?.hiddenIds?.texts;
   const hiddenImages = options?.hiddenIds?.images;
 
-  // 0. Base paper color + pattern
-  drawPaperBackground(
-    ctx,
-    page.width,
-    page.height,
-    page.paperConfig,
-    theme
-  );
+  // 0. Base paper color + pattern (skipped for transparent PNG export)
+  if (!options?.skipPaperBackground) {
+    drawPaperBackground(
+      ctx,
+      page.width,
+      page.height,
+      page.paperConfig,
+      theme
+    );
+  }
 
   // 0b. Dedicated locked PDF / Image page background (if present)
   drawPageBackgroundImage(ctx, page, options?.onImageLoad);

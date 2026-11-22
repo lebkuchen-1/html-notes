@@ -7,22 +7,14 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Granularer Export für den Infinite Canvas (`src/utils/pdfWriter.ts`, `src/utils/infiniteExport.ts`, `src/components/InfiniteExportDialog.tsx`, `src/components/InfiniteExportRegionOverlay.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/DrawingCanvas.tsx`, `src/utils/canvasRenderer.ts`, `src/components/Icons.tsx`, `src/styles.css`):**
-   - **Aufruf:** Im Unendlich-Modus öffnen sowohl der Download-Button in der Werkzeugleiste als auch der neue `Export…`-Button in der Status-/Modus-Leiste den Export-Dialog (Seiten-Modus behält unverändert den schnellen 1-Klick-PNG-Export).
-   - **4 Ausschnitt-/Bereichsmodi:**
-     - **Aktueller Bildschirm** (Standard, berücksichtigt Zoom-Boost bei >100 % für scharfe Detail-Exports),
-     - **Gesamter Inhalt** (automatische Bounding-Box aller Inhalte + wählbarer Randabstand `0 / 32 / 64 / 120 px`),
-     - **Eigener Bereich** (interaktives Crop-Rahmen-Overlay direkt auf dem Infinite Canvas mit 8 Touch-Griffen, freiem Aufziehen, Seitenverhältnis-Presets `Frei / A4 Hoch / A4 Quer / 16:9 / 1:1`, `Rahmen ↔ Canvas schieben`-Modus für Pan & Pinch-Zoom sowie `Bildschirm`-/`Inhalt`-Snaps),
-     - **Lasso-Auswahl** (erscheint automatisch bei aktiver Lasso-Auswahl und exportiert nur die markierten Elemente).
-   - **4 Ausgabeformate (komplett offline, ohne externe PDF-Abhängigkeit):**
-     - **PNG** (verlustfrei, inkl. optional transparentem Hintergrund + direkter **Zwischenablage-Kopie**),
-     - **JPEG** (kompakt, wählbare Qualität `80 % / 90 % / 95 %`),
-     - **PDF (1 Blatt)** (Endlos-Einzelblatt proportional in cm/pt kalibriert),
-     - **PDF (Druckseiten)** (A4 Hoch/Quer, A3 Hoch/Quer, US Letter mit `Kacheln 1:1` inkl. Maßstab `75/100/125 %`, `Breite auf 1 Seite` wie OneNote oder `Alles auf 1 Seite`, Druckrand `0/10/15 mm`, optionalem **Überspringen leerer Kacheln** und Seitenzahlen).
-   - **Feinere granuläre Optionen & Live-Vorschau:**
-     - Hintergrund & Papier: `Wie Canvas`, `Ohne Raster`, `Weiß (Druck)` (rendert Auto-Tinte automatisch dunkel, ideal bei Dark-Mode-Notizen), `Weiß + Raster` und `Transparent` (PNG).
-     - Ebenen-Filter (`Stift & Formen`, `Textmarker`, `Texte`, `Bilder`, ggf. `Hintergrund-PDF`), Auflösung (`1× / 2× / 3×` mit Safari-sicherem 16-MP-Schutz), editierbarer Dateiname sowie **Teilen**-Button (iPadOS System-Share-Sheet).
-     - Live-Vorschau im Dialog zeigt alle Optionen sofort inkl. gestrichelter PDF-Seitenumbrüche und ausgegrauter leerer Kacheln.
+1. **Vereinheitlichter granularer Export für Seiten-Modus & Infinite Canvas (`src/components/CanvasExportDialog.tsx`, `src/utils/pagesExport.ts`, `src/utils/infiniteExport.ts`, `src/utils/pdfWriter.ts`, `src/components/InfiniteExportRegionOverlay.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/DrawingCanvas.tsx`, `src/utils/canvasRenderer.ts`, `src/styles.css`):**
+   - **Einheitliche Exportansicht für beide Modi:** Der Download-Button in der Werkzeugleiste öffnet jetzt sowohl im **Seiten-Modus** als auch im **Unendlich-Modus** denselben granularen Export-Dialog mit Live-Vorschau, Hintergrund-/Papier-Optionen (`Wie Canvas`, `Ohne Raster`, `Weiß (Druck)`, `Weiß + Raster`, `Transparent`), Ebenen-Filter (`Stift & Formen`, `Textmarker`, `Texte`, `Bilder`, `Hintergrund-PDF`), Auflösung (`1× / 2× / 3×`) und Dateiname.
+   - **Seiten-Modus mit flexibler Seitenauswahl & Mehrseiten-PDF:**
+     - **Aktuelle Seite**, **Alle Seiten**, **Bestimmte Seiten** (1-Tipp-Seitenchips + bidirektional synchronisiertes Bereichsfeld z. B. `1, 3, 7`, `1, 3 und 7` oder `1-3, 7`, inkl. `Alle` / `Nur aktuelle` / `Keine`) und **Lasso-Auswahl** (bei aktivem Lasso).
+     - **Live-Vorschau mit Seitenblättern** (`‹ Seite X (i/n) ›`) durch alle gewählten Seiten.
+     - **Mehrseitiges PDF** (im `Originalformat` pro Seite oder einheitlich auf `A4 / A3 / Letter` mit Druckrand & optionalen Seitenzahlen) sowie **PNG / JPEG** als `Einzelne Dateien` (inkl. Multi-File Share auf iPadOS) oder `Untereinander (1 langes Bild)`.
+   - **Infinite Canvas:** Behält alle Optionen (`Aktueller Bildschirm`, `Gesamter Inhalt`, interaktiver `Eigener Bereich` auf dem Canvas, `Lasso-Auswahl`, `PNG`, `JPEG`, `PDF 1 Blatt`, `PDF Druckseiten`-Kacheln).
+   - **iPadOS Home-Screen-PWA-Optimierung:** Im Standalone-iPadOS-Modus ist **`Teilen / Sichern`** (natives iPadOS Share Sheet → *In Dateien sichern*, *Fotos*, *AirDrop*) der Hauptbutton, während `Download` weiterhin direkt daneben erreichbar bleibt.
 
 ## Offene Punkte
-- Praxistest des Infinite-Canvas-Exports auf dem iPad (aktueller Bildschirm, eigener Bereich mit Touch/Apple Pencil, mehrseitiges A4-PDF, Teilen-Menü & Weiß-Druckmodus).
+- Praxistest der vereinheitlichten Exportansicht auf dem iPad (Seitenauswahl `1, 3, 7` als PDF, Multi-PNG-Teilen, Infinite-Canvas-Ausschnitt & iPadOS-PWA `Teilen / Sichern`).

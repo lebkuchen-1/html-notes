@@ -91,11 +91,11 @@ export const PDF_PAPER_MAP = new Map<PdfPaperPresetId, PdfPaperPreset>(
 /** Matches A4 calibration used throughout Notizblock (794 px = 210 mm ≈ 96 DPI) */
 export const LOGICAL_PX_PER_MM = 794 / 210;
 export const LOGICAL_PX_PER_CM = 794 / 21;
-const PT_PER_MM = 72 / 25.4;
+export const PT_PER_MM = 72 / 25.4;
 
 /** Conservative cross-browser canvas limits (safe on iPadOS Safari ~16.7 MP cap) */
-const MAX_CANVAS_EDGE_PX = 4096;
-const MAX_CANVAS_AREA_PX = 16_000_000;
+export const MAX_CANVAS_EDGE_PX = 4096;
+export const MAX_CANVAS_AREA_PX = 16_000_000;
 const MAX_PDF_TILES = 64;
 
 const EXPORT_PREFS_STORAGE_KEY = 'solid-notes:infinite-export-prefs';
@@ -1022,6 +1022,15 @@ export function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 2500);
 }
 
+export async function triggerMultiBlobDownload(artifacts: GeneratedExportArtifact[]) {
+  for (let i = 0; i < artifacts.length; i++) {
+    triggerBlobDownload(artifacts[i].blob, artifacts[i].filename);
+    if (i < artifacts.length - 1) {
+      await new Promise((r) => setTimeout(r, 180));
+    }
+  }
+}
+
 export function canCopyPngToClipboard(): boolean {
   return (
     typeof navigator !== 'undefined' &&
@@ -1045,6 +1054,42 @@ export function canShareFilesNative(): boolean {
   } catch {
     return false;
   }
+}
+
+export function isAppleStandalonePwa(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const nav = navigator as Navigator & { standalone?: boolean };
+  const isStandalone =
+    nav.standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)').matches === true;
+  const isAppleTouch =
+    /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return isStandalone && isAppleTouch;
+}
+
+export async function shareExportArtifacts(
+  artifacts: GeneratedExportArtifact[],
+  title: string
+): Promise<boolean> {
+  if (
+    typeof navigator === 'undefined' ||
+    typeof navigator.share !== 'function' ||
+    typeof File === 'undefined'
+  ) {
+    return false;
+  }
+  const files = artifacts.map(
+    (a) => new File([a.blob], a.filename, { type: a.mimeType })
+  );
+  if (typeof navigator.canShare === 'function' && !navigator.canShare({ files })) {
+    return false;
+  }
+  await navigator.share({
+    files,
+    title: title || 'Notizblock Export',
+  });
+  return true;
 }
 
 export function formatWorldDimensionsCm(width: number, height: number): string {
