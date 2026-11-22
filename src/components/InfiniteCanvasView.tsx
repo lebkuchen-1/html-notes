@@ -1043,11 +1043,18 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       momentumRafId = requestAnimationFrame(step);
     };
 
+    const getTargetElement = (target: EventTarget | null): Element | null => {
+      if (target instanceof Element) return target;
+      if (target instanceof Node) return target.parentElement;
+      return null;
+    };
+
     const isInteractiveTarget = (target: EventTarget | null): boolean => {
-      if (!(target instanceof Element)) return false;
+      const el = getTargetElement(target);
+      if (!el) return false;
       return Boolean(
-        target.closest(
-          'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection'
+        el.closest(
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection'
         )
       );
     };

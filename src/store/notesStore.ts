@@ -208,31 +208,121 @@ export function createNotesStore() {
     document.addEventListener('fullscreenchange', handleNativeFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleNativeFullscreenChange);
 
-    // In fullscreen mode, prevent stray touchmove overscroll on non-scrollable UI bars
-    // from leaking into Safari's native pan/fullscreen recognizer
-    const handleFullscreenTouchMoveGuard = (e: TouchEvent) => {
-      if (!isFullscreen()) return;
-      const target = e.target;
-      if (
-        target instanceof Element &&
-        target.closest(
-          '.note-textarea, .markdown-preview, .settings-scroll, .home-scroll, .sidebar-explorer, .paper-popover, .page-overview-strip, .import-modal-body, .import-note-list, .import-paste-input, .canvas-text-input, .canvas-scribble-input, .spell-popover, .spell-suggestions-bar, input[type="range"]'
-        )
-      ) {
+    // In fullscreen mode, prevent stray finger overscroll swipes on non-scrollable UI chrome
+    // from leaking into Safari's native pan/fullscreen recognizer.
+    // IMPORTANT (iPadOS WebKit): NEVER call preventDefault() on stylus touches, interactive UI
+    // controls, or small tap jitter (< 10px) — calling preventDefault() on touchmove in WebKit
+    // cancels synthetic click events, and Apple Pencil emits sub-pixel touchmove on almost every tap.
+    const FULLSCREEN_ALLOW_TOUCHMOVE_SELECTOR = [
+      'button',
+      'a',
+      'input',
+      'select',
+      'textarea',
+      'label',
+      'summary',
+      '[role="button"]',
+      '[role="tab"]',
+      '[role="menuitem"]',
+      '.note-textarea',
+      '.markdown-preview',
+      '.settings-scroll',
+      '.home-scroll',
+      '.sidebar-explorer',
+      '.folder-tree',
+      '.note-list',
+      '.note-tabs-list',
+      '.paper-popover',
+      '.page-filmstrip',
+      '.import-modal-body',
+      '.import-note-list',
+      '.import-folder-chips',
+      '.import-paste-input',
+      '.canvas-text-overlay',
+      '.canvas-text-input',
+      '.canvas-image-selection',
+      '.canvas-lasso-selection',
+      '.spell-popover',
+      '.spell-suggestions-bar',
+      '.spell-issue-list',
+    ].join(', ');
+
+    const fullscreenTouchStarts = new Map<number, { x: number; y: number }>();
+
+    const getTouchTargetElement = (target: EventTarget | null): Element | null => {
+      if (target instanceof Element) return target;
+      if (target instanceof Node) return target.parentElement;
+      return null;
+    };
+
+    const isStylusTouch = (e: TouchEvent): boolean => {
+      type StylusTouch = Touch & { touchType?: string };
+      for (let i = 0; i < e.touches.length; i++) {
+        if ((e.touches[i] as StylusTouch).touchType === 'stylus') return true;
+      }
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if ((e.changedTouches[i] as StylusTouch).touchType === 'stylus') return true;
+      }
+      return false;
+    };
+
+    const handleFullscreenTouchStart = (e: TouchEvent) => {
+      if (!isFullscreen()) {
+        fullscreenTouchStarts.clear();
         return;
       }
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        fullscreenTouchStarts.set(t.identifier, { x: t.clientX, y: t.clientY });
+      }
+    };
+
+    const handleFullscreenTouchEnd = (e: TouchEvent) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        fullscreenTouchStarts.delete(e.changedTouches[i].identifier);
+      }
+      if (e.touches.length === 0) {
+        fullscreenTouchStarts.clear();
+      }
+    };
+
+    const handleFullscreenTouchMoveGuard = (e: TouchEvent) => {
+      if (!isFullscreen() || e.defaultPrevented) return;
+      if (isStylusTouch(e)) return;
+
+      const targetEl = getTouchTargetElement(e.target);
+      if (targetEl?.closest(FULLSCREEN_ALLOW_TOUCHMOVE_SELECTOR)) {
+        return;
+      }
+
+      // Allow small tap jitter (< 10px) on clickable rows/cards so taps never lose click events
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const start = fullscreenTouchStarts.get(t.identifier);
+        if (start && Math.hypot(t.clientX - start.x, t.clientY - start.y) < 10) {
+          return;
+        }
+      }
+
       if (e.cancelable) {
         e.preventDefault();
       }
     };
+
+    document.addEventListener('touchstart', handleFullscreenTouchStart, { passive: true });
     document.addEventListener('touchmove', handleFullscreenTouchMoveGuard, {
       passive: false,
     });
+    document.addEventListener('touchend', handleFullscreenTouchEnd, { passive: true });
+    document.addEventListener('touchcancel', handleFullscreenTouchEnd, { passive: true });
 
     onCleanup(() => {
       document.removeEventListener('fullscreenchange', handleNativeFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleNativeFullscreenChange);
+      document.removeEventListener('touchstart', handleFullscreenTouchStart);
       document.removeEventListener('touchmove', handleFullscreenTouchMoveGuard);
+      document.removeEventListener('touchend', handleFullscreenTouchEnd);
+      document.removeEventListener('touchcancel', handleFullscreenTouchEnd);
     });
   }
 

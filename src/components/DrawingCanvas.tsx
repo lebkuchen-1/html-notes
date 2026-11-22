@@ -615,19 +615,25 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       momentumRafId = requestAnimationFrame(step);
     };
 
+    const getTargetElement = (target: EventTarget | null): Element | null => {
+      if (target instanceof Element) return target;
+      if (target instanceof Node) return target.parentElement;
+      return null;
+    };
+
     const isInteractiveTarget = (target: EventTarget | null): boolean => {
-      if (!(target instanceof Element)) return false;
+      const el = getTargetElement(target);
+      if (!el) return false;
       return Boolean(
-        target.closest(
-          'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .paper-popover'
+        el.closest(
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .paper-popover'
         )
       );
     };
 
     const canOneFingerScrollTarget = (target: EventTarget | null): boolean => {
       if (isInteractiveTarget(target)) return false;
-      const onCanvas =
-        target instanceof Element && Boolean(target.closest('.drawing-canvas'));
+      const onCanvas = Boolean(getTargetElement(target)?.closest('.drawing-canvas'));
       if (!onCanvas) return true;
       if (stylusOnly()) return oneFingerScroll();
       return tool() === 'select';
