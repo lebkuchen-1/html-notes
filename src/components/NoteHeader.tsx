@@ -22,9 +22,9 @@ interface NoteHeaderProps {
 }
 
 const VIEW_MODES: { id: ViewMode; label: string }[] = [
+  { id: 'canvas', label: 'Canvas' },
   { id: 'split', label: 'Kombiniert' },
   { id: 'text', label: 'Text' },
-  { id: 'canvas', label: 'Canvas' },
 ];
 
 export function NoteHeader(props: NoteHeaderProps) {

@@ -46,7 +46,32 @@ const STORAGE_KEYS = {
   OPEN_TABS: 'solid-notes:v1:openTabs',
   SCREEN: 'solid-notes:v1:screen',
   SETTINGS: 'solid-notes:v1:settings',
+  CANVAS_DEFAULT_MIGRATED: 'solid-notes:v2:canvasDefaultMigrated',
 } as const;
+
+function migrateCanvasDefaultIfNeeded(): void {
+  try {
+    if (localStorage.getItem(STORAGE_KEYS.CANVAS_DEFAULT_MIGRATED)) return;
+
+    const rawSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (rawSettings) {
+      const parsed = JSON.parse(rawSettings);
+      if (parsed && typeof parsed === 'object' && parsed.defaultViewMode === 'split') {
+        parsed.defaultViewMode = 'canvas';
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+      }
+    }
+
+    const savedViewMode = localStorage.getItem(STORAGE_KEYS.VIEW_MODE);
+    if (savedViewMode === 'split') {
+      localStorage.setItem(STORAGE_KEYS.VIEW_MODE, 'canvas');
+    }
+
+    localStorage.setItem(STORAGE_KEYS.CANVAS_DEFAULT_MIGRATED, '1');
+  } catch {
+    // ignore
+  }
+}
 
 export interface PaperPreset {
   id: string;
@@ -785,6 +810,7 @@ export function normalizeAppSettings(raw: unknown): AppSettings {
 }
 
 export function loadAppSettings(): AppSettings {
+  migrateCanvasDefaultIfNeeded();
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     if (!raw) return normalizeAppSettings(null);
@@ -1020,13 +1046,14 @@ export function saveTheme(theme: ThemeMode): void {
 }
 
 export function loadViewMode(): ViewMode {
+  migrateCanvasDefaultIfNeeded();
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW_MODE);
     if (saved === 'split' || saved === 'text' || saved === 'canvas') return saved;
   } catch {
     // ignore
   }
-  return 'split';
+  return 'canvas';
 }
 
 export function saveViewMode(mode: ViewMode): void {

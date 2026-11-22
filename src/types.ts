@@ -226,7 +226,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   editorFontFamily: 'sans',
   editorSpellCheck: true,
   autoEnableStylusOnly: true,
-  defaultViewMode: 'split',
+  defaultViewMode: 'canvas',
   defaultPagePresetId: 'a4-p',
   defaultPaperConfig: { ...DEFAULT_PAPER_CONFIG },
   pngExportScale: 2,

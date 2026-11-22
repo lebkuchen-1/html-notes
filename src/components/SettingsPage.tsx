@@ -59,9 +59,9 @@ const EDITOR_FONT_OPTIONS: { value: EditorFontFamily; label: string }[] = [
 ];
 
 const VIEW_MODE_OPTIONS: { value: ViewMode; label: string }[] = [
+  { value: 'canvas', label: 'Canvas' },
   { value: 'split', label: 'Kombiniert' },
   { value: 'text', label: 'Text' },
-  { value: 'canvas', label: 'Canvas' },
 ];
 
 const PATTERN_OPTIONS: { value: PaperPattern; label: string }[] = [
@@ -611,7 +611,7 @@ export function SettingsPage(props: SettingsPageProps) {
                       <span class="setting-label">Standard-Ansicht für neue Notizen</span>
                     </div>
                     <span class="setting-desc">
-                      Legt fest, ob neue Notizen im Kombiniert-, Text- oder Canvas-Modus starten.
+                      Legt fest, ob neue Notizen im Canvas-, Kombiniert- oder Text-Modus starten.
                     </span>
                   </div>
                   <div class="setting-control">

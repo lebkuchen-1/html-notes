@@ -7,13 +7,16 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Daumen-/Seitwärts-Scrollen & Richtungs-Stabilisierung (`src/utils/touchScroll.ts`, `DrawingCanvas.tsx`, `InfiniteCanvasView.tsx`):**
+1. **Canvas als Standard-Ansicht (`src/types.ts`, `src/utils/storage.ts`, `src/store/notesStore.ts`, `HomePage.tsx`, `NoteHeader.tsx`, `SettingsPage.tsx`):**
+   - `DEFAULT_APP_SETTINGS.defaultViewMode` und `loadViewMode()`-Fallback auf `'canvas'` umgestellt inkl. einmaliger `localStorage`-Migration (`solid-notes:v2:canvasDefaultMigrated`), sodass bestehende Installationen direkt mit Canvas als Standard starten (spätere manuelle Umschaltung bleibt erhalten).
+   - Schnellstart-Vorlage *Leere Notiz* nutzt jetzt ebenfalls `defaultViewMode` (`Canvas`); Ansichts-Umschalter im Header und in den Einstellungen führt `Canvas` an erster Stelle.
+2. **Daumen-/Seitwärts-Scrollen & Richtungs-Stabilisierung (`src/utils/touchScroll.ts`, `DrawingCanvas.tsx`, `InfiniteCanvasView.tsx`):**
    - Zweistufige Palm-/Daumen-Erkennung (geometrischer Radius), sodass Daumen und schräge/seitliche Finger beim 1-Finger-Scrollen und Pinch-Zoom nicht mehr als Handballen geblockt werden.
    - Achsen-Stabilisierung (±35° Lock-Kegel mit Quer-Toleranz und sprungfreiem Breakout) für gerades vertikales & horizontales Scrollen inkl. sauberem Momentum.
-2. **GoodNotes-artiger Schnellimport-Dialog (`src/components/ImportDialog.tsx`, `src/utils/clipboardImport.ts`, `notesStore.ts`):**
+3. **GoodNotes-artiger Schnellimport-Dialog (`src/components/ImportDialog.tsx`, `src/utils/clipboardImport.ts`, `notesStore.ts`):**
    - 1-Tap *Einfügen*-Zugang auf Startseite, Notiz-Header, Seitenleiste & `Strg+Umschalt+V` sowie bei *PDF / Bild* & Drag & Drop.
    - Wahl zwischen **Neue Notiz** (Titel, Ordner inkl. Inline-Ordnererstellung, Seiten/Unendlich) und **Bestehende Notiz** (durchsuchbare Liste).
-3. **App-Versionscode & Cache-Reload (`vite.config.ts`, `SettingsPage.tsx`, `index.tsx`):**
+4. **App-Versionscode & Cache-Reload (`vite.config.ts`, `SettingsPage.tsx`, `index.tsx`):**
    - Commit-Hash (`#...`) + Build-Zeit ganz unten in *Einstellungen → Global* inkl. 1-Tap **`Neu laden`**-Button (umgeht Home-Screen-PWA-Cache ohne IndexedDB-Datenverlust).
 
 ## Bekannter Stand / Abgehakt

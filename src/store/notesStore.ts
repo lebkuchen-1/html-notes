@@ -833,9 +833,7 @@ export function createNotesStore() {
     setNotes((prev) => [note, ...prev]);
     setOpenTabIds((prev) => [...prev, note.id]);
     setActiveNoteId(note.id);
-    if (options.viewMode) {
-      setViewMode(options.viewMode);
-    }
+    setViewMode(options.viewMode ?? settings().defaultViewMode);
     setActiveScreen('note');
     if (window.innerWidth < 900) {
       setSidebarOpen(false);
@@ -887,9 +885,7 @@ export function createNotesStore() {
     setNotes((prev) => [note, ...prev]);
     setOpenTabIds((prev) => [...prev, note.id]);
     setActiveNoteId(note.id);
-    if (options?.viewMode) {
-      setViewMode(options.viewMode);
-    }
+    setViewMode(options?.viewMode ?? settings().defaultViewMode);
     setActiveScreen('note');
     if (window.innerWidth < 900) {
       setSidebarOpen(false);

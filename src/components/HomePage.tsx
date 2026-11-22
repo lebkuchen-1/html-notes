@@ -614,14 +614,13 @@ export function HomePage(props: HomePageProps) {
                     width: 794,
                     height: 1123,
                     pageTitle: 'A4 Seite',
-                    viewMode: 'split',
                     folderId: homeFilter() === 'folder' ? homeFolderId() : null,
                   })
                 }
               >
                 <span class="tpl-preview tpl-cream" />
                 <span class="tpl-title">Leere Notiz</span>
-                <span class="tpl-sub">A4 Hoch · Text &amp; Canvas</span>
+                <span class="tpl-sub">A4 Hoch · Canvas</span>
               </button>
 
               <button
