@@ -355,9 +355,10 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
     // Avoid snapping exactly to 360 -> 0 visually at the far right edge
     const nextH = ratio * 359.5;
     const curr = hsv();
-    // If user starts from pure white/gray/black and drags the rainbow bar, give visible color!
-    const nextS = curr.s < 0.05 ? 0.85 : curr.s;
-    const nextV = curr.v < 0.05 ? 0.85 : curr.v;
+    // If user starts from dark/neutral ink (like default #1e293b or #f1f5f9) and drags the
+    // rainbow hue bar, lift saturation/brightness so they immediately get a vivid color!
+    const nextS = curr.s < 0.15 ? 0.82 : curr.s;
+    const nextV = curr.v < 0.35 ? 0.85 : curr.v;
     emitHsv(nextH, nextS, nextV);
   };
 

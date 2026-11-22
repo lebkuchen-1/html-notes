@@ -199,11 +199,66 @@ interface AppleTouch extends Touch {
 const MIN_ZOOM = 0.45;
 const MAX_ZOOM = 3.5;
 
+const PEN_COLOR_KEY = 'solid-notes:pen-color';
+const HIGHLIGHTER_COLOR_KEY = 'solid-notes:highlighter-color';
+const CUSTOM_PEN_COLOR_KEY = 'solid-notes:custom-pen-color';
+const CUSTOM_HIGHLIGHTER_COLOR_KEY = 'solid-notes:custom-highlighter-color';
+
+function loadStoredColor(key: string, fallback: string): string {
+  try {
+    const val = localStorage.getItem(key);
+    if (val && (val === 'auto' || /^#[0-9a-fA-F]{6}$/.test(val))) {
+      return val;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return fallback;
+}
+
+function loadStoredOptionalHex(key: string): string | null {
+  try {
+    const val = localStorage.getItem(key);
+    if (val && /^#[0-9a-fA-F]{6}$/.test(val)) {
+      return val.toLowerCase();
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null;
+}
+
+function saveStoredColor(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export function DrawingCanvas(props: DrawingCanvasProps) {
   const [tool, setTool] = createSignal<DrawingTool>('pen');
   let lastNonScribbleTool: DrawingTool = 'pen';
-  const [penColor, setPenColor] = createSignal<string>('auto');
-  const [highlighterColor, setHighlighterColor] = createSignal<string>('#fde047');
+  const [penColor, setPenColor] = createSignal<string>(
+    loadStoredColor(PEN_COLOR_KEY, 'auto')
+  );
+  const [highlighterColor, setHighlighterColor] = createSignal<string>(
+    loadStoredColor(HIGHLIGHTER_COLOR_KEY, '#fde047')
+  );
+  const [customPenColor, setCustomPenColor] = createSignal<string | null>(
+    loadStoredOptionalHex(CUSTOM_PEN_COLOR_KEY)
+  );
+  const [customHighlighterColor, setCustomHighlighterColor] = createSignal<string | null>(
+    loadStoredOptionalHex(CUSTOM_HIGHLIGHTER_COLOR_KEY)
+  );
+
+  createEffect(() => saveStoredColor(PEN_COLOR_KEY, penColor()));
+  createEffect(() => saveStoredColor(HIGHLIGHTER_COLOR_KEY, highlighterColor()));
+  createEffect(() => saveStoredColor(CUSTOM_PEN_COLOR_KEY, customPenColor()));
+  createEffect(() =>
+    saveStoredColor(CUSTOM_HIGHLIGHTER_COLOR_KEY, customHighlighterColor())
+  );
   const [penWidth, setPenWidth] = createSignal<number>(3.8);
   const [highlighterWidth, setHighlighterWidth] = createSignal<number>(24);
   const [eraserSize, setEraserSize] = createSignal<number>(18);
@@ -345,6 +400,10 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     return tool() === 'highlighter' ? highlighterColor() : penColor();
   });
 
+  const activeCustomColor = createMemo(() =>
+    tool() === 'highlighter' ? customHighlighterColor() : customPenColor()
+  );
+
   const setActiveColor = (c: string) => {
     if (tool() === 'highlighter') {
       setHighlighterColor(c);
@@ -353,6 +412,26 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       const ed = editingText();
       if (ed) {
         setEditingText({ pageId: ed.pageId, item: { ...ed.item, color: c } });
+      }
+    }
+  };
+
+  const setCustomColorFromPicker = (hex: string) => {
+    const normalized = hex.toLowerCase();
+    setActiveColor(normalized);
+    if (tool() === 'highlighter') {
+      const isPreset = HIGHLIGHTER_COLORS.some(
+        (sw) => sw.value.toLowerCase() === normalized
+      );
+      if (!isPreset) {
+        setCustomHighlighterColor(normalized);
+      }
+    } else {
+      const isPreset = PEN_COLORS.some(
+        (sw) => sw.value.toLowerCase() === normalized
+      );
+      if (!isPreset) {
+        setCustomPenColor(normalized);
       }
     }
   };
@@ -1795,18 +1874,35 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 );
               }}
             </For>
+            <Show when={activeCustomColor()}>
+              {(savedHex) => (
+                <button
+                  type="button"
+                  class="color-swatch is-custom-slot"
+                  classList={{
+                    'is-active':
+                      activeColor().toLowerCase() === savedHex().toLowerCase(),
+                  }}
+                  style={{ '--swatch-color': savedHex() }}
+                  onClick={() => setActiveColor(savedHex())}
+                  title={`Eigene Farbe (${savedHex().toUpperCase()})`}
+                  aria-label={`Eigene Farbe ${savedHex().toUpperCase()}`}
+                />
+              )}
+            </Show>
             <ColorPickerPopover
               value={
-                activeColor() === 'auto'
-                  ? paperIsDark()
-                    ? '#f1f5f9'
-                    : '#1e293b'
-                  : activeColor()
-              }
-              isCustomActive={
+                activeColor() !== 'auto' &&
                 !colorPalette().some(
                   (sw) => sw.value.toLowerCase() === activeColor().toLowerCase()
                 )
+                  ? activeColor()
+                  : activeCustomColor() ??
+                    (activeColor() === 'auto'
+                      ? paperIsDark()
+                        ? '#f1f5f9'
+                        : '#1e293b'
+                      : activeColor())
               }
               palette={tool() === 'highlighter' ? 'highlighter' : 'ink'}
               title={
@@ -1819,7 +1915,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 setSizeMenuOpen(false);
                 setSpellMenuOpen(false);
               }}
-              onChange={(hex) => setActiveColor(hex)}
+              onChange={(hex) => setCustomColorFromPicker(hex)}
             />
           </div>
           <div class="toolbar-divider" />
