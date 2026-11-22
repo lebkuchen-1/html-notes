@@ -208,6 +208,8 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
   let popoverRef: HTMLDivElement | undefined;
   let svAreaRef: HTMLDivElement | undefined;
   let hueBarRef: HTMLDivElement | undefined;
+  let hexFieldRef: HTMLLabelElement | undefined;
+  let hexInputRef: HTMLInputElement | undefined;
   let draggingSvPointerId: number | null = null;
   let draggingHuePointerId: number | null = null;
   let pickedAnyDuringOpen = false;
@@ -283,6 +285,16 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
 
     const handleDocPointerDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
+      if (editingHex() && (!target || !hexFieldRef?.contains(target))) {
+        const parsed = parseHexColor(hexDraft());
+        if (parsed) {
+          applyHexDirect(parsed);
+        } else {
+          setHexDraft(liveHex().toUpperCase());
+        }
+        hexInputRef?.blur();
+        setEditingHex(false);
+      }
       if (
         (triggerRef && target && triggerRef.contains(target)) ||
         (popoverRef && target && popoverRef.contains(target))
@@ -290,6 +302,20 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
         return;
       }
       closePopover();
+    };
+
+    const handleCaptureTouchStart = (e: TouchEvent) => {
+      const target = e.target as Node | null;
+      if (editingHex() && (!target || !hexFieldRef?.contains(target))) {
+        const parsed = parseHexColor(hexDraft());
+        if (parsed) {
+          applyHexDirect(parsed);
+        } else {
+          setHexDraft(liveHex().toUpperCase());
+        }
+        hexInputRef?.blur();
+        setEditingHex(false);
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -301,13 +327,20 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
 
     const handleReposition = () => updatePopoverPosition();
 
-    document.addEventListener('pointerdown', handleDocPointerDown);
+    document.addEventListener('pointerdown', handleDocPointerDown, { capture: true });
+    document.addEventListener('touchstart', handleCaptureTouchStart, {
+      capture: true,
+      passive: true,
+    });
     document.addEventListener('keydown', handleKeyDown);
     window.addEventListener('resize', handleReposition);
     window.addEventListener('scroll', handleReposition, true);
 
     onCleanup(() => {
-      document.removeEventListener('pointerdown', handleDocPointerDown);
+      document.removeEventListener('pointerdown', handleDocPointerDown, { capture: true });
+      document.removeEventListener('touchstart', handleCaptureTouchStart, {
+        capture: true,
+      });
       document.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleReposition);
       window.removeEventListener('scroll', handleReposition, true);
@@ -587,10 +620,17 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
                   </button>
                 }
               >
-                <label class="cp-hex-field" title="Hex-Farbcode eingeben">
+                <label
+                  ref={hexFieldRef}
+                  class="cp-hex-field"
+                  title="Hex-Farbcode eingeben"
+                >
                   <span class="cp-hex-label">HEX</span>
                   <input
-                    ref={(el) => requestAnimationFrame(() => el.focus())}
+                    ref={(el) => {
+                      hexInputRef = el;
+                      requestAnimationFrame(() => el.focus());
+                    }}
                     type="text"
                     class="cp-hex-input"
                     value={hexDraft()}

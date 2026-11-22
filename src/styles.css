@@ -1270,15 +1270,18 @@ button {
 }
 
 .note-title-input {
-  border: none;
-  background: transparent;
+  border: 1px solid var(--accent);
+  background: var(--bg-surface-alt);
+  border-radius: 6px;
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-primary);
   outline: none;
   width: 100%;
-  padding: 0;
+  padding: 1px 6px;
+  margin-left: -6px;
+  box-shadow: 0 0 0 2px var(--accent-soft);
   user-select: text;
   -webkit-user-select: text;
 }

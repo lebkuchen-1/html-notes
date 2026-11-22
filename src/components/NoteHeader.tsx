@@ -43,6 +43,8 @@ export function NoteHeader(props: NoteHeaderProps) {
   const [editingTitle, setEditingTitle] = createSignal(false);
   const [titleSpellOpen, setTitleSpellOpen] = createSignal(false);
   let titleInputRef: HTMLInputElement | undefined;
+  let titleRowRef: HTMLDivElement | undefined;
+  let tagInputRef: HTMLInputElement | undefined;
   let titleSpellRef: HTMLDivElement | undefined;
 
   const note = () => props.store.activeNote();
@@ -74,8 +76,41 @@ export function NoteHeader(props: NoteHeaderProps) {
         setTitleSpellOpen(false);
       }
     };
+
+    // Capture-phase dismissal so tapping/drawing on the canvas (which calls preventDefault()
+    // and therefore suppresses native input blur) or tapping any UI area immediately closes
+    // the active title/tag input and prevents iPadOS Scribble from staying latched to it.
+    const handleCaptureOutsideInput = (e: Event) => {
+      const target = e.target as Node | null;
+      if (editingTitle()) {
+        if (!target || !titleRowRef?.contains(target)) {
+          titleInputRef?.blur();
+          setEditingTitle(false);
+        }
+      }
+      if (addingTag()) {
+        if (!target || !tagInputRef?.contains(target)) {
+          tagInputRef?.blur();
+          submitTag();
+        }
+      }
+    };
+
     document.addEventListener('pointerdown', handleOutside);
-    onCleanup(() => document.removeEventListener('pointerdown', handleOutside));
+    document.addEventListener('pointerdown', handleCaptureOutsideInput, { capture: true });
+    document.addEventListener('touchstart', handleCaptureOutsideInput, {
+      capture: true,
+      passive: true,
+    });
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', handleOutside);
+      document.removeEventListener('pointerdown', handleCaptureOutsideInput, {
+        capture: true,
+      });
+      document.removeEventListener('touchstart', handleCaptureOutsideInput, {
+        capture: true,
+      });
+    });
   });
 
   createEffect(() => {
@@ -134,7 +169,7 @@ export function NoteHeader(props: NoteHeaderProps) {
         <Show when={note()}>
           {(current) => (
             <div class="title-area">
-              <div class="title-input-row">
+              <div class="title-input-row" ref={titleRowRef}>
                 <Show
                   when={editingTitle()}
                   fallback={
@@ -312,7 +347,10 @@ export function NoteHeader(props: NoteHeaderProps) {
                   }
                 >
                   <input
-                    ref={(el) => requestAnimationFrame(() => el.focus())}
+                    ref={(el) => {
+                      tagInputRef = el;
+                      requestAnimationFrame(() => el.focus());
+                    }}
                     type="text"
                     class="tag-input"
                     value={tagDraft()}
