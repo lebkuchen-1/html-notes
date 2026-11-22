@@ -518,6 +518,7 @@ export function Sidebar(props: SidebarProps) {
         <input
           type="text"
           value={treeFilter()}
+          disabled={!props.store.sidebarOpen()}
           onInput={(e) => setTreeFilter(e.currentTarget.value)}
           placeholder="Schnellfilter…"
           aria-label="Seitenleiste filtern"

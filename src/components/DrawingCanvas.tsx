@@ -1763,7 +1763,19 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       }}
     >
       {/* Drawing Toolbar */}
-      <div class="pane-toolbar canvas-toolbar">
+      <div
+        class="pane-toolbar canvas-toolbar"
+        onPointerDown={(e) => {
+          if (tool() === 'scribble' || editingText()) {
+            const rawTarget = e.target as Node | null;
+            const targetEl =
+              rawTarget instanceof Element ? rawTarget : rawTarget?.parentElement ?? null;
+            if (targetEl?.closest('button') && !targetEl.closest('input, textarea, select')) {
+              e.preventDefault();
+            }
+          }
+        }}
+      >
         <div class="toolbar-group">
           <For each={TOOL_ITEMS}>
             {(item) => (

@@ -195,6 +195,7 @@ interface ColorPickerPopoverProps {
 
 export function ColorPickerPopover(props: ColorPickerPopoverProps) {
   const [open, setOpen] = createSignal(false);
+  const [editingHex, setEditingHex] = createSignal(false);
   const [pos, setPos] = createSignal<{ top: number; left: number }>({ top: 64, left: 16 });
   const [hsv, setHsv] = createSignal<{ h: number; s: number; v: number }>(
     hexToHsv(props.value)
@@ -257,6 +258,7 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
     }
     draggingSvPointerId = null;
     draggingHuePointerId = null;
+    setEditingHex(false);
     setOpen(false);
   };
 
@@ -268,6 +270,7 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
       const nextHsv = hexToHsv(currentHex());
       setHsv((old) => (nextHsv.s < 0.001 ? { h: old.h, s: nextHsv.s, v: nextHsv.v } : nextHsv));
       setHexDraft(currentHex().toUpperCase());
+      setEditingHex(false);
       pickedAnyDuringOpen = false;
       updatePopoverPosition();
       setOpen(true);
@@ -564,51 +567,77 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
               </div>
             </Show>
 
-            {/* Hex Input + Done Button */}
+            {/* Click-to-edit Hex Input + Done Button (prevents iPadOS Scribble hijacking swatches) */}
             <div class="cp-footer">
-              <label class="cp-hex-field" title="Hex-Farbcode eingeben">
-                <span class="cp-hex-label">HEX</span>
-                <input
-                  type="text"
-                  class="cp-hex-input"
-                  value={hexDraft()}
-                  maxLength={7}
-                  spellcheck={false}
-                  autocomplete="off"
-                  onInput={(e) => {
-                    const raw = e.currentTarget.value;
-                    setHexDraft(raw);
-                    const parsed = parseHexColor(raw);
-                    if (parsed) {
-                      const next = hexToHsv(parsed);
-                      setHsv((old) =>
-                        next.s < 0.001 ? { h: old.h, s: next.s, v: next.v } : next
-                      );
-                      pickedAnyDuringOpen = true;
-                      props.onChange?.(parsed);
-                    }
-                  }}
-                  onBlur={() => {
-                    const parsed = parseHexColor(hexDraft());
-                    if (parsed) {
-                      applyHexDirect(parsed);
-                    } else {
+              <Show
+                when={editingHex()}
+                fallback={
+                  <button
+                    type="button"
+                    class="cp-hex-field is-display-btn"
+                    onClick={() => {
                       setHexDraft(liveHex().toUpperCase());
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
+                      setEditingHex(true);
+                    }}
+                    title="Hex-Farbcode bearbeiten"
+                    aria-label={`Hex-Farbcode ${liveHex().toUpperCase()} bearbeiten`}
+                  >
+                    <span class="cp-hex-label">HEX</span>
+                    <span class="cp-hex-value">{liveHex().toUpperCase()}</span>
+                  </button>
+                }
+              >
+                <label class="cp-hex-field" title="Hex-Farbcode eingeben">
+                  <span class="cp-hex-label">HEX</span>
+                  <input
+                    ref={(el) => requestAnimationFrame(() => el.focus())}
+                    type="text"
+                    class="cp-hex-input"
+                    value={hexDraft()}
+                    maxLength={7}
+                    spellcheck={false}
+                    autocomplete="off"
+                    onInput={(e) => {
+                      const raw = e.currentTarget.value;
+                      setHexDraft(raw);
+                      const parsed = parseHexColor(raw);
+                      if (parsed) {
+                        const next = hexToHsv(parsed);
+                        setHsv((old) =>
+                          next.s < 0.001 ? { h: old.h, s: next.s, v: next.v } : next
+                        );
+                        pickedAnyDuringOpen = true;
+                        props.onChange?.(parsed);
+                      }
+                    }}
+                    onBlur={() => {
                       const parsed = parseHexColor(hexDraft());
                       if (parsed) {
-                        applyHexDirect(parsed, true);
+                        applyHexDirect(parsed);
                       } else {
-                        closePopover();
+                        setHexDraft(liveHex().toUpperCase());
                       }
-                    }
-                  }}
-                />
-              </label>
+                      setEditingHex(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const parsed = parseHexColor(hexDraft());
+                        if (parsed) {
+                          applyHexDirect(parsed, true);
+                        } else {
+                          closePopover();
+                        }
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setHexDraft(liveHex().toUpperCase());
+                        setEditingHex(false);
+                      }
+                    }}
+                  />
+                </label>
+              </Show>
               <button
                 type="button"
                 class="cp-done-btn"

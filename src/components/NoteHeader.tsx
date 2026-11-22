@@ -40,12 +40,19 @@ const VIEW_MODES: { id: ViewMode; label: string }[] = [
 export function NoteHeader(props: NoteHeaderProps) {
   const [tagDraft, setTagDraft] = createSignal('');
   const [addingTag, setAddingTag] = createSignal(false);
+  const [editingTitle, setEditingTitle] = createSignal(false);
   const [titleSpellOpen, setTitleSpellOpen] = createSignal(false);
   let titleInputRef: HTMLInputElement | undefined;
   let titleSpellRef: HTMLDivElement | undefined;
 
   const note = () => props.store.activeNote();
   const effSettings = () => props.store.effectiveSettings();
+
+  // Exit title editing whenever switching to a different note
+  createEffect(() => {
+    void props.store.activeNoteId();
+    setEditingTitle(false);
+  });
 
   const titleSpellIssues = createMemo<SpellIssue[]>(() => {
     void getSpellCheckRevision();
@@ -128,20 +135,47 @@ export function NoteHeader(props: NoteHeaderProps) {
           {(current) => (
             <div class="title-area">
               <div class="title-input-row">
-                <input
-                  ref={(el) => {
-                    titleInputRef = el;
-                    el.value = current().title;
-                  }}
-                  type="text"
-                  class="note-title-input"
-                  lang={getHtmlLangForSpellCheck(effSettings().spellCheckLanguage)}
-                  spellcheck={effSettings().spellCheckEnabled}
-                  autocorrect="on"
-                  onInput={(e) => props.store.updateTitle(e.currentTarget.value)}
-                  placeholder="Titel der Notiz…"
-                  aria-label="Notiztitel"
-                />
+                <Show
+                  when={editingTitle()}
+                  fallback={
+                    <button
+                      type="button"
+                      class="note-title-display"
+                      classList={{ 'is-placeholder': !current().title.trim() }}
+                      onClick={() => setEditingTitle(true)}
+                      title="Tippen zum Umbenennen der Notiz"
+                      aria-label={`Notiztitel: ${current().title.trim() || 'Ohne Titel'} (zum Bearbeiten tippen)`}
+                    >
+                      {current().title || 'Titel der Notiz…'}
+                    </button>
+                  }
+                >
+                  <input
+                    ref={(el) => {
+                      titleInputRef = el;
+                      el.value = current().title;
+                      requestAnimationFrame(() => {
+                        el.focus();
+                      });
+                    }}
+                    type="text"
+                    class="note-title-input"
+                    lang={getHtmlLangForSpellCheck(effSettings().spellCheckLanguage)}
+                    spellcheck={effSettings().spellCheckEnabled}
+                    autocorrect="on"
+                    onInput={(e) => props.store.updateTitle(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === 'Escape') {
+                        e.preventDefault();
+                        e.currentTarget.blur();
+                        setEditingTitle(false);
+                      }
+                    }}
+                    onBlur={() => setEditingTitle(false)}
+                    placeholder="Titel der Notiz…"
+                    aria-label="Notiztitel"
+                  />
+                </Show>
                 <Show when={titleSpellIssues().length > 0}>
                   <div class="title-spell-anchor" ref={titleSpellRef}>
                     <button
