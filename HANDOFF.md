@@ -7,15 +7,12 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **DE/EN-Rechtschreibprüfung für Handschrift-zu-Text, Canvas-Texte, Notiztitel & Markdown-Editor (`src/utils/spellcheck.ts`, `public/dictionaries/`, `src/utils/canvasRenderer.ts`, `DrawingCanvas.tsx`, `NoteHeader.tsx`, `TextEditor.tsx`, `SettingsPage.tsx`):**
-   - Offline-fähige Hunspell-Engine (`nspell`) mit lazy-geladenen Deutsch- & Englisch-Wörterbüchern (`public/dictionaries/{de,en}.{aff,dic}`, Cache-API-gecacht) und 3 Modi: **`DE + EN`** (gemischt, Standard), **`Deutsch`** (`de-DE`) und **`Englisch`** (`en-US`).
-   - Unterstützt deutsche Komposita, Bindestrich-Wörter, englische Kontraktionen, Levenshtein-gerankte 1-Tap-Korrekturvorschläge und ein dauerhaftes **Persönliches Wörterbuch** (`+ Wörterbuch`, verwaltbar in *Einstellungen → Global*).
-   - Rote Wellenlinien direkt auf gerenderten Canvas-Texten (im Seiten- & Unendlich-Modus; beim PNG-Export sauber ausgeblendet) sowie Toolbar-Fehler-Popover mit 1-Tap-Korrektur für Canvas, Notiztitel und Markdown-Editor.
-   - Natives `spellcheck` + `lang` + `autocorrect="on"` auf allen Eingabefeldern (Notiztitel, Kritzeln-/Canvas-Textfeld, Texteditor) für optimales iPadOS-Kritzeln.
-2. **„Handschrift → Text“-Modus (Apple Pencil Kritzeln) auf dem Canvas (`src/components/CanvasTextOverlay.tsx`, `DrawingCanvas.tsx`, `CanvasPageSheet.tsx`, `InfiniteCanvasView.tsx`):**
-   - Neues Werkzeug **`H→Text`** (`scribble`) direkt neben dem Stift in der Canvas-Toolbar.
-   - Flexibler Ablauf (Seiten- & Unendlich-Modus): Beim Aktivieren öffnet sich sofort ein großzügiges, transparentes Kritzeln-Feld direkt über den Papierlinien (`maxWidth`-Zeilenumbruch synchron zwischen Textarea & Canvas-Renderer); per Tipp an beliebiger Stelle auf dem Blatt startet sofort ein neuer Textblock, per `+`-Button ein Folgeblock darunter.
-   - Integrierte schwebende Leiste mit Sprach-Umschalter (`DE·EN`/`DE`/`EN`), Schriftart/-größe/Fett und Live-Rechtschreib-Chip-Leiste direkt unter dem Schreibfeld.
+1. **Lasso-Werkzeug für Seiten- & Unendlich-Canvas (`src/utils/lasso.ts`, `src/components/CanvasLassoOverlay.tsx`, `src/utils/canvasRenderer.ts`, `DrawingCanvas.tsx`, `CanvasPageSheet.tsx`, `InfiniteCanvasView.tsx`, `src/styles.css`):**
+   - Neues **Lasso**-Werkzeug (`lasso`) direkt neben dem Auswahl-Werkzeug in der Canvas-Toolbar (mit `IconLasso`).
+   - **Freihand-Einkreisen & Tap-to-Select:** Freihand-Schlinge wählt umschlossene Striche (Stift, Textmarker, Linien, Pfeile, Rechtecke, Ellipsen), Canvas-Texte und bewegliche Bilder aus (gesperrte PDF-/Bild-Seitenhintergründe bleiben unberührt). Ein kurzer Tipp wählt direkt ein einzelnes Objekt aus bzw. hebt eine aktive Auswahl auf.
+   - **120Hz-Live-Verschieben & proportionales Skalieren:** Während des Ziehens/Skalierens (4 Eck-Anfasser mit vergrößerter Touch-Hitbox für iPad) blendet das statische `baseCanvas` die ausgewählten Elemente über `hiddenIds` einmalig aus, während das `liveCanvas` sie flüssig transformiert rendert und beim Loslassen als einen Undo-Schritt committed.
+   - **Schwebende Aktionsleiste & seiten-/notizübergreifende Zwischenablage:** Umfärben (alle ausgewählten Striche & Texte inkl. `Auto`-Tinte & Farbwähler), Duplizieren (`Strg+D`), Kopieren (`Strg+C`), Ausschneiden (`Strg+X`), Einfügen (`Strg+V` oder Toolbar-Button — auch auf anderen Seiten/Notizen) und Löschen (`Entf`/`Rücktaste`).
+   - **iPadOS & Palm Rejection:** Volle Palm Rejection beim Zeichnen der Lasso-Schlinge; innerhalb des Auswahlrahmens (`.canvas-lasso-selection`) ist Ziehen/Skalieren mit Apple Pencil und Finger möglich, außerhalb greifen weiterhin 1-Finger-Scroll und 2-Finger-Pinch-to-Zoom.
 
 ## Offene Punkte
 - Keine offenen Aufgaben — bereit für das nächste Feature nach `/clear`.

@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -31,6 +32,21 @@ import {
   resolveStrokeColor,
 } from '../utils/canvasRenderer';
 import { extractImageFilesFromTransfer } from '../utils/imageImport';
+import {
+  applyTransformToPageSnapshot,
+  computeLassoSelectionBounds,
+  drawLassoPath,
+  getLassoItemCount,
+  IDENTITY_LASSO_TRANSFORM,
+  renderSelectedItemsPreview,
+  selectPageItemAtPoint,
+  selectPageItemsInLasso,
+  transformBounds,
+  type LassoBounds,
+  type LassoPoint,
+  type LassoSelection,
+  type LassoTransform,
+} from '../utils/lasso';
 import { extractPdfFilesFromTransfer } from '../utils/pageImport';
 import { getSpellCheckRevision } from '../utils/spellcheck';
 import { generateId } from '../utils/storage';
@@ -38,6 +54,10 @@ import {
   StrokeStabilizer,
   type StabilizationLevel,
 } from '../utils/strokeStabilizer';
+import {
+  CanvasLassoOverlay,
+  type LassoResizeCorner,
+} from './CanvasLassoOverlay';
 import { CanvasTextOverlay } from './CanvasTextOverlay';
 import {
   IconBringFront,
@@ -104,12 +124,19 @@ interface CanvasPageSheetProps {
   spellCheckLanguage: SpellCheckLanguage;
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
+  lassoSelection: LassoSelection | null;
   onPointerTypeChange: (type: string) => void;
   onPenPointerDown: () => void;
   onSetEditingText: (next: EditingTextState | null) => void;
   onCommitEditingText: () => void;
   onExitScribble: () => void;
   onSetSelectedImage: (next: SelectedImageState | null) => void;
+  onSetLassoSelection: (next: LassoSelection | null) => void;
+  onCopyLasso: () => void;
+  onCutLasso: () => void;
+  onDuplicateLasso: () => void;
+  onRecolorLasso: (color: string) => void;
+  onDeleteLasso: () => void;
   onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onSyncTextStyle: (patch: {
     fontSize?: number;
@@ -130,6 +157,8 @@ interface CanvasPageSheetProps {
 export function CanvasPageSheet(props: CanvasPageSheetProps) {
   const [hoveredTextId, setHoveredTextId] = createSignal<string | null>(null);
   const [isSheetDragOver, setIsSheetDragOver] = createSignal<boolean>(false);
+  const [lassoTransform, setLassoTransform] = createSignal<LassoTransform | null>(null);
+  const isLassoTransforming = createMemo(() => lassoTransform() !== null);
 
   let baseCanvasRef: HTMLCanvasElement | undefined;
   let liveCanvasRef: HTMLCanvasElement | undefined;
@@ -143,6 +172,20 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
   let lastPointerEventWallTime = 0;
   let activeStroke: Stroke | null = null;
   let activeStabilizer: StrokeStabilizer | null = null;
+
+  // Freehand lasso loop state
+  let isLassoDrawing = false;
+  let lassoPoints: LassoPoint[] = [];
+  let hadLassoSelectionAtDown = false;
+  let lassoTransformState: {
+    mode: 'move' | LassoResizeCorner;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    origBounds: LassoBounds;
+    selection: LassoSelection;
+    changed: boolean;
+  } | null = null;
 
   // Incremental pen rendering cursors (O(1) per pointermove on liveCanvas!)
   let penDrawnCount = 0;
@@ -196,6 +239,35 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     const sel = props.selectedImage;
     if (!sel || sel.pageId !== props.pageId) return undefined;
     return page()?.images.find((img) => img.id === sel.imageId);
+  });
+
+  const localLassoSelection = createMemo<LassoSelection | null>(() => {
+    const sel = props.lassoSelection;
+    const p = page();
+    if (!sel || !p || sel.pageId !== props.pageId) return null;
+    const strokeIds = sel.strokeIds.filter((id) => p.strokes.some((s) => s.id === id));
+    const textIds = sel.textIds.filter((id) => p.texts.some((t) => t.id === id));
+    const imageIds = sel.imageIds.filter((id) => p.images.some((img) => img.id === id));
+    if (strokeIds.length === 0 && textIds.length === 0 && imageIds.length === 0) return null;
+    return { pageId: sel.pageId, strokeIds, textIds, imageIds };
+  });
+
+  const localLassoBounds = createMemo<LassoBounds | null>(() => {
+    const sel = localLassoSelection();
+    const p = page();
+    if (!sel || !p) return null;
+    void p.strokes;
+    void p.texts;
+    void p.images;
+    const ctx = baseCanvasRef?.getContext('2d') ?? null;
+    return computeLassoSelectionBounds(p, sel, ctx);
+  });
+
+  const displayedLassoBounds = createMemo<LassoBounds | null>(() => {
+    const b = localLassoBounds();
+    if (!b) return null;
+    const t = lassoTransform();
+    return t ? transformBounds(b, t) : b;
   });
 
   const cssSize = createMemo(() => {
@@ -274,6 +346,15 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
         ? { ...p, strokes: erasingStrokes, texts: erasingTexts }
         : p;
 
+    const lassoSel = isLassoTransforming() ? localLassoSelection() : null;
+    const hiddenIds = lassoSel
+      ? {
+          strokes: new Set(lassoSel.strokeIds),
+          texts: new Set(lassoSel.textIds),
+          images: new Set(lassoSel.imageIds),
+        }
+      : undefined;
+
     renderFullCanvas(ctx, effectivePage, null, props.store.theme(), renderScale, {
       editingTextId: localEditingText()?.id ?? null,
       hoveredTextId:
@@ -285,11 +366,12 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
         enabled: props.spellCheckEnabled,
         language: props.spellCheckLanguage,
       },
+      hiddenIds,
     });
 
     if (pendingLiveClearAfterBaseRender) {
       pendingLiveClearAfterBaseRender = false;
-      if (!activeStroke) {
+      if (!activeStroke && !isLassoDrawing && !lassoTransform()) {
         clearLiveCanvas();
       }
     }
@@ -351,8 +433,30 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       return;
     }
 
-    // Other live previews: Highlighter, Shapes, or Eraser cursor ring
+    // Other live previews: Lasso loop, Lasso drag/resize preview, Highlighter, Shapes, or Eraser cursor ring
     ctx.clearRect(0, 0, targetW, targetH);
+
+    if (isLassoDrawing && lassoPoints.length >= 2) {
+      const dark = isPaperDark(p.paperConfig, props.store.theme());
+      ctx.save();
+      ctx.scale(renderScale, renderScale);
+      drawLassoPath(ctx, lassoPoints, 1 / Math.max(0.45, cssSize().scale), dark);
+      ctx.restore();
+      return;
+    }
+
+    const activeLassoT = lassoTransform();
+    const activeLassoSel = localLassoSelection();
+    if (activeLassoT && activeLassoSel) {
+      ctx.save();
+      ctx.scale(renderScale, renderScale);
+      renderSelectedItemsPreview(ctx, p, activeLassoSel, activeLassoT, props.store.theme(), {
+        enabled: props.spellCheckEnabled,
+        language: props.spellCheckLanguage,
+      });
+      ctx.restore();
+      return;
+    }
 
     if (activeStroke) {
       ctx.save();
@@ -404,6 +508,8 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     void props.spellCheckEnabled;
     void props.spellCheckLanguage;
     void getSpellCheckRevision();
+    void isLassoTransforming();
+    void localLassoSelection();
     scheduleBaseRender();
   });
 
@@ -535,6 +641,9 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     activePointerType = null;
     activeStroke = null;
     activeStabilizer = null;
+    isLassoDrawing = false;
+    lassoPoints = [];
+    hadLassoSelectionAtDown = false;
     isErasing = false;
     erasingStrokes = null;
     erasingTexts = null;
@@ -557,6 +666,43 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     activePointerId = null;
     activePointerType = null;
     lastPoint = null;
+
+    if (isLassoDrawing) {
+      const pts = lassoPoints;
+      const hadSelectionBefore = hadLassoSelectionAtDown;
+      isLassoDrawing = false;
+      lassoPoints = [];
+      hadLassoSelectionAtDown = false;
+      clearLiveCanvas();
+
+      const p = page();
+      const shouldDiscard = cancelled && !wasPen;
+      if (!shouldDiscard && p && pts.length > 0) {
+        let totalLen = 0;
+        for (let i = 1; i < pts.length; i++) {
+          totalLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        }
+        const ctx = baseCanvasRef?.getContext('2d') ?? null;
+        if (totalLen < 14) {
+          // Short tap: dismiss existing selection, or tap-to-select a single object if none was active
+          if (hadSelectionBefore) {
+            props.onSetLassoSelection(null);
+          } else {
+            const hit = selectPageItemAtPoint(
+              p,
+              pts[0],
+              ctx,
+              10 / Math.max(0.45, cssSize().scale)
+            );
+            props.onSetLassoSelection(hit);
+          }
+        } else {
+          const selected = selectPageItemsInLasso(p, pts, ctx);
+          props.onSetLassoSelection(selected);
+        }
+      }
+      return;
+    }
 
     if (isErasing) {
       const p = page();
@@ -765,6 +911,8 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     if (props.editingText) props.onCommitEditingText();
     if (props.selectedImage) props.onSetSelectedImage(null);
+    hadLassoSelectionAtDown = Boolean(props.lassoSelection);
+    if (props.lassoSelection) props.onSetLassoSelection(null);
 
     e.preventDefault();
     props.onPointerTypeChange(e.pointerType);
@@ -796,6 +944,13 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       ? activeStabilizer.filter(rawPt, e.timeStamp || performance.now())
       : rawPt;
     lastPoint = pt;
+
+    if (currentTool === 'lasso') {
+      isLassoDrawing = true;
+      lassoPoints = [{ x: rawPt.x, y: rawPt.y }];
+      scheduleLiveRender();
+      return;
+    }
 
     if (currentTool === 'eraser') {
       isErasing = true;
@@ -874,6 +1029,16 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       const evTime = ev.timeStamp || e.timeStamp || performance.now();
       const rawPt = toLogicalPoint(ev, parentPointerType);
       lastMoveTime = evTime;
+
+      if (isLassoDrawing) {
+        const minStep = 2.5 / Math.max(0.45, cssSize().scale);
+        const prev = lassoPoints[lassoPoints.length - 1];
+        if (!prev || Math.hypot(rawPt.x - prev.x, rawPt.y - prev.y) >= minStep) {
+          lassoPoints.push({ x: rawPt.x, y: rawPt.y });
+        }
+        lastPoint = rawPt;
+        continue;
+      }
 
       if (isErasing) {
         eraserCursor = { x: rawPt.x, y: rawPt.y };
@@ -1083,6 +1248,118 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     }
   };
 
+  // ==================== LASSO MOVE & PROPORTIONAL RESIZE (120Hz LIVE LAYER) ====================
+  const startLassoTransform = (mode: 'move' | LassoResizeCorner, e: PointerEvent) => {
+    const sel = localLassoSelection();
+    const bounds = localLassoBounds();
+    if (!sel || !bounds) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isActivePage()) props.store.setActivePage(props.pageId);
+
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+    lassoTransformState = {
+      mode,
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      origBounds: { ...bounds },
+      selection: sel,
+      changed: false,
+    };
+    setLassoTransform({
+      ...IDENTITY_LASSO_TRANSFORM,
+      anchorX: bounds.x,
+      anchorY: bounds.y,
+    });
+    scheduleLiveRender();
+  };
+
+  const moveLassoTransform = (e: PointerEvent) => {
+    if (!lassoTransformState || e.pointerId !== lassoTransformState.pointerId) return;
+    e.preventDefault();
+    const scale = Math.max(0.2, cssSize().scale);
+    const dx = (e.clientX - lassoTransformState.startClientX) / scale;
+    const dy = (e.clientY - lassoTransformState.startClientY) / scale;
+
+    if (!lassoTransformState.changed && Math.hypot(dx, dy) < 1.2) return;
+    lassoTransformState.changed = true;
+
+    const orig = lassoTransformState.origBounds;
+    if (lassoTransformState.mode === 'move') {
+      setLassoTransform({
+        dx,
+        dy,
+        scale: 1,
+        anchorX: orig.x,
+        anchorY: orig.y,
+      });
+      scheduleLiveRender();
+      return;
+    }
+
+    const mode = lassoTransformState.mode;
+    const anchorX = mode === 'nw' || mode === 'sw' ? orig.x + orig.width : orig.x;
+    const anchorY = mode === 'nw' || mode === 'ne' ? orig.y + orig.height : orig.y;
+    const handleX = mode === 'nw' || mode === 'sw' ? orig.x : orig.x + orig.width;
+    const handleY = mode === 'nw' || mode === 'ne' ? orig.y : orig.y + orig.height;
+
+    const origVx = handleX - anchorX;
+    const origVy = handleY - anchorY;
+    const origLenSq = Math.max(1, origVx * origVx + origVy * origVy);
+    const currVx = handleX + dx - anchorX;
+    const currVy = handleY + dy - anchorY;
+    const rawScale = (currVx * origVx + currVy * origVy) / origLenSq;
+    const minScale = Math.max(0.15, 24 / Math.max(24, Math.max(orig.width, orig.height)));
+    const nextScale = Math.max(minScale, Math.min(8, rawScale));
+
+    setLassoTransform({
+      dx: 0,
+      dy: 0,
+      scale: nextScale,
+      anchorX,
+      anchorY,
+    });
+    scheduleLiveRender();
+  };
+
+  const endLassoTransform = (e: PointerEvent) => {
+    if (!lassoTransformState || e.pointerId !== lassoTransformState.pointerId) return;
+    const target = e.currentTarget as HTMLElement;
+    if (target.hasPointerCapture(e.pointerId)) {
+      try {
+        target.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    }
+
+    const state = lassoTransformState;
+    const finalTransform = lassoTransform();
+    lassoTransformState = null;
+
+    const p = page();
+    if (state.changed && finalTransform && p) {
+      const nextSnapshot = applyTransformToPageSnapshot(p, state.selection, finalTransform);
+      pendingLiveClearAfterBaseRender = true;
+      batch(() => {
+        setLassoTransform(null);
+        props.store.commitCanvasSnapshot(nextSnapshot, undefined, props.pageId);
+      });
+    } else {
+      setLassoTransform(null);
+      clearLiveCanvas();
+    }
+  };
+
   return (
     <Show when={page()}>
       {(currPage) => (
@@ -1264,6 +1541,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
                 'is-eraser': props.tool === 'eraser',
                 'is-text-tool': props.tool === 'text' || props.tool === 'scribble',
                 'is-select-tool': props.tool === 'select',
+                'is-lasso-tool': props.tool === 'lasso',
               }}
               style={{
                 width: `${cssSize().width}px`,
@@ -1277,6 +1555,41 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
               onPointerLeave={handlePointerLeave}
               onContextMenu={(e) => e.preventDefault()}
             />
+
+            {/* Lasso Selection Move / Resize / Action Overlay */}
+            <Show when={localLassoSelection() && displayedLassoBounds()}>
+              {(_) => {
+                const scale = () => cssSize().scale;
+                const sel = () => localLassoSelection()!;
+                const b = () => displayedLassoBounds()!;
+                const paperDark = () =>
+                  isPaperDark(currPage().paperConfig, props.store.theme());
+                return (
+                  <CanvasLassoOverlay
+                    leftPx={b().x * scale()}
+                    topPx={b().y * scale()}
+                    widthPx={b().width * scale()}
+                    heightPx={b().height * scale()}
+                    itemCount={getLassoItemCount(sel())}
+                    hasColorableItems={
+                      sel().strokeIds.length > 0 || sel().textIds.length > 0
+                    }
+                    paperIsDark={paperDark()}
+                    isTransforming={isLassoTransforming()}
+                    onStartMove={(e) => startLassoTransform('move', e)}
+                    onStartResize={(corner, e) => startLassoTransform(corner, e)}
+                    onMoveTransform={moveLassoTransform}
+                    onEndTransform={endLassoTransform}
+                    onRecolor={props.onRecolorLasso}
+                    onCopy={props.onCopyLasso}
+                    onCut={props.onCutLasso}
+                    onDuplicate={props.onDuplicateLasso}
+                    onDelete={props.onDeleteLasso}
+                    onDismiss={() => props.onSetLassoSelection(null)}
+                  />
+                );
+              }}
+            </Show>
 
             {/* Selected Image Move / Resize Overlay */}
             <Show when={localSelectedImage()}>

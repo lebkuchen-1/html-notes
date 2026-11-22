@@ -47,6 +47,8 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 | `src/utils/clipboardImport.ts` | Schnellimport-Parser für iPadOS *Teilen → Kopieren*, Zwischenablage (`navigator.clipboard.read()`), Paste-Events & Drag & Drop (PDFs, Bilder, URLs inkl. optionalem CORS-Direktdownload für PDF-/Bild-Links, Text & Base64-Payloads). |
 | `src/utils/markdown.ts` | XSS-sicherer Markdown-Renderer mit anklickbaren Checklisten (`data-line-index`) und `note-img://<id>`-Bildauflösung aus `note.attachments`. |
 | `src/utils/spellcheck.ts` | Offline-DE/EN-Rechtschreibprüfungs-Engine (`nspell` + lazy aus `public/dictionaries/{de,en}.{aff,dic}` mit Cache-API): gemischtes `DE + EN`, `DE` oder `EN`, deutsche Komposita- & Bindestrich-Prüfung, Levenshtein-gerankte Korrekturvorschläge, persönliches Wörterbuch in `localStorage` sowie `lang`-Mapping für iPadOS Apple Pencil Kritzeln. |
+| `src/utils/lasso.ts` | Lasso-Auswahl-Engine: Ray-Casting-Polygon-Hit-Testing für Striche, Formen, Texte & bewegliche Bilder (ignoriert gesperrte `backgroundImage`), Tap-to-Select, Bounding-Box-Berechnung, 120Hz-Live-Transform-Rendering (`renderSelectedItemsPreview`), Umfärben, Duplizieren, Löschen & seiten-/notizübergreifendes `LassoClipboard`. |
+| `src/components/CanvasLassoOverlay.tsx` | Gemeinsames interaktives Lasso-Auswahl-Overlay für `CanvasPageSheet` und `InfiniteCanvasView`: gestrichelter Rahmen zum Verschieben, 4 Eck-Anfasser zum proportionalen Skalieren (inkl. großer Touch-Hitboxen) und schwebende Aktionsleiste (Umfärben, Duplizieren, Kopieren, Ausschneiden, Löschen, Fertig). |
 | `src/components/CanvasTextOverlay.tsx` | Gemeinsames Inline-Text- & „Handschrift → Text“ (Kritzeln)-Overlay für `CanvasPageSheet` und `InfiniteCanvasView`: großzügiges, transparentes `<textarea>` direkt über den Papierlinien für natives iPadOS Apple Pencil Kritzeln (`spellcheck` + `lang`), Sprach-Umschalter (`DE·EN`/`DE`/`EN`) und Live-Rechtschreib-Chip-Leiste mit 1-Tap-Korrekturvorschlägen. |
 | `src/components/HomePage.tsx` | Startseite/Übersichtsseite (fester `Übersicht`-Tab): Begrüßung, Statistiken, Suche, Vollbild- & Theme-Toggle, Schnellstart-Vorlagen (inkl. *Unendliches Board* & PDF/Bild-Import), Ordnerkarten, Live-Canvas-Vorschaukarten (mit `∞`-Badge & Content-Fit für Infinite-Notizen). Teilt `filterMode` & `selectedFolderId` mit der Sidebar. |
 | `src/components/NoteTabs.tsx` | Obere Tab-Leiste für geöffnete Notizen + fester `Übersicht`-Tab links, Drag-&-Drop-Umsortierung, Mittelklick zum Schließen, Doppelklick für neuen Tab. Im Vollbildmodus ausgeblendet. |
@@ -125,8 +127,9 @@ Kompakte Projekt- und Architektur-Referenz für neue Sessions. Hält alle getrof
 - `Strg+,`: Einstellungen (lokal in Notiz / global auf Startseite) öffnen bzw. schließen (`Esc` schließt ebenfalls)
 - `Strg+Z` / `Strg+Umschalt+Z` (`Strg+Y`): Undo / Redo auf aktiver Canvas-Seite
 - `Strg+Umschalt+V`: Schnellimport-Dialog direkt aus der Zwischenablage öffnen
-- `Strg+V`: Bild aus Zwischenablage (im Canvas oder Text-Editor)
-- `Entf` / `Rücktaste`: Ausgewähltes Canvas-Bild löschen
-- `Esc`: Popovers / Seitenübersicht / Bildauswahl schließen bzw. Canvas-Text übernehmen
+- `Strg+V`: Bild aus Zwischenablage (im Canvas oder Text-Editor) bzw. kopierte Lasso-Auswahl einfügen
+- `Strg+C` / `Strg+X` / `Strg+D` (bei aktiver Lasso-Auswahl): Auswahl kopieren / ausschneiden / duplizieren
+- `Entf` / `Rücktaste`: Ausgewählte Lasso-Elemente oder Canvas-Bild löschen
+- `Esc`: Popovers / Seitenübersicht / Lasso- & Bildauswahl schließen bzw. Canvas-Text übernehmen
 - `Strg+Enter` (Canvas-Text): Text übernehmen (`Enter` = Zeilenumbruch)
 - `Strg+B` / `Strg+I` / `Tab` (Text-Editor): Fett / Kursiv / Einrückung

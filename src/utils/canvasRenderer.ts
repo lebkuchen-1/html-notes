@@ -617,7 +617,7 @@ export function drawCanvasText(
   ctx.restore();
 }
 
-function drawCanvasImage(
+export function drawCanvasImage(
   ctx: CanvasRenderingContext2D,
   item: CanvasImageItem,
   onImageLoad?: () => void
@@ -670,6 +670,12 @@ function drawPageBackgroundImage(
   ctx.restore();
 }
 
+export interface CanvasHiddenIds {
+  strokes?: ReadonlySet<string>;
+  texts?: ReadonlySet<string>;
+  images?: ReadonlySet<string>;
+}
+
 export function renderFullCanvas(
   ctx: CanvasRenderingContext2D,
   page: CanvasPage,
@@ -681,10 +687,15 @@ export function renderFullCanvas(
     hoveredTextId?: string | null;
     onImageLoad?: () => void;
     spellCheck?: CanvasSpellCheckOptions;
+    hiddenIds?: CanvasHiddenIds;
   }
 ) {
   ctx.save();
   ctx.scale(scale, scale);
+
+  const hiddenStrokes = options?.hiddenIds?.strokes;
+  const hiddenTexts = options?.hiddenIds?.texts;
+  const hiddenImages = options?.hiddenIds?.images;
 
   // 0. Base paper color + pattern
   drawPaperBackground(
@@ -700,12 +711,14 @@ export function renderFullCanvas(
 
   // 1. Imported movable images (underneath ink & text so user can annotate directly over images)
   for (const imgItem of page.images) {
+    if (hiddenImages?.has(imgItem.id)) continue;
     drawCanvasImage(ctx, imgItem, options?.onImageLoad);
   }
 
   // 2. Highlighters
   for (const stroke of page.strokes) {
     if (stroke.tool === 'highlighter') {
+      if (hiddenStrokes?.has(stroke.id)) continue;
       drawStroke(ctx, stroke, page.paperConfig, theme);
     }
   }
@@ -716,6 +729,7 @@ export function renderFullCanvas(
   // 3. Pen & geometric strokes
   for (const stroke of page.strokes) {
     if (stroke.tool !== 'highlighter') {
+      if (hiddenStrokes?.has(stroke.id)) continue;
       drawStroke(ctx, stroke, page.paperConfig, theme);
     }
   }
@@ -728,6 +742,7 @@ export function renderFullCanvas(
   const hoveredId = options?.hoveredTextId ?? null;
   for (const textItem of page.texts) {
     if (textItem.id === editingId) continue;
+    if (hiddenTexts?.has(textItem.id)) continue;
     drawCanvasText(
       ctx,
       textItem,
@@ -895,7 +910,7 @@ export interface ContentBounds {
   maxY: number;
 }
 
-function getStrokeBounds(stroke: Stroke): ContentBounds | null {
+export function getStrokeBounds(stroke: Stroke): ContentBounds | null {
   const pts = stroke.points;
   if (pts.length === 0) return null;
   let minX = Infinity;
@@ -1107,10 +1122,15 @@ export function renderInfiniteCanvas(
     hoveredTextId?: string | null;
     onImageLoad?: () => void;
     spellCheck?: CanvasSpellCheckOptions;
+    hiddenIds?: CanvasHiddenIds;
   }
 ) {
   // 0. Infinite seamless paper background
   drawInfinitePaperBackground(ctx, vpWidth, vpHeight, cam, page.paperConfig, theme, dpr);
+
+  const hiddenStrokes = options?.hiddenIds?.strokes;
+  const hiddenTexts = options?.hiddenIds?.texts;
+  const hiddenImages = options?.hiddenIds?.images;
 
   const totalScale = dpr * cam.zoom;
   const cullPad = 48 / Math.max(0.25, cam.zoom);
@@ -1136,6 +1156,7 @@ export function renderInfiniteCanvas(
 
   // 1. Imported movable images (viewport-culled)
   for (const imgItem of page.images) {
+    if (hiddenImages?.has(imgItem.id)) continue;
     if (
       imgItem.x + imgItem.width < viewMinX ||
       imgItem.x > viewMaxX ||
@@ -1150,6 +1171,7 @@ export function renderInfiniteCanvas(
   // 2. Highlighters (viewport-culled)
   for (const stroke of page.strokes) {
     if (stroke.tool !== 'highlighter') continue;
+    if (hiddenStrokes?.has(stroke.id)) continue;
     const b = getStrokeBounds(stroke);
     if (
       b &&
@@ -1163,6 +1185,7 @@ export function renderInfiniteCanvas(
   // 3. Pen & geometric strokes (viewport-culled)
   for (const stroke of page.strokes) {
     if (stroke.tool === 'highlighter') continue;
+    if (hiddenStrokes?.has(stroke.id)) continue;
     const b = getStrokeBounds(stroke);
     if (
       b &&
@@ -1178,6 +1201,7 @@ export function renderInfiniteCanvas(
   const hoveredId = options?.hoveredTextId ?? null;
   for (const textItem of page.texts) {
     if (textItem.id === editingId) continue;
+    if (hiddenTexts?.has(textItem.id)) continue;
     drawCanvasText(
       ctx,
       textItem,

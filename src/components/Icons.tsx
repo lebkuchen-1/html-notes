@@ -494,3 +494,24 @@ export const IconSpellCheck = (p: IconProps) => (
     <path d="M4 19c1-1 2 1 3 0s2 1 3 0" />
   </svg>
 );
+
+export const IconLasso = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path
+      d="M7 16.2C4.2 14.9 2.5 12.6 2.5 10c0-3.9 4.3-7 9.5-7s9.5 3.1 9.5 7-4.3 7-9.5 7c-.8 0-1.6-.1-2.4-.2"
+      stroke-dasharray="3.2 2.4"
+    />
+    <circle cx="8" cy="17.2" r="2.1" />
+    <path d="M9.4 18.8c1.4 1.3 3.4 2.2 5.6 2.2" />
+  </svg>
+);
+
+export const IconScissors = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <circle cx="6" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <path d="M20 4 8.12 15.88" />
+    <path d="M14.47 14.48 20 20" />
+    <path d="M8.12 8.12 12 12" />
+  </svg>
+);

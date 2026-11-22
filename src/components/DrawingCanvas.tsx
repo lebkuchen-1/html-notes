@@ -32,6 +32,18 @@ import {
   processImageFile,
 } from '../utils/imageImport';
 import {
+  deleteLassoSelection,
+  duplicateLassoSelection,
+  extractLassoClipboard,
+  formatLassoCountLabel,
+  getLassoClipboard,
+  getLassoItemCount,
+  pasteLassoClipboard,
+  recolorLassoSelection,
+  setLassoClipboard,
+  type LassoSelection,
+} from '../utils/lasso';
+import {
   extractPdfFilesFromTransfer,
   importFilesAsPages,
 } from '../utils/pageImport';
@@ -73,6 +85,7 @@ import {
   IconArrow,
   IconChevronLeft,
   IconChevronRight,
+  IconClipboardPaste,
   IconCrosshair,
   IconDownload,
   IconEllipse,
@@ -82,6 +95,7 @@ import {
   IconHighlighter,
   IconImage,
   IconInfinity,
+  IconLasso,
   IconLine,
   IconMaximize,
   IconPages,
@@ -152,6 +166,7 @@ const PATTERN_OPTIONS: { value: PaperPattern; label: string }[] = [
 
 const TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'select', label: 'Auswählen & Verschieben' },
+  { id: 'lasso', label: 'Lasso (Einkreisen, Verschieben & Skalieren)' },
   { id: 'pen', label: 'Stift' },
   { id: 'scribble', label: 'Handschrift → Text (Kritzeln)' },
   { id: 'highlighter', label: 'Textmarker' },
@@ -255,6 +270,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
   const [editingText, setEditingText] = createSignal<EditingTextState | null>(null);
   const [selectedImage, setSelectedImage] = createSignal<SelectedImageState | null>(null);
+  const [lassoSelection, setLassoSelection] = createSignal<LassoSelection | null>(null);
 
   let viewportRef: HTMLDivElement | undefined;
   let scrollContentRef: HTMLDivElement | undefined;
@@ -468,6 +484,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (prevNoteId !== null && prevNoteId !== id) {
         setEditingText(null);
         setSelectedImage(null);
+        setLassoSelection(null);
         setOverviewOpen(false);
         setSizeMenuOpen(false);
         setPaperMenuOpen(false);
@@ -602,7 +619,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (!(target instanceof Element)) return false;
       return Boolean(
         target.closest(
-          'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection, .paper-popover'
+          'button, input, select, textarea, label, a, .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .paper-popover'
         )
       );
     };
@@ -1187,6 +1204,84 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
   };
 
+  // ==================== LASSO SELECTION ACTIONS ====================
+  const getLassoTargetPage = () => {
+    const sel = lassoSelection();
+    if (!sel) return null;
+    const targetPage = pages().find((p) => p.id === sel.pageId);
+    if (!targetPage) return null;
+    return { sel, page: targetPage };
+  };
+
+  const handleLassoDelete = () => {
+    const ctx = getLassoTargetPage();
+    if (!ctx) return;
+    const count = getLassoItemCount(ctx.sel);
+    const nextSnapshot = deleteLassoSelection(ctx.page, ctx.sel);
+    setLassoSelection(null);
+    props.store.commitCanvasSnapshot(nextSnapshot, undefined, ctx.page.id);
+    props.store.showToast(`${formatLassoCountLabel(count)} gelöscht`);
+  };
+
+  const handleLassoRecolor = (color: string) => {
+    const ctx = getLassoTargetPage();
+    if (!ctx) return;
+    const nextSnapshot = recolorLassoSelection(ctx.page, ctx.sel, color);
+    props.store.commitCanvasSnapshot(nextSnapshot, undefined, ctx.page.id);
+  };
+
+  const handleLassoDuplicate = () => {
+    const ctx = getLassoTargetPage();
+    if (!ctx) return;
+    const { snapshot, nextSelection } = duplicateLassoSelection(ctx.page, ctx.sel, {
+      dx: 24,
+      dy: 24,
+    });
+    props.store.commitCanvasSnapshot(snapshot, undefined, ctx.page.id);
+    setLassoSelection(nextSelection);
+    props.store.showToast(`${formatLassoCountLabel(getLassoItemCount(nextSelection))} dupliziert`);
+  };
+
+  const handleLassoCopy = () => {
+    const ctx = getLassoTargetPage();
+    if (!ctx) return;
+    const measureCtx = document.createElement('canvas').getContext('2d');
+    const data = extractLassoClipboard(ctx.page, ctx.sel, measureCtx);
+    if (!data) return;
+    setLassoClipboard(data);
+    props.store.showToast(`${formatLassoCountLabel(getLassoItemCount(ctx.sel))} kopiert`);
+  };
+
+  const handleLassoCut = () => {
+    const ctx = getLassoTargetPage();
+    if (!ctx) return;
+    const count = getLassoItemCount(ctx.sel);
+    const measureCtx = document.createElement('canvas').getContext('2d');
+    const data = extractLassoClipboard(ctx.page, ctx.sel, measureCtx);
+    if (!data) return;
+    setLassoClipboard(data);
+    const nextSnapshot = deleteLassoSelection(ctx.page, ctx.sel);
+    setLassoSelection(null);
+    props.store.commitCanvasSnapshot(nextSnapshot, undefined, ctx.page.id);
+    props.store.showToast(`${formatLassoCountLabel(count)} ausgeschnitten`);
+  };
+
+  const handleLassoPaste = () => {
+    const clip = getLassoClipboard();
+    const currPage = page();
+    if (!clip || !currPage) return;
+    if (editingText()) commitEditingText();
+    setSelectedImage(null);
+    const targetCenter = isInfiniteMode()
+      ? infiniteHandle?.getViewportCenterWorld()
+      : undefined;
+    const { snapshot, nextSelection } = pasteLassoClipboard(currPage, clip, targetCenter);
+    props.store.commitCanvasSnapshot(snapshot, undefined, currPage.id);
+    setTool('lasso');
+    setLassoSelection(nextSelection);
+    props.store.showToast(`${formatLassoCountLabel(getLassoItemCount(nextSelection))} eingefügt`);
+  };
+
   onMount(() => {
     const handleDocPointerDown = (e: PointerEvent) => {
       if (paperMenuOpen() && paperMenuRef && !paperMenuRef.contains(e.target as Node)) {
@@ -1207,6 +1302,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         if (spellMenuOpen()) setSpellMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
         if (selectedImage()) setSelectedImage(null);
+        if (lassoSelection()) setLassoSelection(null);
         if (tool() === 'scribble') exitScribbleMode();
       }
 
@@ -1217,12 +1313,38 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         Boolean(target?.isContentEditable);
 
       if (!isEditable && (e.key === 'Delete' || e.key === 'Backspace')) {
+        if (lassoSelection()) {
+          e.preventDefault();
+          handleLassoDelete();
+          return;
+        }
         const sel = selectedImage();
         if (sel) {
           e.preventDefault();
           setSelectedImage(null);
           props.store.deleteCanvasImage(sel.imageId, sel.pageId);
           props.store.showToast('Bild entfernt');
+        }
+      }
+
+      if (!isEditable && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (lassoSelection()) {
+          if (key === 'c') {
+            e.preventDefault();
+            handleLassoCopy();
+            return;
+          }
+          if (key === 'x') {
+            e.preventDefault();
+            handleLassoCut();
+            return;
+          }
+          if (key === 'd') {
+            e.preventDefault();
+            handleLassoDuplicate();
+            return;
+          }
         }
       }
     };
@@ -1240,6 +1362,15 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (files.length > 0 && currPageId) {
         e.preventDefault();
         void importImagesToPage(currPageId, files);
+        return;
+      }
+
+      if (getLassoClipboard() && currPageId) {
+        const plainText = e.clipboardData?.getData('text/plain')?.trim() ?? '';
+        if (tool() === 'lasso' || plainText.length === 0) {
+          e.preventDefault();
+          handleLassoPaste();
+        }
       }
     };
 
@@ -1342,6 +1473,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
     if (nextTool !== 'select') {
       setSelectedImage(null);
+    }
+    if (nextTool !== 'lasso') {
+      setLassoSelection(null);
     }
 
     setTool(nextTool);
@@ -1557,6 +1691,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 aria-label={item.label}
               >
                 {item.id === 'select' && <IconPointer size={15} />}
+                {item.id === 'lasso' && <IconLasso size={15} />}
                 {item.id === 'pen' && <IconPen size={15} />}
                 {item.id === 'scribble' && (
                   <>
@@ -1603,7 +1738,22 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
         <div class="toolbar-divider" />
 
-        <Show when={tool() !== 'eraser' && tool() !== 'select'}>
+        <Show when={tool() === 'lasso' && getLassoClipboard()}>
+          <div class="toolbar-group">
+            <button
+              type="button"
+              class="tool-pill"
+              onClick={() => handleLassoPaste()}
+              title="Kopierte Lasso-Auswahl auf dieser Seite einfügen (Strg+V)"
+            >
+              <IconClipboardPaste size={14} />
+              <span class="hide-compact">Einfügen</span>
+            </button>
+          </div>
+          <div class="toolbar-divider" />
+        </Show>
+
+        <Show when={tool() !== 'eraser' && tool() !== 'select' && tool() !== 'lasso'}>
           <div class="toolbar-group color-group">
             <For each={colorPalette()}>
               {(swatch) => {
@@ -1647,7 +1797,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           <div class="toolbar-divider" />
         </Show>
 
-        <Show when={tool() !== 'select'}>
+        <Show when={tool() !== 'select' && tool() !== 'lasso'}>
           <div class="toolbar-group size-group">
             <Show
               when={
@@ -2239,6 +2389,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             disabled={!props.store.canUndo()}
             onClick={() => {
               if (editingText()) setEditingText(null);
+              if (lassoSelection()) setLassoSelection(null);
               props.store.undoCanvas();
             }}
             title="Rückgängig auf aktiver Seite (Strg+Z)"
@@ -2252,6 +2403,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             disabled={!props.store.canRedo()}
             onClick={() => {
               if (editingText()) setEditingText(null);
+              if (lassoSelection()) setLassoSelection(null);
               props.store.redoCanvas();
             }}
             title="Wiederholen auf aktiver Seite (Strg+Umschalt+Z)"
@@ -2266,6 +2418,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             onClick={() => {
               setEditingText(null);
               setSelectedImage(null);
+              setLassoSelection(null);
               props.store.clearCanvas();
             }}
             title="Aktuelle Seite leeren"
@@ -2304,6 +2457,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 if (isInfiniteMode()) {
                   if (editingText()) commitEditingText();
                   setSelectedImage(null);
+                  setLassoSelection(null);
                   props.store.updateNoteSettings({ canvasMode: 'pages' });
                   props.store.showToast('Seiten-Modus aktiv');
                 }
@@ -2323,6 +2477,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 if (!isInfiniteMode()) {
                   if (editingText()) commitEditingText();
                   setSelectedImage(null);
+                  setLassoSelection(null);
                   setOverviewOpen(false);
                   setSizeMenuOpen(false);
                   props.store.updateNoteSettings({ canvasMode: 'infinite' });
@@ -2670,12 +2825,19 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 spellCheckLanguage={spellCheckLanguage()}
                 editingText={editingText()}
                 selectedImage={selectedImage()}
+                lassoSelection={lassoSelection()}
                 onPointerTypeChange={handlePointerTypeDetected}
                 onZoomChange={setInfiniteZoom}
                 onSetEditingText={setEditingText}
                 onCommitEditingText={commitEditingText}
                 onExitScribble={() => exitScribbleMode()}
                 onSetSelectedImage={setSelectedImage}
+                onSetLassoSelection={setLassoSelection}
+                onCopyLasso={handleLassoCopy}
+                onCutLasso={handleLassoCut}
+                onDuplicateLasso={handleLassoDuplicate}
+                onRecolorLasso={handleLassoRecolor}
+                onDeleteLasso={handleLassoDelete}
                 onChangeSpellLanguage={setSpellCheckLanguagePersisted}
                 onSyncTextStyle={(patch) => {
                   if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
@@ -2711,6 +2873,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             ) {
               if (editingText()) commitEditingText();
               if (selectedImage()) setSelectedImage(null);
+              if (lassoSelection()) setLassoSelection(null);
             }
           }}
         >
@@ -2742,12 +2905,19 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   spellCheckLanguage={spellCheckLanguage()}
                   editingText={editingText()}
                   selectedImage={selectedImage()}
+                  lassoSelection={lassoSelection()}
                   onPointerTypeChange={handlePointerTypeDetected}
                   onPenPointerDown={() => penContactNotifier?.()}
                   onSetEditingText={setEditingText}
                   onCommitEditingText={commitEditingText}
                   onExitScribble={() => exitScribbleMode()}
                   onSetSelectedImage={setSelectedImage}
+                  onSetLassoSelection={setLassoSelection}
+                  onCopyLasso={handleLassoCopy}
+                  onCutLasso={handleLassoCut}
+                  onDuplicateLasso={handleLassoDuplicate}
+                  onRecolorLasso={handleLassoRecolor}
+                  onDeleteLasso={handleLassoDelete}
                   onChangeSpellLanguage={setSpellCheckLanguagePersisted}
                   onSyncTextStyle={(patch) => {
                     if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
@@ -2870,7 +3040,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         <span class="pointer-badge" classList={{ 'is-pen': lastPointerType() === 'pen' }}>
           {tool() === 'scribble'
             ? `Handschrift → Text (${getSpellLanguageShortLabel(spellCheckLanguage())})`
-            : pointerTypeLabel()}
+            : tool() === 'lasso'
+              ? lassoSelection()
+                ? `Lasso · ${formatLassoCountLabel(getLassoItemCount(lassoSelection()))}`
+                : 'Lasso · Einkreisen'
+              : pointerTypeLabel()}
         </span>
         <span class="status-spacer" />
         <div class="zoom-controls">

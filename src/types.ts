@@ -1,5 +1,6 @@
 export type DrawingTool =
   | 'select'
+  | 'lasso'
   | 'pen'
   | 'scribble'
   | 'highlighter'
@@ -63,7 +64,7 @@ export interface StrokePoint {
 
 export interface Stroke {
   id: string;
-  tool: Exclude<DrawingTool, 'select' | 'eraser' | 'text' | 'scribble'>;
+  tool: Exclude<DrawingTool, 'select' | 'lasso' | 'eraser' | 'text' | 'scribble'>;
   /** 'auto' adapts to the canvas background luminance; otherwise hex color */
   color: string;
   width: number;
