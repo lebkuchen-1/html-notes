@@ -3384,16 +3384,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   <IconCrosshair size={13} />
                   <span class="hide-compact">Ursprung</span>
                 </button>
-                <button
-                  type="button"
-                  class="tool-pill"
-                  classList={{ 'is-active': exportDialogOpen() || isPickingExportRegion() }}
-                  onClick={() => openExportDialog('viewport')}
-                  title="Unendlichen Canvas exportieren (Bildschirm, Bereich, PNG, JPEG, PDF)"
-                >
-                  <IconDownload size={13} />
-                  <span class="hide-compact">Export…</span>
-                </button>
               </>
             }
           >
