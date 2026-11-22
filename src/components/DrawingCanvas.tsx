@@ -3,6 +3,7 @@ import {
   createMemo,
   createSignal,
   For,
+  Index,
   onCleanup,
   onMount,
   Show,
@@ -110,7 +111,7 @@ interface DrawingCanvasProps {
   store: NotesStore;
 }
 
-const PEN_COLORS = [
+const DEFAULT_PEN_COLORS = [
   { value: 'auto', label: 'Tinte (Auto)' },
   { value: '#4f46e5', label: 'Indigo' },
   { value: '#2563eb', label: 'Blau' },
@@ -118,15 +119,26 @@ const PEN_COLORS = [
   { value: '#059669', label: 'Smaragd' },
   { value: '#ea580c', label: 'Orange' },
   { value: '#9333ea', label: 'Violett' },
-];
+] as const;
 
-const HIGHLIGHTER_COLORS = [
+const DEFAULT_HIGHLIGHTER_COLORS = [
   { value: '#fde047', label: 'Gelb' },
   { value: '#86efac', label: 'Grün' },
   { value: '#7dd3fc', label: 'Hellblau' },
   { value: '#f9a8d4', label: 'Pink' },
   { value: '#fdba74', label: 'Pfirsich' },
-];
+] as const;
+
+const COLOR_LABEL_MAP = new Map<string, string>(
+  [...DEFAULT_PEN_COLORS, ...DEFAULT_HIGHLIGHTER_COLORS].map((c) => [
+    c.value.toLowerCase(),
+    c.label,
+  ])
+);
+
+function getColorLabel(value: string): string {
+  return COLOR_LABEL_MAP.get(value.toLowerCase()) ?? value.toUpperCase();
+}
 
 const LINE_COLOR_SWATCHES = [
   { value: 'auto', label: 'Auto' },
@@ -182,14 +194,48 @@ const MAX_ZOOM = 3.5;
 
 const PEN_COLOR_KEY = 'solid-notes:pen-color';
 const HIGHLIGHTER_COLOR_KEY = 'solid-notes:highlighter-color';
-const CUSTOM_PEN_COLOR_KEY = 'solid-notes:custom-pen-color';
-const CUSTOM_HIGHLIGHTER_COLOR_KEY = 'solid-notes:custom-highlighter-color';
+const PEN_PALETTE_KEY = 'solid-notes:pen-palette';
+const HIGHLIGHTER_PALETTE_KEY = 'solid-notes:highlighter-palette';
+const PEN_COLOR_INDEX_KEY = 'solid-notes:pen-color-index';
+const HIGHLIGHTER_COLOR_INDEX_KEY = 'solid-notes:highlighter-color-index';
 
-function loadStoredColor(key: string, fallback: string): string {
+function normalizeStoredColor(val: unknown, allowAuto: boolean): string | null {
+  if (typeof val !== 'string') return null;
+  if (allowAuto && val === 'auto') return 'auto';
+  if (/^#[0-9a-fA-F]{6}$/.test(val)) return val.toLowerCase();
+  return null;
+}
+
+function loadStoredPalette(
+  paletteKey: string,
+  defaults: readonly { value: string; label: string }[],
+  allowAuto: boolean,
+  legacyActiveColorKey: string
+): string[] {
+  const fallback = defaults.map((d) => d.value);
   try {
-    const val = localStorage.getItem(key);
-    if (val && (val === 'auto' || /^#[0-9a-fA-F]{6}$/.test(val))) {
-      return val;
+    const raw = localStorage.getItem(paletteKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === defaults.length) {
+        const normalized = parsed.map((item) => normalizeStoredColor(item, allowAuto));
+        if (normalized.every((item): item is string => item !== null)) {
+          return normalized;
+        }
+      }
+    }
+    // Seamless migration if the user previously had an active custom color
+    const legacyActive = normalizeStoredColor(
+      localStorage.getItem(legacyActiveColorKey),
+      allowAuto
+    );
+    if (
+      legacyActive &&
+      !fallback.some((c) => c.toLowerCase() === legacyActive.toLowerCase())
+    ) {
+      const migrated = [...fallback];
+      migrated[migrated.length - 1] = legacyActive;
+      return migrated;
     }
   } catch {
     // ignore storage errors
@@ -197,22 +243,39 @@ function loadStoredColor(key: string, fallback: string): string {
   return fallback;
 }
 
-function loadStoredOptionalHex(key: string): string | null {
+function loadStoredColorIndex(
+  indexKey: string,
+  palette: string[],
+  legacyActiveColorKey: string,
+  allowAuto: boolean
+): number {
   try {
-    const val = localStorage.getItem(key);
-    if (val && /^#[0-9a-fA-F]{6}$/.test(val)) {
-      return val.toLowerCase();
+    const raw = localStorage.getItem(indexKey);
+    if (raw !== null) {
+      const idx = Number.parseInt(raw, 10);
+      if (Number.isInteger(idx) && idx >= 0 && idx < palette.length) {
+        return idx;
+      }
+    }
+    const legacyActive = normalizeStoredColor(
+      localStorage.getItem(legacyActiveColorKey),
+      allowAuto
+    );
+    if (legacyActive) {
+      const matchIdx = palette.findIndex(
+        (c) => c.toLowerCase() === legacyActive.toLowerCase()
+      );
+      if (matchIdx >= 0) return matchIdx;
     }
   } catch {
     // ignore storage errors
   }
-  return null;
+  return 0;
 }
 
-function saveStoredColor(key: string, value: string | null) {
+function saveStorageValue(key: string, value: string) {
   try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
+    localStorage.setItem(key, value);
   } catch {
     // ignore storage errors
   }
@@ -221,25 +284,53 @@ function saveStoredColor(key: string, value: string | null) {
 export function DrawingCanvas(props: DrawingCanvasProps) {
   const [tool, setTool] = createSignal<DrawingTool>('pen');
   let lastNonScribbleTool: DrawingTool = 'pen';
-  const [penColor, setPenColor] = createSignal<string>(
-    loadStoredColor(PEN_COLOR_KEY, 'auto')
+
+  const initialPenPalette = loadStoredPalette(
+    PEN_PALETTE_KEY,
+    DEFAULT_PEN_COLORS,
+    true,
+    PEN_COLOR_KEY
   );
-  const [highlighterColor, setHighlighterColor] = createSignal<string>(
-    loadStoredColor(HIGHLIGHTER_COLOR_KEY, '#fde047')
-  );
-  const [customPenColor, setCustomPenColor] = createSignal<string | null>(
-    loadStoredOptionalHex(CUSTOM_PEN_COLOR_KEY)
-  );
-  const [customHighlighterColor, setCustomHighlighterColor] = createSignal<string | null>(
-    loadStoredOptionalHex(CUSTOM_HIGHLIGHTER_COLOR_KEY)
+  const initialHighlighterPalette = loadStoredPalette(
+    HIGHLIGHTER_PALETTE_KEY,
+    DEFAULT_HIGHLIGHTER_COLORS,
+    false,
+    HIGHLIGHTER_COLOR_KEY
   );
 
-  createEffect(() => saveStoredColor(PEN_COLOR_KEY, penColor()));
-  createEffect(() => saveStoredColor(HIGHLIGHTER_COLOR_KEY, highlighterColor()));
-  createEffect(() => saveStoredColor(CUSTOM_PEN_COLOR_KEY, customPenColor()));
-  createEffect(() =>
-    saveStoredColor(CUSTOM_HIGHLIGHTER_COLOR_KEY, customHighlighterColor())
+  const [penPalette, setPenPalette] = createSignal<string[]>(initialPenPalette);
+  const [penColorIndex, setPenColorIndex] = createSignal<number>(
+    loadStoredColorIndex(PEN_COLOR_INDEX_KEY, initialPenPalette, PEN_COLOR_KEY, true)
   );
+  const [highlighterPalette, setHighlighterPalette] = createSignal<string[]>(
+    initialHighlighterPalette
+  );
+  const [highlighterColorIndex, setHighlighterColorIndex] = createSignal<number>(
+    loadStoredColorIndex(
+      HIGHLIGHTER_COLOR_INDEX_KEY,
+      initialHighlighterPalette,
+      HIGHLIGHTER_COLOR_KEY,
+      false
+    )
+  );
+
+  const penColor = createMemo(
+    () => penPalette()[penColorIndex()] ?? DEFAULT_PEN_COLORS[0].value
+  );
+  const highlighterColor = createMemo(
+    () => highlighterPalette()[highlighterColorIndex()] ?? DEFAULT_HIGHLIGHTER_COLORS[0].value
+  );
+
+  createEffect(() => saveStorageValue(PEN_PALETTE_KEY, JSON.stringify(penPalette())));
+  createEffect(() =>
+    saveStorageValue(HIGHLIGHTER_PALETTE_KEY, JSON.stringify(highlighterPalette()))
+  );
+  createEffect(() => saveStorageValue(PEN_COLOR_INDEX_KEY, String(penColorIndex())));
+  createEffect(() =>
+    saveStorageValue(HIGHLIGHTER_COLOR_INDEX_KEY, String(highlighterColorIndex()))
+  );
+  createEffect(() => saveStorageValue(PEN_COLOR_KEY, penColor()));
+  createEffect(() => saveStorageValue(HIGHLIGHTER_COLOR_KEY, highlighterColor()));
   const [penWidth, setPenWidth] = createSignal<number>(3.8);
   const [highlighterWidth, setHighlighterWidth] = createSignal<number>(24);
   const [eraserSize, setEraserSize] = createSignal<number>(18);
@@ -359,38 +450,90 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     return tool() === 'highlighter' ? highlighterColor() : penColor();
   });
 
-  const activeCustomColor = createMemo(() =>
-    tool() === 'highlighter' ? customHighlighterColor() : customPenColor()
-  );
+  const activeSlotIndex = createMemo(() => {
+    if (tool() === 'highlighter') return highlighterColorIndex();
+    const ed = editingText();
+    if (!ed) return penColorIndex();
+    const edColor = ed.item.color.toLowerCase();
+    const pal = penPalette();
+    if (pal[penColorIndex()]?.toLowerCase() === edColor) {
+      return penColorIndex();
+    }
+    const matchIdx = pal.findIndex((c) => c.toLowerCase() === edColor);
+    return matchIdx >= 0 ? matchIdx : penColorIndex();
+  });
 
-  const setActiveColor = (c: string) => {
+  const isEditingUnlistedTextColor = createMemo(() => {
+    if (tool() === 'highlighter') return false;
+    const ed = editingText();
+    if (!ed) return false;
+    const edColor = ed.item.color.toLowerCase();
+    return !penPalette().some((c) => c.toLowerCase() === edColor);
+  });
+
+  const selectColorSlot = (index: number) => {
     if (tool() === 'highlighter') {
-      setHighlighterColor(c);
+      setHighlighterColorIndex(index);
     } else {
-      setPenColor(c);
+      setPenColorIndex(index);
+      const chosen = penPalette()[index] ?? DEFAULT_PEN_COLORS[0].value;
       const ed = editingText();
       if (ed) {
-        setEditingText({ pageId: ed.pageId, item: { ...ed.item, color: c } });
+        setEditingText({ pageId: ed.pageId, item: { ...ed.item, color: chosen } });
       }
     }
   };
 
-  const setCustomColorFromPicker = (hex: string) => {
+  const replaceSelectedColorFromPicker = (hex: string) => {
     const normalized = hex.toLowerCase();
-    setActiveColor(normalized);
     if (tool() === 'highlighter') {
-      const isPreset = HIGHLIGHTER_COLORS.some(
-        (sw) => sw.value.toLowerCase() === normalized
+      const idx = highlighterColorIndex();
+      setHighlighterPalette((prev) =>
+        prev.map((c, i) => (i === idx ? normalized : c))
       );
-      if (!isPreset) {
-        setCustomHighlighterColor(normalized);
-      }
     } else {
-      const isPreset = PEN_COLORS.some(
-        (sw) => sw.value.toLowerCase() === normalized
+      const idx = activeSlotIndex();
+      setPenColorIndex(idx);
+      setPenPalette((prev) =>
+        prev.map((c, i) => (i === idx ? normalized : c))
       );
-      if (!isPreset) {
-        setCustomPenColor(normalized);
+      const ed = editingText();
+      if (ed) {
+        setEditingText({ pageId: ed.pageId, item: { ...ed.item, color: normalized } });
+      }
+    }
+  };
+
+  const selectedSlotDefault = createMemo(() => {
+    const idx = activeSlotIndex();
+    return tool() === 'highlighter'
+      ? DEFAULT_HIGHLIGHTER_COLORS[idx] ?? DEFAULT_HIGHLIGHTER_COLORS[0]
+      : DEFAULT_PEN_COLORS[idx] ?? DEFAULT_PEN_COLORS[0];
+  });
+
+  const canResetSelectedColor = createMemo(() => {
+    const idx = activeSlotIndex();
+    const currentVal =
+      tool() === 'highlighter' ? highlighterPalette()[idx] : penPalette()[idx];
+    const defVal = selectedSlotDefault().value;
+    return currentVal?.toLowerCase() !== defVal.toLowerCase();
+  });
+
+  const resetSelectedColorSlot = () => {
+    const idx = activeSlotIndex();
+    const defVal = selectedSlotDefault().value;
+    if (tool() === 'highlighter') {
+      setHighlighterPalette((prev) =>
+        prev.map((c, i) => (i === idx ? defVal : c))
+      );
+    } else {
+      setPenColorIndex(idx);
+      setPenPalette((prev) =>
+        prev.map((c, i) => (i === idx ? defVal : c))
+      );
+      const ed = editingText();
+      if (ed) {
+        setEditingText({ pageId: ed.pageId, item: { ...ed.item, color: defVal } });
       }
     }
   };
@@ -1622,7 +1765,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   };
 
   const colorPalette = createMemo(() =>
-    tool() === 'highlighter' ? HIGHLIGHTER_COLORS : PEN_COLORS
+    tool() === 'highlighter' ? highlighterPalette() : penPalette()
   );
 
   const hasCanvasContent = createMemo(
@@ -1763,71 +1906,55 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
         <Show when={tool() !== 'eraser' && tool() !== 'select' && tool() !== 'lasso'}>
           <div class="toolbar-group color-group">
-            <For each={colorPalette()}>
-              {(swatch) => {
+            <Index each={colorPalette()}>
+              {(swatchColor, index) => {
                 const bg = () =>
-                  swatch.value === 'auto'
+                  swatchColor() === 'auto'
                     ? paperIsDark()
                       ? '#f1f5f9'
                       : '#1e293b'
-                    : swatch.value;
+                    : swatchColor();
+                const label = () => getColorLabel(swatchColor());
                 return (
                   <button
                     type="button"
                     class="color-swatch"
                     classList={{
-                      'is-active': activeColor() === swatch.value,
-                      'is-auto': swatch.value === 'auto',
+                      'is-active':
+                        !isEditingUnlistedTextColor() && activeSlotIndex() === index,
+                      'is-auto': swatchColor() === 'auto',
                     }}
                     style={{ '--swatch-color': bg() }}
-                    onClick={() => setActiveColor(swatch.value)}
-                    title={swatch.label}
-                    aria-label={`Farbe ${swatch.label}`}
+                    onClick={() => selectColorSlot(index)}
+                    title={label()}
+                    aria-label={`Farbe ${label()}`}
                   />
                 );
               }}
-            </For>
-            <Show when={activeCustomColor()}>
-              {(savedHex) => (
-                <button
-                  type="button"
-                  class="color-swatch is-custom-slot"
-                  classList={{
-                    'is-active':
-                      activeColor().toLowerCase() === savedHex().toLowerCase(),
-                  }}
-                  style={{ '--swatch-color': savedHex() }}
-                  onClick={() => setActiveColor(savedHex())}
-                  title={`Eigene Farbe (${savedHex().toUpperCase()})`}
-                  aria-label={`Eigene Farbe ${savedHex().toUpperCase()}`}
-                />
-              )}
-            </Show>
+            </Index>
             <ColorPickerPopover
               value={
-                activeColor() !== 'auto' &&
-                !colorPalette().some(
-                  (sw) => sw.value.toLowerCase() === activeColor().toLowerCase()
-                )
-                  ? activeColor()
-                  : activeCustomColor() ??
-                    (activeColor() === 'auto'
-                      ? paperIsDark()
-                        ? '#f1f5f9'
-                        : '#1e293b'
-                      : activeColor())
+                activeColor() === 'auto'
+                  ? paperIsDark()
+                    ? '#f1f5f9'
+                    : '#1e293b'
+                  : activeColor()
               }
+              isCustomActive={isEditingUnlistedTextColor()}
               palette={tool() === 'highlighter' ? 'highlighter' : 'ink'}
               title={
                 tool() === 'highlighter'
-                  ? 'Eigene Textmarker-Farbe'
-                  : 'Eigene Stiftfarbe wählen'
+                  ? 'Textmarker-Farbe ändern'
+                  : 'Stiftfarbe ändern'
               }
+              onReset={canResetSelectedColor() ? resetSelectedColorSlot : undefined}
+              resetLabel={selectedSlotDefault().value === 'auto' ? 'Auto' : 'Standard'}
+              resetTitle={`Ausgewählte Farbe auf ${selectedSlotDefault().label} zurücksetzen`}
               onOpen={() => {
                 setPaperMenuOpen(false);
                 setSizeMenuOpen(false);
               }}
-              onChange={(hex) => setCustomColorFromPicker(hex)}
+              onChange={(hex) => replaceSelectedColorFromPicker(hex)}
             />
           </div>
           <div class="toolbar-divider" />

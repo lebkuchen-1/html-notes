@@ -191,6 +191,12 @@ interface ColorPickerPopoverProps {
   palette?: ColorPickerPalettePreset;
   /** Optional callback when popover opens (e.g. to close sibling menus) */
   onOpen?: () => void;
+  /** Optional callback to reset the current color slot back to its default */
+  onReset?: () => void;
+  /** Label for the optional reset button (defaults to "Standard") */
+  resetLabel?: string;
+  /** Tooltip for the optional reset button */
+  resetTitle?: string;
 }
 
 export function ColorPickerPopover(props: ColorPickerPopoverProps) {
@@ -470,15 +476,30 @@ export function ColorPickerPopover(props: ColorPickerPopoverProps) {
                 />
                 <span class="cp-title">{props.title ?? 'Farbe wählen'}</span>
               </div>
-              <button
-                type="button"
-                class="icon-btn-xs"
-                onClick={closePopover}
-                title="Schließen"
-                aria-label="Farbauswahl schließen"
-              >
-                <IconX size={14} />
-              </button>
+              <div class="cp-header-actions">
+                <Show when={props.onReset}>
+                  <button
+                    type="button"
+                    class="cp-reset-btn"
+                    onClick={() => {
+                      pickedAnyDuringOpen = false;
+                      props.onReset?.();
+                    }}
+                    title={props.resetTitle ?? 'Auf Standardfarbe zurücksetzen'}
+                  >
+                    {props.resetLabel ?? 'Standard'}
+                  </button>
+                </Show>
+                <button
+                  type="button"
+                  class="icon-btn-xs"
+                  onClick={closePopover}
+                  title="Schließen"
+                  aria-label="Farbauswahl schließen"
+                >
+                  <IconX size={14} />
+                </button>
+              </div>
             </div>
 
             {/* 2D Saturation / Value Square */}
