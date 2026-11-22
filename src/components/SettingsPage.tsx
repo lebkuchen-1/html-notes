@@ -7,17 +7,12 @@ import {
   type NoteLocalSettings,
   type PalmSensitivity,
   type PaperPattern,
-  type SpellCheckLanguage,
   type StabilizationLevel,
   type ViewMode,
 } from '../types';
 import { queryBrowserStorageEstimate, type StorageEstimateInfo } from '../utils/db';
 import { loadCloudBaseline } from '../utils/cloudSync';
 import { loadCloudConfig } from '../utils/s3Client';
-import {
-  getPersonalDictionary,
-  removeWordFromPersonalDictionary,
-} from '../utils/spellcheck';
 import {
   estimateWorkspacePayloadBytes,
   exportNotesAsJson,
@@ -66,12 +61,6 @@ const EDITOR_FONT_OPTIONS: { value: EditorFontFamily; label: string }[] = [
   { value: 'sans', label: 'Sans' },
   { value: 'serif', label: 'Serif' },
   { value: 'mono', label: 'Mono' },
-];
-
-const SPELL_LANGUAGE_OPTIONS: { value: SpellCheckLanguage; label: string }[] = [
-  { value: 'de-en', label: 'DE + EN' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'en', label: 'Englisch' },
 ];
 
 const VIEW_MODE_OPTIONS: { value: ViewMode; label: string }[] = [
@@ -742,65 +731,11 @@ export function SettingsPage(props: SettingsPageProps) {
               <div class="setting-row">
                 <div class="setting-info">
                   <div class="setting-label-row">
-                    <span class="setting-label">Rechtschreibprüfung (DE / EN)</span>
-                    {renderLocalMeta('spellCheckEnabled')}
-                  </div>
-                  <span class="setting-desc">
-                    Prüft Handschrift-zu-Text (Kritzeln), Canvas-Texte, Notiztitel und Texteditor
-                    mit roten Markierungen und 1-Tap-Korrekturvorschlägen.
-                  </span>
-                </div>
-                <div class="setting-control">
-                  <label class="toggle-switch">
-                    <input
-                      type="checkbox"
-                      checked={currentValues().spellCheckEnabled}
-                      onChange={(e) => setShared('spellCheckEnabled', e.currentTarget.checked)}
-                    />
-                    <span class="toggle-slider" />
-                  </label>
-                </div>
-              </div>
-
-              <div class="setting-row">
-                <div class="setting-info">
-                  <div class="setting-label-row">
-                    <span class="setting-label">Sprache für Rechtschreibung &amp; Kritzeln</span>
-                    {renderLocalMeta('spellCheckLanguage')}
-                  </div>
-                  <span class="setting-desc">
-                    Wähle „DE + EN“ für gemischte deutsch-englische Notizen oder lege dich auf eine
-                    Sprache fest (steuert auch das iPadOS-Kritzeln-Wörterbuch).
-                  </span>
-                </div>
-                <div class="setting-control">
-                  <div class="segmented-control">
-                    <For each={SPELL_LANGUAGE_OPTIONS}>
-                      {(opt) => (
-                        <button
-                          type="button"
-                          class="seg-btn"
-                          classList={{
-                            'is-active': currentValues().spellCheckLanguage === opt.value,
-                          }}
-                          onClick={() => setShared('spellCheckLanguage', opt.value)}
-                        >
-                          {opt.label}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-              </div>
-
-              <div class="setting-row">
-                <div class="setting-info">
-                  <div class="setting-label-row">
-                    <span class="setting-label">Browser-Rechtschreibung im Markdown-Editor</span>
+                    <span class="setting-label">Rechtschreibprüfung</span>
                     {renderLocalMeta('editorSpellCheck')}
                   </div>
                   <span class="setting-desc">
-                    Zusätzliche native Browser-/iPadOS-Rechtschreibprüfung im Markdown-Textfeld.
+                    Browser-/System-Rechtschreibprüfung im Markdown-Texteditor aktivieren.
                   </span>
                 </div>
                 <div class="setting-control">
@@ -814,35 +749,6 @@ export function SettingsPage(props: SettingsPageProps) {
                   </label>
                 </div>
               </div>
-
-              <Show when={!isLocal() && getPersonalDictionary().length > 0}>
-                <div class="setting-row is-stacked">
-                  <div class="setting-info">
-                    <span class="setting-label">
-                      Persönliches Wörterbuch ({getPersonalDictionary().length})
-                    </span>
-                    <span class="setting-desc">
-                      Gespeicherte Fachbegriffe &amp; Eigennamen werden nicht als Fehler markiert.
-                      Zum Entfernen antippen.
-                    </span>
-                  </div>
-                  <div class="personal-dict-chips">
-                    <For each={getPersonalDictionary()}>
-                      {(word) => (
-                        <button
-                          type="button"
-                          class="personal-dict-chip"
-                          onClick={() => removeWordFromPersonalDictionary(word)}
-                          title={`„${word}“ aus dem persönlichen Wörterbuch entfernen`}
-                        >
-                          <span>{word}</span>
-                          <span class="pdc-x">×</span>
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-              </Show>
             </div>
           </section>
 

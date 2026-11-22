@@ -15,7 +15,6 @@ import type {
   CanvasSnapshot,
   CanvasTextItem,
   DrawingTool,
-  SpellCheckLanguage,
   Stroke,
   StrokePoint,
 } from '../types';
@@ -48,7 +47,6 @@ import {
   type LassoTransform,
 } from '../utils/lasso';
 import { extractPdfFilesFromTransfer } from '../utils/pageImport';
-import { getSpellCheckRevision } from '../utils/spellcheck';
 import { generateId } from '../utils/storage';
 import {
   StrokeStabilizer,
@@ -120,8 +118,6 @@ interface CanvasPageSheetProps {
   pressureSensitivity: boolean;
   palmRadiusLimit: number;
   showSheetHeader: boolean;
-  spellCheckEnabled: boolean;
-  spellCheckLanguage: SpellCheckLanguage;
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   lassoSelection: LassoSelection | null;
@@ -137,7 +133,6 @@ interface CanvasPageSheetProps {
   onDuplicateLasso: () => void;
   onRecolorLasso: (color: string) => void;
   onDeleteLasso: () => void;
-  onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onSyncTextStyle: (patch: {
     fontSize?: number;
     fontFamily?: CanvasFontFamily;
@@ -362,10 +357,6 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
           ? hoveredTextId()
           : null,
       onImageLoad: scheduleBaseRender,
-      spellCheck: {
-        enabled: props.spellCheckEnabled,
-        language: props.spellCheckLanguage,
-      },
       hiddenIds,
     });
 
@@ -450,10 +441,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     if (activeLassoT && activeLassoSel) {
       ctx.save();
       ctx.scale(renderScale, renderScale);
-      renderSelectedItemsPreview(ctx, p, activeLassoSel, activeLassoT, props.store.theme(), {
-        enabled: props.spellCheckEnabled,
-        language: props.spellCheckLanguage,
-      });
+      renderSelectedItemsPreview(ctx, p, activeLassoSel, activeLassoT, props.store.theme());
       ctx.restore();
       return;
     }
@@ -505,9 +493,6 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     void localEditingText()?.id;
     void hoveredTextId();
     void props.tool;
-    void props.spellCheckEnabled;
-    void props.spellCheckLanguage;
-    void getSpellCheckRevision();
     void isLassoTransforming();
     void localLassoSelection();
     scheduleBaseRender();
@@ -1757,13 +1742,10 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
                     topPx={item().y * scale()}
                     scale={scale()}
                     isScribbleMode={props.tool === 'scribble'}
-                    spellCheckEnabled={props.spellCheckEnabled}
-                    spellCheckLanguage={props.spellCheckLanguage}
                     onChangeItem={(next) =>
                       props.onSetEditingText({ pageId: props.pageId, item: next })
                     }
                     onSyncTextStyle={props.onSyncTextStyle}
-                    onChangeSpellLanguage={props.onChangeSpellLanguage}
                     onDelete={() => {
                       const id = item().id;
                       props.onSetEditingText(null);

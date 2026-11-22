@@ -16,7 +16,6 @@ import {
   isPointHittingStroke,
   isPointHittingText,
   measureCanvasTextBounds,
-  type CanvasSpellCheckOptions,
 } from './canvasRenderer';
 import { generateId } from './storage';
 
@@ -817,8 +816,7 @@ export function renderSelectedItemsPreview(
   page: CanvasPage,
   selection: LassoSelection,
   transform: LassoTransform,
-  theme: ThemeMode,
-  spellCheck?: CanvasSpellCheckOptions
+  theme: ThemeMode
 ) {
   const strokeSet = new Set(selection.strokeIds);
   const textSet = new Set(selection.textIds);
@@ -852,7 +850,7 @@ export function renderSelectedItemsPreview(
   // 4. Selected texts
   for (const textItem of page.texts) {
     if (!textSet.has(textItem.id)) continue;
-    drawCanvasText(ctx, textItem, page.paperConfig, theme, false, spellCheck);
+    drawCanvasText(ctx, textItem, page.paperConfig, theme, false);
   }
 
   ctx.restore();

@@ -26,7 +26,6 @@ import {
 } from '../utils/clipboardImport';
 import { requestPersistentStorage } from '../utils/db';
 import { isCloudConfigComplete, loadCloudConfig } from '../utils/s3Client';
-import { ensureSpellCheckerLoaded } from '../utils/spellcheck';
 import {
   clampPageHeight,
   clampPageWidth,
@@ -269,9 +268,6 @@ export function createNotesStore() {
       '.canvas-text-input',
       '.canvas-image-selection',
       '.canvas-lasso-selection',
-      '.spell-popover',
-      '.spell-suggestions-bar',
-      '.spell-issue-list',
     ].join(', ');
 
     const fullscreenTouchStarts = new Map<number, { x: number; y: number }>();
@@ -549,13 +545,6 @@ export function createNotesStore() {
     const local = activeNote()?.settings;
     if (!local) return g;
     return { ...g, ...local };
-  });
-
-  // Lazily preload DE / EN Hunspell dictionaries whenever spellcheck is active
-  createEffect(() => {
-    const eff = effectiveSettings();
-    if (!eff.spellCheckEnabled) return;
-    void ensureSpellCheckerLoaded(eff.spellCheckLanguage);
   });
 
   const activeNoteLocalOverrideCount = createMemo<number>(() => {

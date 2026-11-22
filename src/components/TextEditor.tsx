@@ -1,23 +1,10 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
-import type { SpellCheckLanguage } from '../types';
 import {
   extractImageFilesFromTransfer,
   processImageFile,
 } from '../utils/imageImport';
 import { renderMarkdown, toggleCheckboxAtLine } from '../utils/markdown';
-import {
-  addWordToPersonalDictionary,
-  applySpellReplacement,
-  findSpellIssues,
-  getHtmlLangForSpellCheck,
-  getSpellCheckRevision,
-  getSpellLanguageLabel,
-  getSpellLanguageShortLabel,
-  getSpellSuggestions,
-  isSpellCheckLoading,
-  type SpellIssue,
-} from '../utils/spellcheck';
 import { exportNoteAsMarkdown, generateId } from '../utils/storage';
 import {
   IconCheckSquare,
@@ -28,15 +15,7 @@ import {
   IconImage,
   IconList,
   IconQuote,
-  IconSpellCheck,
-  IconX,
 } from './Icons';
-
-const SPELL_LANG_OPTIONS: { value: SpellCheckLanguage; label: string }[] = [
-  { value: 'de-en', label: 'DE + EN' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'en', label: 'Englisch' },
-];
 
 interface TextEditorProps {
   store: NotesStore;
@@ -45,43 +24,11 @@ interface TextEditorProps {
 export function TextEditor(props: TextEditorProps) {
   const [previewMode, setPreviewMode] = createSignal(false);
   const [isDragOver, setIsDragOver] = createSignal(false);
-  const [spellMenuOpen, setSpellMenuOpen] = createSignal(false);
   let textareaRef: HTMLTextAreaElement | undefined;
   let imageInputRef: HTMLInputElement | undefined;
-  let spellMenuRef: HTMLDivElement | undefined;
 
   const note = () => props.store.activeNote();
   const effSettings = () => props.store.effectiveSettings();
-  const isSpellActive = () =>
-    effSettings().spellCheckEnabled && effSettings().editorSpellCheck;
-  const spellLang = () => effSettings().spellCheckLanguage;
-
-  const setSpellLangPersisted = (next: SpellCheckLanguage) => {
-    const currNote = props.store.activeNote();
-    if (currNote?.settings?.spellCheckLanguage !== undefined) {
-      props.store.updateNoteSettings({ spellCheckLanguage: next }, currNote.id);
-    } else {
-      props.store.updateSettings({ spellCheckLanguage: next });
-    }
-  };
-
-  const editorSpellIssues = createMemo<SpellIssue[]>(() => {
-    void getSpellCheckRevision();
-    if (!isSpellActive()) return [];
-    const content = note()?.content ?? '';
-    if (!content.trim()) return [];
-    return findSpellIssues(content, spellLang(), { isMarkdown: true });
-  });
-
-  onMount(() => {
-    const handleOutside = (e: PointerEvent) => {
-      if (spellMenuOpen() && spellMenuRef && !spellMenuRef.contains(e.target as Node)) {
-        setSpellMenuOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', handleOutside);
-    onCleanup(() => document.removeEventListener('pointerdown', handleOutside));
-  });
 
   const editorFontCss = createMemo(() => {
     const family = effSettings().editorFontFamily;
@@ -351,140 +298,6 @@ export function TextEditor(props: TextEditorProps) {
         </div>
 
         <div class="toolbar-group">
-          <div class="paper-menu-anchor" ref={spellMenuRef}>
-            <button
-              type="button"
-              class="tool-pill spell-trigger-btn"
-              classList={{
-                'is-active': spellMenuOpen(),
-                'has-spell-issues': isSpellActive() && editorSpellIssues().length > 0,
-              }}
-              onClick={() => setSpellMenuOpen((v) => !v)}
-              title={
-                isSpellActive()
-                  ? `Rechtschreibprüfung (${getSpellLanguageLabel(spellLang())})`
-                  : 'Rechtschreibprüfung (aus)'
-              }
-            >
-              <IconSpellCheck size={14} />
-              <span class="hide-compact">
-                {isSpellActive() ? getSpellLanguageShortLabel(spellLang()) : 'Aus'}
-              </span>
-              <Show when={isSpellActive() && editorSpellIssues().length > 0}>
-                <span class="spell-count-badge">{editorSpellIssues().length}</span>
-              </Show>
-            </button>
-
-            <Show when={spellMenuOpen()}>
-              <div
-                class="paper-popover spell-popover"
-                role="dialog"
-                aria-label="Text-Rechtschreibprüfung"
-              >
-                <div class="paper-popover-header">
-                  <span>Rechtschreibung (DE / EN)</span>
-                  <button
-                    type="button"
-                    class="icon-btn-xs"
-                    onClick={() => setSpellMenuOpen(false)}
-                    aria-label="Schließen"
-                  >
-                    <IconX size={14} />
-                  </button>
-                </div>
-
-                <div class="paper-section">
-                  <div class="paper-section-label">Prüfsprache</div>
-                  <div class="pattern-pills">
-                    <For each={SPELL_LANG_OPTIONS}>
-                      {(opt) => (
-                        <button
-                          type="button"
-                          class="pattern-pill"
-                          classList={{ 'is-active': spellLang() === opt.value }}
-                          onClick={() => setSpellLangPersisted(opt.value)}
-                        >
-                          {opt.label}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-
-                <Show when={isSpellActive()}>
-                  <div class="paper-section">
-                    <div class="paper-slider-head">
-                      <span class="paper-section-label">
-                        Hinweise im Text ({editorSpellIssues().length})
-                      </span>
-                      <Show when={isSpellCheckLoading()}>
-                        <span class="paper-slider-val">Lädt…</span>
-                      </Show>
-                    </div>
-                    <Show
-                      when={editorSpellIssues().length > 0}
-                      fallback={
-                        <div class="spell-empty-state">
-                          {isSpellCheckLoading()
-                            ? 'DE/EN-Wörterbücher werden geladen…'
-                            : 'Keine Rechtschreibfehler gefunden.'}
-                        </div>
-                      }
-                    >
-                      <div class="spell-issue-list">
-                        <For each={editorSpellIssues().slice(0, 14)}>
-                          {(issue) => {
-                            const suggestions = () =>
-                              getSpellSuggestions(issue.word, spellLang(), 5);
-                            return (
-                              <div class="spell-issue-card">
-                                <div class="sic-head">
-                                  <span class="sic-word">{issue.word}</span>
-                                  <button
-                                    type="button"
-                                    class="mini-reset-btn"
-                                    onClick={() => addWordToPersonalDictionary(issue.word)}
-                                  >
-                                    + Wörterbuch
-                                  </button>
-                                </div>
-                                <div class="sic-suggestions">
-                                  <Show
-                                    when={suggestions().length > 0}
-                                    fallback={
-                                      <span class="ssb-no-fix">Keine Vorschläge</span>
-                                    }
-                                  >
-                                    <For each={suggestions()}>
-                                      {(sug) => (
-                                        <button
-                                          type="button"
-                                          class="ssb-fix-btn"
-                                          onClick={() => {
-                                            const curr = note()?.content ?? '';
-                                            props.store.updateContent(
-                                              applySpellReplacement(curr, issue, sug)
-                                            );
-                                          }}
-                                        >
-                                          {sug}
-                                        </button>
-                                      )}
-                                    </For>
-                                  </Show>
-                                </div>
-                              </div>
-                            );
-                          }}
-                        </For>
-                      </div>
-                    </Show>
-                  </div>
-                </Show>
-              </div>
-            </Show>
-          </div>
-
           <button
             type="button"
             class="tool-pill"
@@ -546,9 +359,7 @@ export function TextEditor(props: TextEditorProps) {
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder="Beginne zu schreiben… (Markdown wird unterstützt, Bilder können per Button, Drag & Drop oder Strg+V eingefügt werden)"
-            lang={getHtmlLangForSpellCheck(spellLang())}
-            spellcheck={isSpellActive()}
-            autocorrect="on"
+            spellcheck={effSettings().editorSpellCheck}
           />
         </Show>
 

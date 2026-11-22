@@ -2,15 +2,6 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import type { NotesStore } from '../store/notesStore';
 import type { Folder, ViewMode } from '../types';
 import {
-  addWordToPersonalDictionary,
-  applySpellReplacement,
-  findSpellIssues,
-  getHtmlLangForSpellCheck,
-  getSpellCheckRevision,
-  getSpellSuggestions,
-  type SpellIssue,
-} from '../utils/spellcheck';
-import {
   IconClipboardPaste,
   IconExitFullscreen,
   IconFolder,
@@ -20,7 +11,6 @@ import {
   IconPin,
   IconSettings,
   IconSidebar,
-  IconSpellCheck,
   IconSplit,
   IconSun,
   IconText,
@@ -41,14 +31,11 @@ export function NoteHeader(props: NoteHeaderProps) {
   const [tagDraft, setTagDraft] = createSignal('');
   const [addingTag, setAddingTag] = createSignal(false);
   const [editingTitle, setEditingTitle] = createSignal(false);
-  const [titleSpellOpen, setTitleSpellOpen] = createSignal(false);
   let titleInputRef: HTMLInputElement | undefined;
   let titleRowRef: HTMLDivElement | undefined;
   let tagInputRef: HTMLInputElement | undefined;
-  let titleSpellRef: HTMLDivElement | undefined;
 
   const note = () => props.store.activeNote();
-  const effSettings = () => props.store.effectiveSettings();
 
   // Exit title editing whenever switching to a different note
   createEffect(() => {
@@ -56,27 +43,7 @@ export function NoteHeader(props: NoteHeaderProps) {
     setEditingTitle(false);
   });
 
-  const titleSpellIssues = createMemo<SpellIssue[]>(() => {
-    void getSpellCheckRevision();
-    if (!effSettings().spellCheckEnabled) return [];
-    const title = note()?.title ?? '';
-    if (!title.trim()) return [];
-    return findSpellIssues(title, effSettings().spellCheckLanguage);
-  });
-
-  createEffect(() => {
-    if (titleSpellIssues().length === 0 && titleSpellOpen()) {
-      setTitleSpellOpen(false);
-    }
-  });
-
   onMount(() => {
-    const handleOutside = (e: PointerEvent) => {
-      if (titleSpellOpen() && titleSpellRef && !titleSpellRef.contains(e.target as Node)) {
-        setTitleSpellOpen(false);
-      }
-    };
-
     // Capture-phase dismissal so tapping/drawing on the canvas (which calls preventDefault()
     // and therefore suppresses native input blur) or tapping any UI area immediately closes
     // the active title/tag input and prevents iPadOS Scribble from staying latched to it.
@@ -96,14 +63,12 @@ export function NoteHeader(props: NoteHeaderProps) {
       }
     };
 
-    document.addEventListener('pointerdown', handleOutside);
     document.addEventListener('pointerdown', handleCaptureOutsideInput, { capture: true });
     document.addEventListener('touchstart', handleCaptureOutsideInput, {
       capture: true,
       passive: true,
     });
     onCleanup(() => {
-      document.removeEventListener('pointerdown', handleOutside);
       document.removeEventListener('pointerdown', handleCaptureOutsideInput, {
         capture: true,
       });
@@ -195,9 +160,6 @@ export function NoteHeader(props: NoteHeaderProps) {
                     }}
                     type="text"
                     class="note-title-input"
-                    lang={getHtmlLangForSpellCheck(effSettings().spellCheckLanguage)}
-                    spellcheck={effSettings().spellCheckEnabled}
-                    autocorrect="on"
                     onInput={(e) => props.store.updateTitle(e.currentTarget.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === 'Escape') {
@@ -210,88 +172,6 @@ export function NoteHeader(props: NoteHeaderProps) {
                     placeholder="Titel der Notiz…"
                     aria-label="Notiztitel"
                   />
-                </Show>
-                <Show when={titleSpellIssues().length > 0}>
-                  <div class="title-spell-anchor" ref={titleSpellRef}>
-                    <button
-                      type="button"
-                      class="title-spell-pill"
-                      onClick={() => setTitleSpellOpen((v) => !v)}
-                      title={`Rechtschreibhinweis im Titel (${titleSpellIssues().length})`}
-                      aria-label="Rechtschreibvorschläge für Notiztitel"
-                    >
-                      <IconSpellCheck size={12} />
-                      <span>{titleSpellIssues().length}</span>
-                    </button>
-                    <Show when={titleSpellOpen()}>
-                      <div class="paper-popover title-spell-popover" role="dialog">
-                        <div class="paper-popover-header">
-                          <span>Titel-Rechtschreibung</span>
-                          <button
-                            type="button"
-                            class="icon-btn-xs"
-                            onClick={() => setTitleSpellOpen(false)}
-                            aria-label="Schließen"
-                          >
-                            <IconX size={13} />
-                          </button>
-                        </div>
-                        <div class="spell-issue-list">
-                          <For each={titleSpellIssues()}>
-                            {(issue) => {
-                              const suggestions = () =>
-                                getSpellSuggestions(
-                                  issue.word,
-                                  effSettings().spellCheckLanguage,
-                                  5
-                                );
-                              return (
-                                <div class="spell-issue-card">
-                                  <div class="sic-head">
-                                    <span class="sic-word">{issue.word}</span>
-                                    <button
-                                      type="button"
-                                      class="mini-reset-btn"
-                                      onClick={() => addWordToPersonalDictionary(issue.word)}
-                                    >
-                                      + Wörterbuch
-                                    </button>
-                                  </div>
-                                  <div class="sic-suggestions">
-                                    <Show
-                                      when={suggestions().length > 0}
-                                      fallback={
-                                        <span class="ssb-no-fix">Keine Vorschläge</span>
-                                      }
-                                    >
-                                      <For each={suggestions()}>
-                                        {(sug) => (
-                                          <button
-                                            type="button"
-                                            class="ssb-fix-btn"
-                                            onClick={() => {
-                                              const nextTitle = applySpellReplacement(
-                                                current().title,
-                                                issue,
-                                                sug
-                                              );
-                                              props.store.updateTitle(nextTitle);
-                                            }}
-                                          >
-                                            {sug}
-                                          </button>
-                                        )}
-                                      </For>
-                                    </Show>
-                                  </div>
-                                </div>
-                              );
-                            }}
-                          </For>
-                        </div>
-                      </div>
-                    </Show>
-                  </div>
                 </Show>
               </div>
               <div class="header-tags">

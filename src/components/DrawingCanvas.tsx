@@ -19,7 +19,6 @@ import {
   type CanvasTextItem,
   type DrawingTool,
   type PaperPattern,
-  type SpellCheckLanguage,
 } from '../types';
 import {
   exportCanvasToPng,
@@ -47,17 +46,6 @@ import {
   extractPdfFilesFromTransfer,
   importFilesAsPages,
 } from '../utils/pageImport';
-import {
-  addWordToPersonalDictionary,
-  applySpellReplacement,
-  findSpellIssues,
-  getSpellCheckRevision,
-  getSpellLanguageLabel,
-  getSpellLanguageShortLabel,
-  getSpellSuggestions,
-  isSpellCheckLoading,
-  type SpellIssue,
-} from '../utils/spellcheck';
 import { generateId, PAPER_PRESETS } from '../utils/storage';
 import {
   createScrollAxisState,
@@ -107,7 +95,6 @@ import {
   IconRedo,
   IconRuler,
   IconScribble,
-  IconSpellCheck,
   IconStylus,
   IconSwap,
   IconText,
@@ -177,12 +164,6 @@ const TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'rect', label: 'Rechteck' },
   { id: 'ellipse', label: 'Ellipse' },
   { id: 'eraser', label: 'Radierer' },
-];
-
-const SPELL_LANG_OPTIONS: { value: SpellCheckLanguage; label: string }[] = [
-  { value: 'de-en', label: 'DE + EN' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'en', label: 'Englisch' },
 ];
 
 const QUICK_APPEND_PRESETS = [
@@ -284,8 +265,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const pinchZoomEnabled = () => effSettings().pinchZoomEnabled;
   const scrollMomentum = () => effSettings().scrollMomentum;
   const showSheetHeaders = () => effSettings().showSheetHeaders;
-  const spellCheckEnabled = () => effSettings().spellCheckEnabled;
-  const spellCheckLanguage = () => effSettings().spellCheckLanguage;
 
   const palmProfile = createMemo(() => getPalmProfile(palmSensitivity()));
 
@@ -298,27 +277,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
   };
 
-  const setSpellCheckEnabledPersisted = (next: boolean) => {
-    const currNote = props.store.activeNote();
-    if (currNote?.settings?.spellCheckEnabled !== undefined) {
-      props.store.updateNoteSettings({ spellCheckEnabled: next }, currNote.id);
-    } else {
-      props.store.updateSettings({ spellCheckEnabled: next });
-    }
-  };
-
-  const setSpellCheckLanguagePersisted = (next: SpellCheckLanguage) => {
-    const currNote = props.store.activeNote();
-    if (currNote?.settings?.spellCheckLanguage !== undefined) {
-      props.store.updateNoteSettings({ spellCheckLanguage: next }, currNote.id);
-    } else {
-      props.store.updateSettings({ spellCheckLanguage: next });
-    }
-  };
-
   const [paperMenuOpen, setPaperMenuOpen] = createSignal<boolean>(false);
   const [sizeMenuOpen, setSizeMenuOpen] = createSignal<boolean>(false);
-  const [spellMenuOpen, setSpellMenuOpen] = createSignal<boolean>(false);
   const [overviewOpen, setOverviewOpen] = createSignal<boolean>(false);
   const [overviewAutoCreator, setOverviewAutoCreator] = createSignal<boolean>(false);
   const [isDragOver, setIsDragOver] = createSignal<boolean>(false);
@@ -334,7 +294,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   let infiniteHandle: InfiniteCanvasHandle | null = null;
   let paperMenuRef: HTMLDivElement | undefined;
   let sizeMenuRef: HTMLDivElement | undefined;
-  let spellMenuRef: HTMLDivElement | undefined;
   let imageFileInputRef: HTMLInputElement | undefined;
   let pageImportInputRef: HTMLInputElement | undefined;
 
@@ -568,7 +527,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         setOverviewOpen(false);
         setSizeMenuOpen(false);
         setPaperMenuOpen(false);
-        setSpellMenuOpen(false);
       }
       prevNoteId = id;
     });
@@ -1385,16 +1343,12 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (sizeMenuOpen() && sizeMenuRef && !sizeMenuRef.contains(e.target as Node)) {
         setSizeMenuOpen(false);
       }
-      if (spellMenuOpen() && spellMenuRef && !spellMenuRef.contains(e.target as Node)) {
-        setSpellMenuOpen(false);
-      }
     };
 
     const handleDocKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (paperMenuOpen()) setPaperMenuOpen(false);
         if (sizeMenuOpen()) setSizeMenuOpen(false);
-        if (spellMenuOpen()) setSpellMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
         if (selectedImage()) setSelectedImage(null);
         if (lassoSelection()) setLassoSelection(null);
@@ -1579,59 +1533,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       props.store.showToast(
         'Handschrift → Text (Kritzeln) aktiv · Nochmal auf H→Text oder ✓ zum Beenden'
       );
-    }
-  };
-
-  interface PageSpellEntry {
-    key: string;
-    pageId: string;
-    item: CanvasTextItem;
-    isEditing: boolean;
-    issue: SpellIssue;
-    suggestions: string[];
-  }
-
-  const activePageSpellEntries = createMemo<PageSpellEntry[]>(() => {
-    void getSpellCheckRevision();
-    if (!spellCheckEnabled()) return [];
-    const currPage = page();
-    if (!currPage) return [];
-    const lang = spellCheckLanguage();
-    const ed = editingText();
-    const entries: PageSpellEntry[] = [];
-
-    const collectFromItem = (item: CanvasTextItem, isEditing: boolean) => {
-      const issues = findSpellIssues(item.text, lang);
-      for (const issue of issues) {
-        entries.push({
-          key: `${item.id}:${issue.start}:${issue.word}`,
-          pageId: currPage.id,
-          item,
-          isEditing,
-          issue,
-          suggestions: getSpellSuggestions(issue.word, lang, 5),
-        });
-      }
-    };
-
-    for (const textItem of currPage.texts) {
-      if (ed && ed.pageId === currPage.id && ed.item.id === textItem.id) continue;
-      collectFromItem(textItem, false);
-    }
-    if (ed && ed.pageId === currPage.id && ed.item.text.trim().length > 0) {
-      collectFromItem(ed.item, true);
-    }
-
-    return entries;
-  });
-
-  const applyCanvasSpellFix = (entry: PageSpellEntry, replacement: string) => {
-    const nextText = applySpellReplacement(entry.item.text, entry.issue, replacement);
-    const updated: CanvasTextItem = { ...entry.item, text: nextText };
-    if (entry.isEditing) {
-      setEditingText({ pageId: entry.pageId, item: updated });
-    } else {
-      props.store.upsertCanvasText(updated, entry.pageId);
     }
   };
 
@@ -1925,7 +1826,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               onOpen={() => {
                 setPaperMenuOpen(false);
                 setSizeMenuOpen(false);
-                setSpellMenuOpen(false);
               }}
               onChange={(hex) => setCustomColorFromPicker(hex)}
             />
@@ -2011,7 +1911,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             classList={{ 'is-active': paperMenuOpen() }}
             onClick={() => {
               setSizeMenuOpen(false);
-              setSpellMenuOpen(false);
               setPaperMenuOpen((v) => !v);
             }}
             title="Hintergrund der aktiven Seite konfigurieren (Farbe, Zeilen, Kästchen)"
@@ -2320,201 +2219,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             <IconStylus size={14} />
             <span class="hide-compact">Nur Stift</span>
           </button>
-
-          {/* DE / EN Spellcheck Trigger & Popover */}
-          <div class="paper-menu-anchor" ref={spellMenuRef}>
-            <button
-              type="button"
-              class="tool-pill spell-trigger-btn"
-              classList={{
-                'is-active': spellMenuOpen(),
-                'has-spell-issues': spellCheckEnabled() && activePageSpellEntries().length > 0,
-              }}
-              onClick={() => {
-                setPaperMenuOpen(false);
-                setSizeMenuOpen(false);
-                setSpellMenuOpen((v) => !v);
-              }}
-              title={
-                spellCheckEnabled()
-                  ? `Rechtschreibprüfung (${getSpellLanguageLabel(spellCheckLanguage())})`
-                  : 'Rechtschreibprüfung (ausgeschaltet)'
-              }
-            >
-              <IconSpellCheck size={14} />
-              <span class="hide-compact">
-                {spellCheckEnabled()
-                  ? getSpellLanguageShortLabel(spellCheckLanguage())
-                  : 'Aus'}
-              </span>
-              <Show when={spellCheckEnabled() && activePageSpellEntries().length > 0}>
-                <span class="spell-count-badge">{activePageSpellEntries().length}</span>
-              </Show>
-            </button>
-
-            <Show when={spellMenuOpen()}>
-              <div
-                class="paper-popover spell-popover"
-                role="dialog"
-                aria-label="Rechtschreibprüfung & Handschrift zu Text"
-              >
-                <div class="paper-popover-header">
-                  <span>Rechtschreibung (DE / EN)</span>
-                  <button
-                    type="button"
-                    class="icon-btn-xs"
-                    onClick={() => setSpellMenuOpen(false)}
-                    aria-label="Schließen"
-                  >
-                    <IconX size={14} />
-                  </button>
-                </div>
-
-                <label class="paper-toggle-row">
-                  <span>Rechtschreibprüfung aktiv</span>
-                  <input
-                    type="checkbox"
-                    checked={spellCheckEnabled()}
-                    onChange={(e) =>
-                      setSpellCheckEnabledPersisted(e.currentTarget.checked)
-                    }
-                  />
-                </label>
-
-                <div class="paper-section">
-                  <div class="paper-section-label">Prüfsprache &amp; Kritzeln-Sprache</div>
-                  <div class="pattern-pills">
-                    <For each={SPELL_LANG_OPTIONS}>
-                      {(opt) => (
-                        <button
-                          type="button"
-                          class="pattern-pill"
-                          classList={{
-                            'is-active': spellCheckLanguage() === opt.value,
-                          }}
-                          onClick={() => setSpellCheckLanguagePersisted(opt.value)}
-                        >
-                          {opt.label}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-
-                <Show
-                  when={tool() !== 'scribble'}
-                  fallback={
-                    <button
-                      type="button"
-                      class="spell-start-scribble-btn is-exit"
-                      onClick={() => {
-                        setSpellMenuOpen(false);
-                        exitScribbleMode();
-                        props.store.showToast('Handschrift → Text beendet');
-                      }}
-                    >
-                      <IconX size={14} />
-                      <span>Handschrift → Text beenden</span>
-                    </button>
-                  }
-                >
-                  <button
-                    type="button"
-                    class="spell-start-scribble-btn"
-                    onClick={() => {
-                      setSpellMenuOpen(false);
-                      selectTool('scribble');
-                    }}
-                  >
-                    <IconScribble size={15} />
-                    <span>Handschrift → Text (Kritzeln) starten</span>
-                  </button>
-                </Show>
-
-                <Show when={spellCheckEnabled()}>
-                  <div class="paper-section">
-                    <div class="paper-slider-head">
-                      <span class="paper-section-label">
-                        Hinweise auf dieser Seite ({activePageSpellEntries().length})
-                      </span>
-                      <Show when={isSpellCheckLoading()}>
-                        <span class="paper-slider-val">Wörterbuch lädt…</span>
-                      </Show>
-                    </div>
-
-                    <Show
-                      when={activePageSpellEntries().length > 0}
-                      fallback={
-                        <div class="spell-empty-state">
-                          {isSpellCheckLoading()
-                            ? 'DE/EN-Wörterbücher werden geladen…'
-                            : 'Keine Rechtschreibfehler auf dieser Seite gefunden.'}
-                        </div>
-                      }
-                    >
-                      <div class="spell-issue-list">
-                        <For each={activePageSpellEntries().slice(0, 14)}>
-                          {(entry) => (
-                            <div class="spell-issue-card">
-                              <div class="sic-head">
-                                <span class="sic-word">{entry.issue.word}</span>
-                                <div class="sic-actions">
-                                  <button
-                                    type="button"
-                                    class="mini-reset-btn"
-                                    onClick={() => {
-                                      setEditingText({
-                                        pageId: entry.pageId,
-                                        item: { ...entry.item },
-                                      });
-                                      setSpellMenuOpen(false);
-                                    }}
-                                    title="Textfeld zum Bearbeiten öffnen"
-                                  >
-                                    Öffnen
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="mini-reset-btn"
-                                    onClick={() =>
-                                      addWordToPersonalDictionary(entry.issue.word)
-                                    }
-                                    title="Wort merken"
-                                  >
-                                    + Wörterbuch
-                                  </button>
-                                </div>
-                              </div>
-                              <div class="sic-suggestions">
-                                <Show
-                                  when={entry.suggestions.length > 0}
-                                  fallback={
-                                    <span class="ssb-no-fix">Keine Vorschläge</span>
-                                  }
-                                >
-                                  <For each={entry.suggestions}>
-                                    {(sug) => (
-                                      <button
-                                        type="button"
-                                        class="ssb-fix-btn"
-                                        onClick={() => applyCanvasSpellFix(entry, sug)}
-                                      >
-                                        {sug}
-                                      </button>
-                                    )}
-                                  </For>
-                                </Show>
-                              </div>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-                  </div>
-                </Show>
-              </div>
-            </Show>
-          </div>
         </div>
 
         <div class="toolbar-spacer" />
@@ -2755,7 +2459,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                     classList={{ 'is-active': sizeMenuOpen() }}
                     onClick={() => {
                       setPaperMenuOpen(false);
-                      setSpellMenuOpen(false);
                       setSizeMenuOpen((v) => !v);
                     }}
                     title="Individuelle Breite & Höhe dieser Seite festlegen"
@@ -2959,8 +2662,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 palmSensitivity={palmSensitivity()}
                 stabilization={stabilization()}
                 pressureSensitivity={pressureSensitivity()}
-                spellCheckEnabled={spellCheckEnabled()}
-                spellCheckLanguage={spellCheckLanguage()}
                 editingText={editingText()}
                 selectedImage={selectedImage()}
                 lassoSelection={lassoSelection()}
@@ -2976,7 +2677,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 onDuplicateLasso={handleLassoDuplicate}
                 onRecolorLasso={handleLassoRecolor}
                 onDeleteLasso={handleLassoDelete}
-                onChangeSpellLanguage={setSpellCheckLanguagePersisted}
                 onSyncTextStyle={(patch) => {
                   if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
                   if (patch.fontFamily !== undefined) setTextFontFamily(patch.fontFamily);
@@ -3039,8 +2739,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   pressureSensitivity={pressureSensitivity()}
                   palmRadiusLimit={palmProfile().pointerWidth}
                   showSheetHeader={showSheetHeaders()}
-                  spellCheckEnabled={spellCheckEnabled()}
-                  spellCheckLanguage={spellCheckLanguage()}
                   editingText={editingText()}
                   selectedImage={selectedImage()}
                   lassoSelection={lassoSelection()}
@@ -3056,7 +2754,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   onDuplicateLasso={handleLassoDuplicate}
                   onRecolorLasso={handleLassoRecolor}
                   onDeleteLasso={handleLassoDelete}
-                  onChangeSpellLanguage={setSpellCheckLanguagePersisted}
                   onSyncTextStyle={(patch) => {
                     if (patch.fontSize !== undefined) setTextFontSize(patch.fontSize);
                     if (patch.fontFamily !== undefined) setTextFontFamily(patch.fontFamily);
@@ -3177,7 +2874,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         <span class="status-dot">·</span>
         <span class="pointer-badge" classList={{ 'is-pen': lastPointerType() === 'pen' }}>
           {tool() === 'scribble'
-            ? `Handschrift → Text (${getSpellLanguageShortLabel(spellCheckLanguage())})`
+            ? 'Handschrift → Text (Kritzeln)'
             : tool() === 'lasso'
               ? lassoSelection()
                 ? `Lasso · ${formatLassoCountLabel(getLassoItemCount(lassoSelection()))}`

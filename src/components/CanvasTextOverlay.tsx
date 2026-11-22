@@ -1,9 +1,8 @@
-import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, For, Show } from 'solid-js';
 import type {
   CanvasFontFamily,
   CanvasTextItem,
   PaperConfig,
-  SpellCheckLanguage,
   ThemeMode,
 } from '../types';
 import {
@@ -11,21 +10,10 @@ import {
   resolveStrokeColor,
 } from '../utils/canvasRenderer';
 import {
-  addWordToPersonalDictionary,
-  applySpellReplacement,
-  findSpellIssues,
-  getHtmlLangForSpellCheck,
-  getSpellCheckRevision,
-  getSpellLanguageShortLabel,
-  getSpellSuggestions,
-  type SpellIssue,
-} from '../utils/spellcheck';
-import {
   IconCheck,
   IconMove,
   IconPlus,
   IconScribble,
-  IconSpellCheck,
   IconTrash,
   IconX,
 } from './Icons';
@@ -37,8 +25,6 @@ const FONT_FAMILIES: { value: CanvasFontFamily; label: string }[] = [
   { value: 'mono', label: 'Mono' },
 ];
 
-const LANG_CYCLE: SpellCheckLanguage[] = ['de-en', 'de', 'en'];
-
 interface CanvasTextOverlayProps {
   item: CanvasTextItem;
   paperConfig: PaperConfig;
@@ -47,15 +33,12 @@ interface CanvasTextOverlayProps {
   topPx: number;
   scale: number;
   isScribbleMode: boolean;
-  spellCheckEnabled: boolean;
-  spellCheckLanguage: SpellCheckLanguage;
   onChangeItem: (next: CanvasTextItem) => void;
   onSyncTextStyle: (patch: {
     fontSize?: number;
     fontFamily?: CanvasFontFamily;
     bold?: boolean;
   }) => void;
-  onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onDelete: () => void;
   onCommit: () => void;
   onExitScribble?: () => void;
@@ -67,7 +50,6 @@ interface CanvasTextOverlayProps {
 }
 
 export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
-  const [activeIssueIndex, setActiveIssueIndex] = createSignal<number | null>(null);
   let textareaRef: HTMLTextAreaElement | undefined;
 
   const resolvedColor = createMemo(() =>
@@ -81,34 +63,6 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
       ...props.item.text.split('\n').map((l) => l.length + 2)
     )
   );
-
-  const spellIssues = createMemo<SpellIssue[]>(() => {
-    void getSpellCheckRevision();
-    if (!props.spellCheckEnabled) return [];
-    return findSpellIssues(props.item.text, props.spellCheckLanguage);
-  });
-
-  // Reset open suggestion chip if the issue list shrinks or changes
-  createEffect(() => {
-    const list = spellIssues();
-    const idx = activeIssueIndex();
-    if (idx !== null && idx >= list.length) {
-      setActiveIssueIndex(null);
-    }
-  });
-
-  const activeIssue = createMemo<SpellIssue | null>(() => {
-    const idx = activeIssueIndex();
-    if (idx === null) return null;
-    return spellIssues()[idx] ?? null;
-  });
-
-  const activeSuggestions = createMemo<string[]>(() => {
-    void getSpellCheckRevision();
-    const issue = activeIssue();
-    if (!issue) return [];
-    return getSpellSuggestions(issue.word, props.spellCheckLanguage, 6);
-  });
 
   // Keep textarea DOM value & auto-height synced safely without jumping cursor during Scribble
   const syncTextareaHeight = (el: HTMLTextAreaElement | undefined) => {
@@ -135,32 +89,6 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
       syncTextareaHeight(textareaRef);
     }
   });
-
-  const handleApplySuggestion = (replacement: string) => {
-    const issue = activeIssue();
-    if (!issue) return;
-    const nextText = applySpellReplacement(props.item.text, issue, replacement);
-    setActiveIssueIndex(null);
-    props.onChangeItem({ ...props.item, text: nextText });
-    if (textareaRef) {
-      textareaRef.value = nextText;
-      syncTextareaHeight(textareaRef);
-      textareaRef.focus();
-    }
-  };
-
-  const handleAddToDict = () => {
-    const issue = activeIssue();
-    if (!issue) return;
-    addWordToPersonalDictionary(issue.word);
-    setActiveIssueIndex(null);
-  };
-
-  const cycleLanguage = () => {
-    const idx = LANG_CYCLE.indexOf(props.spellCheckLanguage);
-    const next = LANG_CYCLE[(idx + 1) % LANG_CYCLE.length];
-    props.onChangeSpellLanguage(next);
-  };
 
   const boxWidthPx = createMemo(() => {
     if (props.item.maxWidth && props.item.maxWidth > 0) {
@@ -231,17 +159,6 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
             <IconX size={11} />
           </button>
         </Show>
-
-        <button
-          type="button"
-          class="ctb-btn ctb-lang-btn"
-          classList={{ 'is-active': props.spellCheckEnabled }}
-          onClick={cycleLanguage}
-          title="Rechtschreib- & Kritzeln-Sprache umschalten (DE+EN / DE / EN)"
-        >
-          <IconSpellCheck size={12} />
-          <span>{getSpellLanguageShortLabel(props.spellCheckLanguage)}</span>
-        </button>
 
         <button
           type="button"
@@ -342,8 +259,6 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
         classList={{ 'is-scribble-input': props.isScribbleMode }}
         rows={props.isScribbleMode ? Math.max(4, lineCount()) : lineCount()}
         cols={boxWidthPx() ? undefined : Math.min(48, longestLine())}
-        lang={getHtmlLangForSpellCheck(props.spellCheckLanguage)}
-        spellcheck={props.spellCheckEnabled}
         autocorrect="on"
         autocapitalize="sentences"
         autocomplete="off"
@@ -375,69 +290,6 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
           }
         }}
       />
-
-      {/* Live DE/EN Spellcheck Suggestions Bar directly below the active writing box */}
-      <Show when={props.spellCheckEnabled && spellIssues().length > 0}>
-        <div
-          class="spell-suggestions-bar"
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <div class="ssb-words">
-            <span class="ssb-label" title="Erkannte Rechtschreibhinweise">
-              <IconSpellCheck size={12} />
-            </span>
-            <For each={spellIssues().slice(0, 8)}>
-              {(issue, idx) => (
-                <button
-                  type="button"
-                  class="ssb-word-chip"
-                  classList={{ 'is-selected': activeIssueIndex() === idx() }}
-                  onClick={() =>
-                    setActiveIssueIndex((curr) => (curr === idx() ? null : idx()))
-                  }
-                  title={`Vorschläge für „${issue.word}“ anzeigen`}
-                >
-                  {issue.word}
-                </button>
-              )}
-            </For>
-            <Show when={spellIssues().length > 8}>
-              <span class="ssb-more">+{spellIssues().length - 8}</span>
-            </Show>
-          </div>
-
-          <Show when={activeIssue()}>
-            {(issue) => (
-              <div class="ssb-fixes">
-                <Show
-                  when={activeSuggestions().length > 0}
-                  fallback={<span class="ssb-no-fix">Keine Vorschläge</span>}
-                >
-                  <For each={activeSuggestions()}>
-                    {(sug) => (
-                      <button
-                        type="button"
-                        class="ssb-fix-btn"
-                        onClick={() => handleApplySuggestion(sug)}
-                      >
-                        {sug}
-                      </button>
-                    )}
-                  </For>
-                </Show>
-                <button
-                  type="button"
-                  class="ssb-dict-btn"
-                  onClick={handleAddToDict}
-                  title={`„${issue().word}“ dauerhaft zum persönlichen Wörterbuch hinzufügen`}
-                >
-                  + Wörterbuch
-                </button>
-              </div>
-            )}
-          </Show>
-        </div>
-      </Show>
     </div>
   );
 }

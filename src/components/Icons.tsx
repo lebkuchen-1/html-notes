@@ -486,15 +486,6 @@ export const IconScribble = (p: IconProps) => (
   </svg>
 );
 
-export const IconSpellCheck = (p: IconProps) => (
-  <svg {...baseProps(p.size)} class={p.class}>
-    <path d="m6 14 4-10 4 10" />
-    <path d="M7.4 11h5.2" />
-    <path d="m14 18 2.2 2.2L21 15.4" />
-    <path d="M4 19c1-1 2 1 3 0s2 1 3 0" />
-  </svg>
-);
-
 export const IconLasso = (p: IconProps) => (
   <svg {...baseProps(p.size)} class={p.class}>
     <path

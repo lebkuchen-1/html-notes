@@ -16,7 +16,6 @@ import type {
   CanvasTextItem,
   DrawingTool,
   PalmSensitivity,
-  SpellCheckLanguage,
   StabilizationLevel,
   Stroke,
   StrokePoint,
@@ -52,7 +51,6 @@ import {
   type LassoTransform,
 } from '../utils/lasso';
 import { extractPdfFilesFromTransfer } from '../utils/pageImport';
-import { getSpellCheckRevision } from '../utils/spellcheck';
 import { generateId } from '../utils/storage';
 import { StrokeStabilizer } from '../utils/strokeStabilizer';
 import {
@@ -123,8 +121,6 @@ interface InfiniteCanvasViewProps {
   palmSensitivity: PalmSensitivity;
   stabilization: StabilizationLevel;
   pressureSensitivity: boolean;
-  spellCheckEnabled: boolean;
-  spellCheckLanguage: SpellCheckLanguage;
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   lassoSelection: LassoSelection | null;
@@ -140,7 +136,6 @@ interface InfiniteCanvasViewProps {
   onDuplicateLasso: () => void;
   onRecolorLasso: (color: string) => void;
   onDeleteLasso: () => void;
-  onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onSyncTextStyle: (patch: {
     fontSize?: number;
     fontFamily?: CanvasFontFamily;
@@ -410,10 +405,6 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
             ? hoveredTextId()
             : null,
         onImageLoad: scheduleBaseRender,
-        spellCheck: {
-          enabled: props.spellCheckEnabled,
-          language: props.spellCheckLanguage,
-        },
         hiddenIds,
       }
     );
@@ -511,10 +502,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       ctx.save();
       ctx.scale(totalScale, totalScale);
       ctx.translate(-cam.x, -cam.y);
-      renderSelectedItemsPreview(ctx, p, activeLassoSel, activeLassoT, props.store.theme(), {
-        enabled: props.spellCheckEnabled,
-        language: props.spellCheckLanguage,
-      });
+      renderSelectedItemsPreview(ctx, p, activeLassoSel, activeLassoT, props.store.theme());
       ctx.restore();
       return;
     }
@@ -568,9 +556,6 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     void localEditingText()?.id;
     void hoveredTextId();
     void props.tool;
-    void props.spellCheckEnabled;
-    void props.spellCheckLanguage;
-    void getSpellCheckRevision();
     void isLassoTransforming();
     void localLassoSelection();
     scheduleBaseRender();
@@ -2324,13 +2309,10 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
                   topPx={(item().y - cam().y) * cam().zoom}
                   scale={cam().zoom}
                   isScribbleMode={props.tool === 'scribble'}
-                  spellCheckEnabled={props.spellCheckEnabled}
-                  spellCheckLanguage={props.spellCheckLanguage}
                   onChangeItem={(next) =>
                     props.onSetEditingText({ pageId: props.pageId, item: next })
                   }
                   onSyncTextStyle={props.onSyncTextStyle}
-                  onChangeSpellLanguage={props.onChangeSpellLanguage}
                   onDelete={() => {
                     const id = item().id;
                     props.onSetEditingText(null);

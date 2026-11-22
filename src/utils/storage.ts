@@ -22,7 +22,6 @@ import {
   type PalmSensitivity,
   type PaperConfig,
   type PaperPattern,
-  type SpellCheckLanguage,
   type StabilizationLevel,
   type Stroke,
   type ThemeMode,
@@ -763,16 +762,6 @@ export function normalizeNoteSettings(raw: unknown): Partial<NoteLocalSettings> 
   }
   if (typeof obj.editorSpellCheck === 'boolean') {
     out.editorSpellCheck = obj.editorSpellCheck;
-  }
-  if (typeof obj.spellCheckEnabled === 'boolean') {
-    out.spellCheckEnabled = obj.spellCheckEnabled;
-  }
-  if (
-    obj.spellCheckLanguage === 'de-en' ||
-    obj.spellCheckLanguage === 'de' ||
-    obj.spellCheckLanguage === 'en'
-  ) {
-    out.spellCheckLanguage = obj.spellCheckLanguage as SpellCheckLanguage;
   }
 
   return Object.keys(out).length > 0 ? out : undefined;

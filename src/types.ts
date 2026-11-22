@@ -11,8 +11,6 @@ export type DrawingTool =
   | 'rect'
   | 'ellipse';
 
-export type SpellCheckLanguage = 'de-en' | 'de' | 'en';
-
 export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots';
 
 export type CanvasFontFamily = 'sans' | 'serif' | 'hand' | 'mono';
@@ -43,8 +41,6 @@ export interface NoteLocalSettings {
   editorFontSize: number;
   editorFontFamily: EditorFontFamily;
   editorSpellCheck: boolean;
-  spellCheckEnabled: boolean;
-  spellCheckLanguage: SpellCheckLanguage;
 }
 
 export interface AppSettings extends NoteLocalSettings {
@@ -233,8 +229,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   editorFontSize: 15,
   editorFontFamily: 'sans',
   editorSpellCheck: true,
-  spellCheckEnabled: true,
-  spellCheckLanguage: 'de-en',
   autoEnableStylusOnly: true,
   defaultViewMode: 'canvas',
   defaultPagePresetId: 'a4-p',

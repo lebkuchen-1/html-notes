@@ -4,17 +4,10 @@ import type {
   CanvasPage,
   CanvasTextItem,
   PaperConfig,
-  SpellCheckLanguage,
   Stroke,
   StrokePoint,
   ThemeMode,
 } from '../types';
-import { findSpellIssues } from './spellcheck';
-
-export interface CanvasSpellCheckOptions {
-  enabled: boolean;
-  language: SpellCheckLanguage;
-}
 
 const imageCache = new Map<string, HTMLImageElement>();
 
@@ -525,52 +518,17 @@ export function measureCanvasTextBounds(
   };
 }
 
-function drawSpellSquiggle(
-  ctx: CanvasRenderingContext2D,
-  startX: number,
-  endX: number,
-  baselineY: number,
-  fontSize: number,
-  darkPaper: boolean
-) {
-  const width = endX - startX;
-  if (width < 2) return;
-  const amp = Math.max(1.1, Math.min(2.2, fontSize * 0.08));
-  const halfWave = Math.max(2.6, Math.min(4.5, fontSize * 0.16));
-
-  ctx.save();
-  ctx.strokeStyle = darkPaper ? '#f87171' : '#ef4444';
-  ctx.lineWidth = Math.max(1.2, Math.min(2.1, fontSize * 0.068));
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  ctx.moveTo(startX, baselineY);
-  let x = startX;
-  let dir = -1;
-  while (x < endX) {
-    const nextX = Math.min(endX, x + halfWave);
-    const midX = (x + nextX) / 2;
-    ctx.quadraticCurveTo(midX, baselineY + dir * amp, nextX, baselineY);
-    x = nextX;
-    dir *= -1;
-  }
-  ctx.stroke();
-  ctx.restore();
-}
-
 export function drawCanvasText(
   ctx: CanvasRenderingContext2D,
   item: CanvasTextItem,
   paperConfig: PaperConfig,
   theme: ThemeMode,
-  highlightBox = false,
-  spellCheck?: CanvasSpellCheckOptions
+  highlightBox = false
 ) {
   if (!item.text) return;
   const color = resolveStrokeColor(item.color, paperConfig, theme);
   const lines = layoutCanvasTextLines(ctx, item);
   const lineHeight = item.fontSize * 1.35;
-  const darkPaper = isPaperDark(paperConfig, theme);
 
   ctx.save();
   ctx.font = getCanvasFontCss(item);
@@ -591,28 +549,7 @@ export function drawCanvasText(
   }
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lineY = item.y + i * lineHeight;
-    ctx.fillText(line, item.x, lineY);
-
-    if (spellCheck?.enabled && line.trim().length > 0) {
-      const issues = findSpellIssues(line, spellCheck.language);
-      if (issues.length > 0) {
-        const squiggleY = lineY + item.fontSize * 1.12;
-        for (const issue of issues) {
-          const prefixW = ctx.measureText(line.slice(0, issue.start)).width;
-          const wordW = ctx.measureText(issue.word).width;
-          drawSpellSquiggle(
-            ctx,
-            item.x + prefixW,
-            item.x + prefixW + wordW,
-            squiggleY,
-            item.fontSize,
-            darkPaper
-          );
-        }
-      }
-    }
+    ctx.fillText(lines[i], item.x, item.y + i * lineHeight);
   }
   ctx.restore();
 }
@@ -686,7 +623,6 @@ export function renderFullCanvas(
     editingTextId?: string | null;
     hoveredTextId?: string | null;
     onImageLoad?: () => void;
-    spellCheck?: CanvasSpellCheckOptions;
     hiddenIds?: CanvasHiddenIds;
   }
 ) {
@@ -748,8 +684,7 @@ export function renderFullCanvas(
       textItem,
       page.paperConfig,
       theme,
-      textItem.id === hoveredId,
-      options?.spellCheck
+      textItem.id === hoveredId
     );
   }
 
@@ -1121,7 +1056,6 @@ export function renderInfiniteCanvas(
     editingTextId?: string | null;
     hoveredTextId?: string | null;
     onImageLoad?: () => void;
-    spellCheck?: CanvasSpellCheckOptions;
     hiddenIds?: CanvasHiddenIds;
   }
 ) {
@@ -1207,8 +1141,7 @@ export function renderInfiniteCanvas(
       textItem,
       page.paperConfig,
       theme,
-      textItem.id === hoveredId,
-      options?.spellCheck
+      textItem.id === hoveredId
     );
   }
 
