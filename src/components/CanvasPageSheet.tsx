@@ -15,12 +15,11 @@ import type {
   CanvasSnapshot,
   CanvasTextItem,
   DrawingTool,
+  PenStyle,
   Stroke,
   StrokePoint,
 } from '../types';
 import {
-  drawPenDot,
-  drawPenIncrementalSegment,
   drawStroke,
   isPaperDark,
   isPointHittingImage,
@@ -30,6 +29,12 @@ import {
   resolvePaperBackgroundColor,
   resolveStrokeColor,
 } from '../utils/canvasRenderer';
+import {
+  createIncrementalPenState,
+  drawPenLiveStep,
+  drawPenStartDot,
+  type IncrementalPenState,
+} from '../utils/penEngine';
 import { extractImageFilesFromTransfer } from '../utils/imageImport';
 import {
   applyTransformToPageSnapshot,
@@ -105,9 +110,14 @@ interface CanvasPageSheetProps {
   totalPages: number;
   cssScale: number;
   tool: DrawingTool;
+  penStyle: PenStyle;
+  fountainNibAngle: number;
+  fountainFlatness: number;
+  brushDynamics: number;
   penColor: string;
   highlighterColor: string;
   penWidth: number;
+  shapeWidth: number;
   highlighterWidth: number;
   eraserSize: number;
   textFontSize: number;
@@ -182,10 +192,9 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     changed: boolean;
   } | null = null;
 
-  // Incremental pen rendering cursors (O(1) per pointermove on liveCanvas!)
-  let penDrawnCount = 0;
-  let penPrevMidX = 0;
-  let penPrevMidY = 0;
+  // Incremental pen rendering state (O(1) per pointermove on liveCanvas!)
+  let penLiveState: IncrementalPenState = createIncrementalPenState();
+  let strokeStartEventTime = 0;
   let pendingLiveClearAfterBaseRender = false;
 
   let isErasing = false;
@@ -311,7 +320,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     if (liveCanvasRef && (liveCanvasRef.width !== targetW || liveCanvasRef.height !== targetH)) {
       liveCanvasRef.width = targetW;
       liveCanvasRef.height = targetH;
-      penDrawnCount = 0;
+      penLiveState = createIncrementalPenState();
     }
     return { targetW, targetH };
   };
@@ -321,7 +330,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     const ctx = getLiveCtx();
     if (!ctx) return;
     ctx.clearRect(0, 0, liveCanvasRef.width, liveCanvasRef.height);
-    penDrawnCount = 0;
+    penLiveState = createIncrementalPenState();
   };
 
   // Layer 1: Static Base Canvas (ONLY redraws on committed changes, resize, theme, or eraser hit!)
@@ -395,31 +404,15 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
         props.store.theme()
       );
 
-      if (penDrawnCount === 0 && pts.length > 0) {
+      if (penLiveState.drawnCount === 0 && pts.length > 0) {
         ctx.clearRect(0, 0, targetW, targetH);
-        drawPenDot(ctx, pts[0], activeStroke.width, color, activeStroke.opacity, renderScale);
-        penPrevMidX = pts[0].x;
-        penPrevMidY = pts[0].y;
-        penDrawnCount = 1;
+        drawPenStartDot(ctx, activeStroke, pts[0], color, renderScale, penLiveState);
       }
 
-      while (penDrawnCount < pts.length) {
-        const prev = pts[penDrawnCount - 1];
-        const curr = pts[penDrawnCount];
-        const nextMid = drawPenIncrementalSegment(
-          ctx,
-          penPrevMidX,
-          penPrevMidY,
-          prev,
-          curr,
-          activeStroke.width,
-          color,
-          activeStroke.opacity,
-          renderScale
-        );
-        penPrevMidX = nextMid.midX;
-        penPrevMidY = nextMid.midY;
-        penDrawnCount++;
+      while (penLiveState.drawnCount < pts.length) {
+        const prev = pts[penLiveState.drawnCount - 1];
+        const curr = pts[penLiveState.drawnCount];
+        drawPenLiveStep(ctx, activeStroke, prev, curr, color, renderScale, penLiveState);
       }
       return;
     }
@@ -531,7 +524,8 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
   const toLogicalPoint = (
     e: PointerEvent,
-    explicitPointerType?: string
+    explicitPointerType?: string,
+    explicitTimeMs?: number
   ): StrokePoint => {
     const canvas = liveCanvasRef!;
     const p = page()!;
@@ -541,26 +535,33 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     const x = ((e.clientX - rect.left) / safeW) * p.width;
     const y = ((e.clientY - rect.top) / safeH) * p.height;
 
+    const evTime = explicitTimeMs ?? (e.timeStamp || performance.now());
+    const relTime =
+      strokeStartEventTime > 0 ? Math.max(0, Math.round(evTime - strokeStartEventTime)) : 0;
+
     const pType = explicitPointerType || e.pointerType;
     let pressure = 0.55;
     if (props.pressureSensitivity) {
       pressure = lastPoint?.pressure ?? 0.5;
       if (pType === 'pen') {
-        // Ignore occasional 0-pressure glitches from iPad coalesced events and smooth slightly
+        // Ignore occasional 0-pressure glitches from iPad coalesced events while preserving light brush hairlines
         const raw =
-          e.pressure > 0.01 ? Math.min(1, Math.max(0.14, e.pressure)) : pressure;
+          e.pressure > 0.005 ? Math.min(1, Math.max(0.05, e.pressure)) : pressure;
         const smooth = activeStabilizer?.pressureSmoothing ?? 0.55;
         pressure = lastPoint ? lastPoint.pressure * smooth + raw * (1 - smooth) : raw;
       } else if (lastPoint && lastMoveTime > 0) {
-        const dt = Math.max(1, (e.timeStamp || performance.now()) - lastMoveTime);
+        const dt = Math.max(1, evTime - lastMoveTime);
         const dist = Math.hypot(x - lastPoint.x, y - lastPoint.y);
         const velocity = dist / dt;
-        const target = Math.max(0.28, Math.min(0.88, 0.78 - velocity * 0.28));
+        const isBrush = props.tool === 'pen' && props.penStyle === 'brush';
+        const target = isBrush
+          ? Math.max(0.12, Math.min(0.92, 0.86 - velocity * 0.42))
+          : Math.max(0.28, Math.min(0.88, 0.78 - velocity * 0.28));
         pressure = lastPoint.pressure * 0.65 + target * 0.35;
       }
     }
 
-    return { x, y, pressure };
+    return { x, y, pressure, t: relTime };
   };
 
   const findTextAtPoint = (pt: Pick<StrokePoint, 'x' | 'y'>): CanvasTextItem | null => {
@@ -717,7 +718,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       const stabilizer = activeStabilizer;
       activeStroke = null;
       activeStabilizer = null;
-      penDrawnCount = 0;
+      penLiveState = createIncrementalPenState();
 
       // On iPadOS Safari, if a genuine pen stroke gets pointercancel after already drawing points,
       // preserve it instead of losing the user's writing! Discard only cancelled accidental touch touches.
@@ -915,18 +916,21 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     }
 
     lastPoint = null;
-    lastMoveTime = e.timeStamp || performance.now();
+    const startEvTime = e.timeStamp || performance.now();
+    strokeStartEventTime = startEvTime;
+    lastMoveTime = startEvTime;
 
     const currentTool = isStylusEraser ? 'eraser' : props.tool;
     const isHighlighter = currentTool === 'highlighter';
-    const useStabilizer = currentTool === 'pen' || isHighlighter;
+    const isPen = currentTool === 'pen';
+    const useStabilizer = isPen || isHighlighter;
     activeStabilizer = useStabilizer
       ? new StrokeStabilizer(isHighlighter ? 'light' : props.stabilization)
       : null;
 
-    const rawPt = toLogicalPoint(e, e.pointerType);
+    const rawPt = toLogicalPoint(e, e.pointerType, startEvTime);
     const pt = activeStabilizer
-      ? activeStabilizer.filter(rawPt, e.timeStamp || performance.now())
+      ? activeStabilizer.filter(rawPt, startEvTime)
       : rawPt;
     lastPoint = pt;
 
@@ -952,13 +956,33 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
 
     if (currentTool === 'text' || currentTool === 'scribble' || currentTool === 'select') return;
 
-    penDrawnCount = 0;
+    penLiveState = createIncrementalPenState();
     pendingLiveClearAfterBaseRender = false;
     activeStroke = {
       id: generateId(),
       tool: currentTool,
+      ...(isPen
+        ? {
+            penStyle: props.penStyle,
+            ...(props.penStyle === 'fountain'
+              ? {
+                  nibAngle: props.fountainNibAngle,
+                  nibFlatness: props.fountainFlatness,
+                }
+              : {}),
+            ...(props.penStyle === 'brush'
+              ? {
+                  brushDynamics: props.brushDynamics,
+                }
+              : {}),
+          }
+        : {}),
       color: isHighlighter ? props.highlighterColor : props.penColor,
-      width: isHighlighter ? props.highlighterWidth : props.penWidth,
+      width: isHighlighter
+        ? props.highlighterWidth
+        : isPen
+          ? props.penWidth
+          : props.shapeWidth,
       opacity: isHighlighter ? 0.38 : 1,
       points: [pt],
     };
@@ -1012,7 +1036,7 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       }
 
       const evTime = ev.timeStamp || e.timeStamp || performance.now();
-      const rawPt = toLogicalPoint(ev, parentPointerType);
+      const rawPt = toLogicalPoint(ev, parentPointerType, evTime);
       lastMoveTime = evTime;
 
       if (isLassoDrawing) {

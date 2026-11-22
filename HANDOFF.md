@@ -7,12 +7,14 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Farbauswahl ersetzt nun die aktuell ausgewählte Farbe statt eines festen Extra-Slots am Ende (`src/components/DrawingCanvas.tsx`, `src/components/ColorPickerPopover.tsx`, `src/styles.css`):**
-   - Stift- und Textmarker-Paletten werden als editierbare, persistierte Farbslots (`solid-notes:pen-palette`, `solid-notes:highlighter-palette`) samt aktivem Slot-Index (`solid-notes:pen-color-index`, `solid-notes:highlighter-color-index`) in `localStorage` gespeichert; der Extra-Slot am Ende (`is-custom-slot`) entfällt.
-   - Bei geänderten Farbslots zeigt `ColorPickerPopover` im Kopf eine Zurücksetzen-Schaltfläche (`Auto` / `Standard`).
-2. **iPadOS 2-Tap-Problem bei Notizen, Ordnern und Tabs behoben (`src/styles.css`, `AGENTS.md`):**
-   - **Ursache:** Ungefilterte `:hover`-Regeln blendeten beim ersten Tipp versteckte Aktions-Buttons ein (`.tree-note-row:hover .tree-row-actions`, `.folder-row:hover .folder-actions`, `.note-tab:hover .note-tab-close`, `.home-note-card:hover .home-note-hover-actions`), wodurch iPadOS Safari den ersten Tipp als Hover-Enthüllung schluckte und erst beim zweiten Tipp `click` auslöste.
-   - **Fix:** Alle Hover-Enthüllungsregeln in `@media (hover: hover) and (pointer: fine)` gekapselt, `touch-action: manipulation` ergänzt und unter `@media (hover: none), (pointer: coarse)` Tab-Schließen (`×`) sowie Startseiten-Kartenaktionen dauerhaft bzw. Sidebar-Notiz-/Ordner-Aktionen auf `.is-active` sichtbar gemacht.
+1. **Drei eigene Stiftarten hinzugefügt — Kugelschreiber, Füllerfederhalter & Pinselstift (`src/utils/penEngine.ts`, `src/types.ts`, `src/utils/canvasRenderer.ts`, `src/components/CanvasPageSheet.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/Icons.tsx`, `src/styles.css`):**
+   - **Datenmodell & Abwärtskompatibilität (`src/types.ts`, `src/utils/strokeStabilizer.ts`, `src/utils/lasso.ts`):** `PenStyle = 'ballpoint' | 'fountain' | 'brush'`, optionale Strich-Metadaten (`penStyle`, `nibAngle`, `nibFlatness`, `brushDynamics`) auf `Stroke` sowie optionale relative Zeitstempel `t` auf `StrokePoint` (durch Stabilizer & Lasso-Operationen erhalten). Bestehende ältere Striche (`penStyle === undefined`) behalten exakt ihr bisheriges Aussehen.
+   - **Stift-Engine (`src/utils/penEngine.ts`):**
+     - **Kugelschreiber (`ballpoint`):** Gleichmäßige, präzise Linie (`0.88 + pressure * 0.20`) mit minimaler Drucknuance und eigener Standardstärke (`2.6 px`).
+     - **Füllerfederhalter (`fountain`):** Elliptischer Kalligrafie-Federwinkel (Standard `40°` Rechtshänder, umschaltbar auf `20°`, `60°`, `140°` Linkshänder + einstellbarer Feder-Kontrast `18–78 %`), Druck- & Tempo-Tintenfluss, schräge Feder-Punkte bei Einzeltipps und sanft verjüngter Auslauf.
+     - **Pinselstift (`brush`):** Nichtlineare Druckkurve (`p^1.32`, anpassbare Dynamik `55–145 %`), Tempo-Modulation sowie spitzer An- und Auslauf; Apple-Pencil-Druck-Untergrenze auf `0.05` gesenkt für feine Haarlinien.
+     - **O(1)-120Hz-Live-Rendering:** Neue Bitangenten-Kapsel-Geometrie (`fillTaperedCapsule`) für nahtlose variable Breitenübergänge ohne Perlen-/Stufen-Artefakte im Seiten- wie im Unendlich-Modus.
+   - **Toolbar & Popover (`src/components/DrawingCanvas.tsx`):** Direkte 3-Stift-Gruppe (1 Tipp pro Stift) + Stift-Optionen-Popover (durch nochmaliges Tippen auf den aktiven Stift oder `▾`) mit live gerenderten Canvas-Vorschaukurven, eigener persistierter Strichstärke pro Stiftart (`solid-notes:pen-widths`) und separater Formen-Strichstärke.
 
 ## Offene Punkte
-- Keine offenen Aufgaben — bereit für das nächste Feature nach `/clear`.
+- Praxistest der drei Stiftarten (Kugelschreiber, Füllerfederhalter, Pinselstift) auf dem iPad mit Apple Pencil — bei Bedarf anschließendes Feintuning von Druckkurven, Feder-Kontrast oder Auslauf.

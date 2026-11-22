@@ -8,6 +8,7 @@ import type {
   StrokePoint,
   ThemeMode,
 } from '../types';
+import { drawStyledPenStroke, getEffectiveStrokeMaxWidth } from './penEngine';
 
 const imageCache = new Map<string, HTMLImageElement>();
 
@@ -223,113 +224,6 @@ export function drawPaperBackground(
   ctx.restore();
 }
 
-export function drawPenDot(
-  ctx: CanvasRenderingContext2D,
-  pt: StrokePoint,
-  strokeWidth: number,
-  color: string,
-  opacity: number,
-  scale = 1
-) {
-  ctx.save();
-  ctx.scale(scale, scale);
-  ctx.globalAlpha = opacity;
-  ctx.fillStyle = color;
-  const r = Math.max(0.75, (strokeWidth * (0.45 + pt.pressure * 0.85)) / 2);
-  ctx.beginPath();
-  ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-export function drawPenIncrementalSegment(
-  ctx: CanvasRenderingContext2D,
-  prevMidX: number,
-  prevMidY: number,
-  prev: StrokePoint,
-  curr: StrokePoint,
-  strokeWidth: number,
-  color: string,
-  opacity: number,
-  scale = 1
-): { midX: number; midY: number } {
-  const midX = (prev.x + curr.x) / 2;
-  const midY = (prev.y + curr.y) / 2;
-  const avgPressure = (prev.pressure + curr.pressure) / 2;
-  const segmentWidth = Math.max(0.8, strokeWidth * (0.42 + avgPressure * 0.9));
-
-  ctx.save();
-  ctx.scale(scale, scale);
-  ctx.globalAlpha = opacity;
-  ctx.strokeStyle = color;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = segmentWidth;
-  ctx.beginPath();
-  ctx.moveTo(prevMidX, prevMidY);
-  ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
-  ctx.stroke();
-  ctx.restore();
-
-  return { midX, midY };
-}
-
-function drawPenStroke(
-  ctx: CanvasRenderingContext2D,
-  stroke: Stroke,
-  color: string
-) {
-  const pts = stroke.points;
-  if (pts.length === 0) return;
-
-  ctx.save();
-  ctx.globalAlpha = stroke.opacity;
-  ctx.fillStyle = color;
-  ctx.strokeStyle = color;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  if (pts.length === 1) {
-    const r = Math.max(0.75, (stroke.width * (0.45 + pts[0].pressure * 0.85)) / 2);
-    ctx.beginPath();
-    ctx.arc(pts[0].x, pts[0].y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
-
-  let prevMidX = pts[0].x;
-  let prevMidY = pts[0].y;
-
-  for (let i = 1; i < pts.length; i++) {
-    const prev = pts[i - 1];
-    const curr = pts[i];
-    const midX = (prev.x + curr.x) / 2;
-    const midY = (prev.y + curr.y) / 2;
-
-    const avgPressure = (prev.pressure + curr.pressure) / 2;
-    const segmentWidth = Math.max(0.8, stroke.width * (0.42 + avgPressure * 0.9));
-
-    ctx.lineWidth = segmentWidth;
-    ctx.beginPath();
-    ctx.moveTo(prevMidX, prevMidY);
-    ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
-    ctx.stroke();
-
-    prevMidX = midX;
-    prevMidY = midY;
-  }
-
-  const last = pts[pts.length - 1];
-  ctx.lineWidth = Math.max(0.8, stroke.width * (0.42 + last.pressure * 0.9));
-  ctx.beginPath();
-  ctx.moveTo(prevMidX, prevMidY);
-  ctx.lineTo(last.x, last.y);
-  ctx.stroke();
-
-  ctx.restore();
-}
-
 function drawHighlighterStroke(
   ctx: CanvasRenderingContext2D,
   stroke: Stroke,
@@ -445,7 +339,7 @@ export function drawStroke(
   if (stroke.tool === 'highlighter') {
     drawHighlighterStroke(ctx, stroke, color);
   } else if (stroke.tool === 'pen') {
-    drawPenStroke(ctx, stroke, color);
+    drawStyledPenStroke(ctx, stroke, color);
   } else {
     drawShapeStroke(ctx, stroke, color);
   }
@@ -717,7 +611,8 @@ export function isPointHittingStroke(
   stroke: Stroke,
   eraserRadius: number
 ): boolean {
-  const threshold = eraserRadius + stroke.width / 2 + 3;
+  const maxWidth = getEffectiveStrokeMaxWidth(stroke);
+  const threshold = eraserRadius + maxWidth / 2 + 3;
   const thresholdSq = threshold * threshold;
   const pts = stroke.points;
   if (pts.length === 0) return false;
@@ -859,7 +754,8 @@ export function getStrokeBounds(stroke: Stroke): ContentBounds | null {
     if (p.x > maxX) maxX = p.x;
     if (p.y > maxY) maxY = p.y;
   }
-  const pad = Math.max(4, stroke.width * 0.8 + 4);
+  const maxWidth = getEffectiveStrokeMaxWidth(stroke);
+  const pad = Math.max(4, maxWidth * 0.8 + 4);
   return {
     minX: minX - pad,
     minY: minY - pad,

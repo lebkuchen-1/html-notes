@@ -498,6 +498,7 @@ export function applyTransformToPageSnapshot(
           x: next.x,
           y: next.y,
           pressure: pt.pressure,
+          ...(pt.t !== undefined ? { t: pt.t } : {}),
         };
       }),
     };
@@ -594,6 +595,7 @@ export function duplicateLassoSelection(
         x: pt.x + offset.dx,
         y: pt.y + offset.dy,
         pressure: pt.pressure,
+        ...(pt.t !== undefined ? { t: pt.t } : {}),
       })),
     });
   }
@@ -702,6 +704,7 @@ export function pasteLassoClipboard(
         x: pt.x + dx,
         y: pt.y + dy,
         pressure: pt.pressure,
+        ...(pt.t !== undefined ? { t: pt.t } : {}),
       })),
     });
   }

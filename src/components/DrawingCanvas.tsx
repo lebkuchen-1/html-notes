@@ -20,6 +20,7 @@ import {
   type CanvasTextItem,
   type DrawingTool,
   type PaperPattern,
+  type PenStyle,
 } from '../types';
 import {
   exportCanvasToPng,
@@ -27,6 +28,17 @@ import {
   isPaperDark,
   resolvePaperBackgroundColor,
 } from '../utils/canvasRenderer';
+import {
+  BRUSH_DYNAMICS_PRESETS,
+  createPenPreviewStroke,
+  DEFAULT_BRUSH_DYNAMICS,
+  DEFAULT_FOUNTAIN_FLATNESS,
+  DEFAULT_FOUNTAIN_NIB_ANGLE,
+  drawStyledPenStroke,
+  FOUNTAIN_ANGLE_PRESETS,
+  PEN_STYLE_CONFIGS,
+  PEN_STYLE_ORDER,
+} from '../utils/penEngine';
 import {
   extractImageFilesFromTransfer,
   processImageFile,
@@ -73,6 +85,9 @@ import {
 import { ColorPickerPopover } from './ColorPickerPopover';
 import {
   IconArrow,
+  IconBallpointPen,
+  IconBrushPen,
+  IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconClipboardPaste,
@@ -81,6 +96,7 @@ import {
   IconEllipse,
   IconEraser,
   IconFileUp,
+  IconFountainPen,
   IconGrid,
   IconHighlighter,
   IconImage,
@@ -89,11 +105,11 @@ import {
   IconLine,
   IconMaximize,
   IconPages,
-  IconPen,
   IconPlus,
   IconPointer,
   IconRect,
   IconRedo,
+  IconRotateCcw,
   IconRuler,
   IconScribble,
   IconStylus,
@@ -150,11 +166,11 @@ const LINE_COLOR_SWATCHES = [
   { value: '#e2e8f0', label: 'Hell' },
 ];
 
-const PEN_SIZES = [
+const SHAPE_SIZES = [
   { label: 'S', value: 2 },
-  { label: 'M', value: 3.8 },
-  { label: 'L', value: 6.5 },
-  { label: 'XL', value: 11 },
+  { label: 'M', value: 3.2 },
+  { label: 'L', value: 5.5 },
+  { label: 'XL', value: 9 },
 ];
 
 const PATTERN_OPTIONS: { value: PaperPattern; label: string }[] = [
@@ -164,10 +180,12 @@ const PATTERN_OPTIONS: { value: PaperPattern; label: string }[] = [
   { value: 'dots', label: 'Punkte' },
 ];
 
-const TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
+const LEADING_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'select', label: 'Auswählen & Verschieben' },
   { id: 'lasso', label: 'Lasso (Einkreisen, Verschieben & Skalieren)' },
-  { id: 'pen', label: 'Stift' },
+];
+
+const TRAILING_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'scribble', label: 'Handschrift → Text (Kritzeln)' },
   { id: 'highlighter', label: 'Textmarker' },
   { id: 'text', label: 'Text auf Canvas' },
@@ -177,6 +195,46 @@ const TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'ellipse', label: 'Ellipse' },
   { id: 'eraser', label: 'Radierer' },
 ];
+
+function PenPreviewCanvas(props: {
+  penStyle: PenStyle;
+  color: string;
+  width: number;
+  nibAngle: number;
+  nibFlatness: number;
+  brushDynamics: number;
+}) {
+  let canvasRef: HTMLCanvasElement | undefined;
+
+  createEffect(() => {
+    const canvas = canvasRef;
+    if (!canvas) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = 196;
+    const cssH = 42;
+    const targetW = Math.round(cssW * dpr);
+    const targetH = Math.round(cssH * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, targetW, targetH);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    const sample = createPenPreviewStroke(props.penStyle, props.color, props.width, {
+      nibAngle: props.nibAngle,
+      nibFlatness: props.nibFlatness,
+      brushDynamics: props.brushDynamics,
+    });
+    drawStyledPenStroke(ctx, sample, props.color);
+    ctx.restore();
+  });
+
+  return <canvas ref={canvasRef} class="pen-preview-canvas" width={196} height={42} />;
+}
 
 const QUICK_APPEND_PRESETS = [
   { label: 'A4 Hoch', width: 794, height: 1123 },
@@ -198,6 +256,59 @@ const PEN_PALETTE_KEY = 'solid-notes:pen-palette';
 const HIGHLIGHTER_PALETTE_KEY = 'solid-notes:highlighter-palette';
 const PEN_COLOR_INDEX_KEY = 'solid-notes:pen-color-index';
 const HIGHLIGHTER_COLOR_INDEX_KEY = 'solid-notes:highlighter-color-index';
+const PEN_STYLE_KEY = 'solid-notes:pen-style';
+const PEN_WIDTHS_KEY = 'solid-notes:pen-widths';
+const FOUNTAIN_ANGLE_KEY = 'solid-notes:fountain-nib-angle';
+const FOUNTAIN_FLATNESS_KEY = 'solid-notes:fountain-flatness';
+const BRUSH_DYNAMICS_KEY = 'solid-notes:brush-dynamics';
+
+function loadStoredPenStyle(): PenStyle {
+  try {
+    const raw = localStorage.getItem(PEN_STYLE_KEY);
+    if (raw === 'ballpoint' || raw === 'fountain' || raw === 'brush') return raw;
+  } catch {
+    // ignore
+  }
+  return 'ballpoint';
+}
+
+function loadStoredPenWidths(): Record<PenStyle, number> {
+  const defaults: Record<PenStyle, number> = {
+    ballpoint: PEN_STYLE_CONFIGS.ballpoint.defaultWidth,
+    fountain: PEN_STYLE_CONFIGS.fountain.defaultWidth,
+    brush: PEN_STYLE_CONFIGS.brush.defaultWidth,
+  };
+  try {
+    const raw = localStorage.getItem(PEN_WIDTHS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return defaults;
+    const out = { ...defaults };
+    for (const style of PEN_STYLE_ORDER) {
+      const cfg = PEN_STYLE_CONFIGS[style];
+      const val = parsed[style];
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        out[style] = Math.max(cfg.minWidth, Math.min(cfg.maxWidth, val));
+      }
+    }
+    return out;
+  } catch {
+    return defaults;
+  }
+}
+
+function loadStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) {
+      const val = Number(raw);
+      if (Number.isFinite(val)) return Math.max(min, Math.min(max, val));
+    }
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
 
 function normalizeStoredColor(val: unknown, allowAuto: boolean): string | null {
   if (typeof val !== 'string') return null;
@@ -331,12 +442,43 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   );
   createEffect(() => saveStorageValue(PEN_COLOR_KEY, penColor()));
   createEffect(() => saveStorageValue(HIGHLIGHTER_COLOR_KEY, highlighterColor()));
-  const [penWidth, setPenWidth] = createSignal<number>(3.8);
+
+  const [penStyle, setPenStyle] = createSignal<PenStyle>(loadStoredPenStyle());
+  const [penWidths, setPenWidths] = createSignal<Record<PenStyle, number>>(
+    loadStoredPenWidths()
+  );
+  const [fountainNibAngle, setFountainNibAngle] = createSignal<number>(
+    loadStoredNumber(FOUNTAIN_ANGLE_KEY, DEFAULT_FOUNTAIN_NIB_ANGLE, 0, 175)
+  );
+  const [fountainFlatness, setFountainFlatness] = createSignal<number>(
+    loadStoredNumber(FOUNTAIN_FLATNESS_KEY, DEFAULT_FOUNTAIN_FLATNESS, 0.15, 0.8)
+  );
+  const [brushDynamics, setBrushDynamics] = createSignal<number>(
+    loadStoredNumber(BRUSH_DYNAMICS_KEY, DEFAULT_BRUSH_DYNAMICS, 0.55, 1.45)
+  );
+  const [shapeWidth, setShapeWidth] = createSignal<number>(3.2);
   const [highlighterWidth, setHighlighterWidth] = createSignal<number>(24);
   const [eraserSize, setEraserSize] = createSignal<number>(18);
   const [textFontSize, setTextFontSize] = createSignal<number>(24);
   const [textFontFamily, setTextFontFamily] = createSignal<CanvasFontFamily>('sans');
   const [textBold, setTextBold] = createSignal<boolean>(false);
+
+  const penStyleConfig = createMemo(() => PEN_STYLE_CONFIGS[penStyle()]);
+  const penWidth = createMemo(
+    () => penWidths()[penStyle()] ?? penStyleConfig().defaultWidth
+  );
+  const setCurrentPenWidth = (w: number) => {
+    const style = penStyle();
+    const cfg = PEN_STYLE_CONFIGS[style];
+    const clamped = Math.max(cfg.minWidth, Math.min(cfg.maxWidth, w));
+    setPenWidths((prev) => ({ ...prev, [style]: clamped }));
+  };
+
+  createEffect(() => saveStorageValue(PEN_STYLE_KEY, penStyle()));
+  createEffect(() => saveStorageValue(PEN_WIDTHS_KEY, JSON.stringify(penWidths())));
+  createEffect(() => saveStorageValue(FOUNTAIN_ANGLE_KEY, String(fountainNibAngle())));
+  createEffect(() => saveStorageValue(FOUNTAIN_FLATNESS_KEY, String(fountainFlatness())));
+  createEffect(() => saveStorageValue(BRUSH_DYNAMICS_KEY, String(brushDynamics())));
 
   const [zoom, setZoom] = createSignal<number>(1);
   const [infiniteZoom, setInfiniteZoom] = createSignal<number>(1);
@@ -368,6 +510,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
   };
 
+  const [penMenuOpen, setPenMenuOpen] = createSignal<boolean>(false);
   const [paperMenuOpen, setPaperMenuOpen] = createSignal<boolean>(false);
   const [sizeMenuOpen, setSizeMenuOpen] = createSignal<boolean>(false);
   const [overviewOpen, setOverviewOpen] = createSignal<boolean>(false);
@@ -383,6 +526,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   let scrollContentRef: HTMLDivElement | undefined;
   let zoomStageRef: HTMLDivElement | undefined;
   let infiniteHandle: InfiniteCanvasHandle | null = null;
+  let penMenuRef: HTMLDivElement | undefined;
   let paperMenuRef: HTMLDivElement | undefined;
   let sizeMenuRef: HTMLDivElement | undefined;
   let imageFileInputRef: HTMLInputElement | undefined;
@@ -544,7 +688,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     if (tool() === 'text' || tool() === 'scribble') {
       return editingText()?.item.fontSize ?? textFontSize();
     }
-    return penWidth();
+    if (tool() === 'pen') return penWidth();
+    return shapeWidth();
   });
 
   const setActiveWidth = (w: number) => {
@@ -558,10 +703,24 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (ed) {
         setEditingText({ pageId: ed.pageId, item: { ...ed.item, fontSize: w } });
       }
+    } else if (tool() === 'pen') {
+      setCurrentPenWidth(w);
     } else {
-      setPenWidth(w);
+      setShapeWidth(w);
     }
   };
+
+  const activeSizePresets = createMemo(() =>
+    tool() === 'pen' ? penStyleConfig().sizePresets : SHAPE_SIZES
+  );
+
+  const resolvedPenPreviewColor = createMemo(() =>
+    penColor() === 'auto'
+      ? props.store.theme() === 'dark'
+        ? '#f1f5f9'
+        : '#1e293b'
+      : penColor()
+  );
 
   const blurActiveTextInput = () => {
     const active = document.activeElement;
@@ -670,6 +829,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         setOverviewOpen(false);
         setSizeMenuOpen(false);
         setPaperMenuOpen(false);
+        setPenMenuOpen(false);
       }
       prevNoteId = id;
     });
@@ -1480,6 +1640,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (targetEl?.closest('.color-popover')) {
         return;
       }
+      if (penMenuOpen() && penMenuRef && !penMenuRef.contains(e.target as Node)) {
+        setPenMenuOpen(false);
+      }
       if (paperMenuOpen() && paperMenuRef && !paperMenuRef.contains(e.target as Node)) {
         setPaperMenuOpen(false);
       }
@@ -1490,6 +1653,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
     const handleDocKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (penMenuOpen()) setPenMenuOpen(false);
         if (paperMenuOpen()) setPaperMenuOpen(false);
         if (sizeMenuOpen()) setSizeMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
@@ -1671,11 +1835,39 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
 
     setTool(nextTool);
+    if (nextTool !== 'pen') {
+      setPenMenuOpen(false);
+    }
     if (nextTool === 'scribble') {
       openDefaultScribbleBox();
       props.store.showToast(
         'Handschrift → Text (Kritzeln) aktiv · Nochmal auf H→Text oder ✓ zum Beenden'
       );
+    }
+  };
+
+  const selectPenStyle = (style: PenStyle) => {
+    const alreadyActive = tool() === 'pen' && penStyle() === style;
+    if (alreadyActive) {
+      setPaperMenuOpen(false);
+      setSizeMenuOpen(false);
+      setPenMenuOpen((v) => !v);
+      return;
+    }
+    setPenStyle(style);
+    selectTool('pen');
+    setPenMenuOpen(false);
+  };
+
+  const resetActivePenTuning = () => {
+    const style = penStyle();
+    const cfg = PEN_STYLE_CONFIGS[style];
+    setPenWidths((prev) => ({ ...prev, [style]: cfg.defaultWidth }));
+    if (style === 'fountain') {
+      setFountainNibAngle(DEFAULT_FOUNTAIN_NIB_ANGLE);
+      setFountainFlatness(DEFAULT_FOUNTAIN_FLATNESS);
+    } else if (style === 'brush') {
+      setBrushDynamics(DEFAULT_BRUSH_DYNAMICS);
     }
   };
 
@@ -1821,7 +2013,246 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         }}
       >
         <div class="toolbar-group">
-          <For each={TOOL_ITEMS}>
+          <For each={LEADING_TOOL_ITEMS}>
+            {(item) => (
+              <button
+                type="button"
+                class="tool-btn"
+                classList={{ 'is-active': tool() === item.id }}
+                onPointerDown={(e) => {
+                  if (tool() === 'scribble' || editingText()) {
+                    e.preventDefault();
+                  }
+                }}
+                onClick={() => selectTool(item.id)}
+                title={item.label}
+                aria-label={item.label}
+              >
+                {item.id === 'select' && <IconPointer size={15} />}
+                {item.id === 'lasso' && <IconLasso size={15} />}
+              </button>
+            )}
+          </For>
+
+          {/* Dedicated 3-Pen Selector: Kugelschreiber, Füllerfederhalter & Pinselstift + Options Popover */}
+          <div class="paper-menu-anchor pen-menu-anchor" ref={penMenuRef}>
+            <div
+              class="pen-style-group"
+              classList={{ 'is-pen-active': tool() === 'pen' }}
+              role="group"
+              aria-label="Stiftarten"
+            >
+              <For each={PEN_STYLE_ORDER}>
+                {(style) => {
+                  const cfg = PEN_STYLE_CONFIGS[style];
+                  const isActive = () => tool() === 'pen' && penStyle() === style;
+                  return (
+                    <button
+                      type="button"
+                      class="tool-btn pen-style-btn"
+                      classList={{ 'is-active': isActive() }}
+                      onPointerDown={(e) => {
+                        if (tool() === 'scribble' || editingText()) {
+                          e.preventDefault();
+                        }
+                      }}
+                      onClick={() => selectPenStyle(style)}
+                      title={
+                        isActive()
+                          ? `${cfg.label} aktiv — nochmal tippen für Stift-Optionen`
+                          : `${cfg.label}: ${cfg.description}`
+                      }
+                      aria-label={cfg.label}
+                      aria-pressed={isActive()}
+                    >
+                      {style === 'ballpoint' && <IconBallpointPen size={15} />}
+                      {style === 'fountain' && <IconFountainPen size={15} />}
+                      {style === 'brush' && <IconBrushPen size={15} />}
+                    </button>
+                  );
+                }}
+              </For>
+              <button
+                type="button"
+                class="pen-options-trigger"
+                classList={{ 'is-open': penMenuOpen() }}
+                onPointerDown={(e) => {
+                  if (tool() === 'scribble' || editingText()) {
+                    e.preventDefault();
+                  }
+                }}
+                onClick={() => {
+                  setPaperMenuOpen(false);
+                  setSizeMenuOpen(false);
+                  if (tool() !== 'pen') selectTool('pen');
+                  setPenMenuOpen((v) => !v);
+                }}
+                title="Stift-Optionen & Vorschau (Kugelschreiber, Füller, Pinsel)"
+                aria-label="Stift-Optionen öffnen"
+                aria-expanded={penMenuOpen()}
+              >
+                <IconChevronDown size={12} />
+              </button>
+            </div>
+
+            <Show when={penMenuOpen()}>
+              <div
+                class="paper-popover pen-popover"
+                role="dialog"
+                aria-label="Stiftart konfigurieren"
+              >
+                <div class="paper-popover-header">
+                  <span>Stiftart &amp; Spitze</span>
+                  <div class="pen-popover-head-actions">
+                    <button
+                      type="button"
+                      class="icon-btn-xs"
+                      onClick={() => resetActivePenTuning()}
+                      title={`${penStyleConfig().label} auf Standard zurücksetzen`}
+                      aria-label="Zurücksetzen"
+                    >
+                      <IconRotateCcw size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn-xs"
+                      onClick={() => setPenMenuOpen(false)}
+                      aria-label="Schließen"
+                    >
+                      <IconX size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="pen-option-list">
+                  <For each={PEN_STYLE_ORDER}>
+                    {(style) => {
+                      const cfg = PEN_STYLE_CONFIGS[style];
+                      const isSelected = () => penStyle() === style;
+                      return (
+                        <button
+                          type="button"
+                          class="pen-option-card"
+                          classList={{ 'is-active': isSelected() }}
+                          onClick={() => {
+                            setPenStyle(style);
+                            if (tool() !== 'pen') selectTool('pen');
+                          }}
+                        >
+                          <div class="pen-option-top">
+                            <span class="pen-option-icon">
+                              {style === 'ballpoint' && <IconBallpointPen size={16} />}
+                              {style === 'fountain' && <IconFountainPen size={16} />}
+                              {style === 'brush' && <IconBrushPen size={16} />}
+                            </span>
+                            <div class="pen-option-meta">
+                              <span class="pen-option-name">{cfg.label}</span>
+                              <span class="pen-option-desc">{cfg.description}</span>
+                            </div>
+                          </div>
+                          <div class="pen-option-preview">
+                            <PenPreviewCanvas
+                              penStyle={style}
+                              color={resolvedPenPreviewColor()}
+                              width={penWidths()[style] ?? cfg.defaultWidth}
+                              nibAngle={fountainNibAngle()}
+                              nibFlatness={fountainFlatness()}
+                              brushDynamics={brushDynamics()}
+                            />
+                          </div>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+
+                <Show when={penStyle() === 'fountain'}>
+                  <div class="paper-section pen-tuning-section">
+                    <div class="paper-slider-head">
+                      <span class="paper-section-label">Federwinkel (Kalligrafie)</span>
+                      <span class="paper-slider-val">{Math.round(fountainNibAngle())}°</span>
+                    </div>
+                    <div class="pen-angle-pills">
+                      <For each={FOUNTAIN_ANGLE_PRESETS}>
+                        {(preset) => (
+                          <button
+                            type="button"
+                            class="pattern-pill"
+                            classList={{
+                              'is-active': Math.abs(fountainNibAngle() - preset.value) < 3,
+                            }}
+                            onClick={() => setFountainNibAngle(preset.value)}
+                          >
+                            {preset.label}
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                    <div class="paper-slider-head pen-subslider-head">
+                      <span class="paper-section-label">Feder-Kontrast (Schmal / Breit)</span>
+                      <span class="paper-slider-val">
+                        {Math.round(fountainFlatness() * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      class="paper-range"
+                      min={0.18}
+                      max={0.78}
+                      step={0.02}
+                      value={fountainFlatness()}
+                      onInput={(e) => setFountainFlatness(Number(e.currentTarget.value))}
+                    />
+                  </div>
+                </Show>
+
+                <Show when={penStyle() === 'brush'}>
+                  <div class="paper-section pen-tuning-section">
+                    <div class="paper-slider-head">
+                      <span class="paper-section-label">Druck- &amp; Spitzen-Dynamik</span>
+                      <span class="paper-slider-val">
+                        {Math.round(brushDynamics() * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      class="paper-range"
+                      min={0.55}
+                      max={1.45}
+                      step={0.05}
+                      value={brushDynamics()}
+                      onInput={(e) => setBrushDynamics(Number(e.currentTarget.value))}
+                    />
+                    <div class="spacing-presets">
+                      <For each={BRUSH_DYNAMICS_PRESETS}>
+                        {(preset) => (
+                          <button
+                            type="button"
+                            class="mini-reset-btn"
+                            classList={{
+                              'is-active': Math.abs(brushDynamics() - preset.value) < 0.08,
+                            }}
+                            onClick={() => setBrushDynamics(preset.value)}
+                          >
+                            {preset.label}
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={penStyle() === 'ballpoint'}>
+                  <div class="pen-ballpoint-hint">
+                    Konstante, saubere Linie mit minimaler Drucknuance — ideal für dichte Notizen,
+                    Formeln und Skizzen.
+                  </div>
+                </Show>
+              </div>
+            </Show>
+          </div>
+
+          <For each={TRAILING_TOOL_ITEMS}>
             {(item) => (
               <button
                 type="button"
@@ -1841,9 +2272,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 }
                 aria-label={item.label}
               >
-                {item.id === 'select' && <IconPointer size={15} />}
-                {item.id === 'lasso' && <IconLasso size={15} />}
-                {item.id === 'pen' && <IconPen size={15} />}
                 {item.id === 'scribble' && (
                   <>
                     <IconScribble size={15} />
@@ -1951,6 +2379,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               resetLabel={selectedSlotDefault().value === 'auto' ? 'Auto' : 'Standard'}
               resetTitle={`Ausgewählte Farbe auf ${selectedSlotDefault().label} zurücksetzen`}
               onOpen={() => {
+                setPenMenuOpen(false);
                 setPaperMenuOpen(false);
                 setSizeMenuOpen(false);
               }}
@@ -1970,20 +2399,20 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 tool() !== 'scribble'
               }
             >
-              <For each={PEN_SIZES}>
+              <For each={activeSizePresets()}>
                 {(preset) => (
                   <button
                     type="button"
                     class="size-dot-btn"
-                    classList={{ 'is-active': Math.abs(penWidth() - preset.value) < 0.6 }}
-                    onClick={() => setPenWidth(preset.value)}
-                    title={`Strichstärke ${preset.label}`}
+                    classList={{ 'is-active': Math.abs(activeWidth() - preset.value) < 0.45 }}
+                    onClick={() => setActiveWidth(preset.value)}
+                    title={`Strichstärke ${preset.label} (${preset.value} px)`}
                   >
                     <span
                       class="size-dot"
                       style={{
-                        width: `${Math.min(13, 3 + preset.value * 0.9)}px`,
-                        height: `${Math.min(13, 3 + preset.value * 0.9)}px`,
+                        width: `${Math.min(13, 3 + preset.value * 0.72)}px`,
+                        height: `${Math.min(13, 3 + preset.value * 0.72)}px`,
                       }}
                     />
                   </button>
@@ -2003,7 +2432,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                     ? 8
                     : tool() === 'text' || tool() === 'scribble'
                       ? 14
-                      : 1
+                      : tool() === 'pen'
+                        ? penStyleConfig().minWidth
+                        : 1
               }
               max={
                 tool() === 'highlighter'
@@ -2012,15 +2443,17 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                     ? 48
                     : tool() === 'text' || tool() === 'scribble'
                       ? 56
-                      : 20
+                      : tool() === 'pen'
+                        ? penStyleConfig().maxWidth
+                        : 18
               }
-              step={tool() === 'pen' ? 0.5 : 1}
+              step={tool() === 'pen' ? penStyleConfig().widthStep : 1}
               value={activeWidth()}
               onInput={(e) => setActiveWidth(Number(e.currentTarget.value))}
               title={
                 tool() === 'text' || tool() === 'scribble'
                   ? `Schriftgröße: ${activeWidth()}px`
-                  : `Größe: ${activeWidth()}px`
+                  : `Größe: ${Math.round(activeWidth() * 10) / 10}px`
               }
               aria-label={
                 tool() === 'text' || tool() === 'scribble' ? 'Schriftgröße' : 'Strichstärke'
@@ -2037,6 +2470,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             class="tool-pill paper-trigger-btn"
             classList={{ 'is-active': paperMenuOpen() }}
             onClick={() => {
+              setPenMenuOpen(false);
               setSizeMenuOpen(false);
               setPaperMenuOpen((v) => !v);
             }}
@@ -2585,6 +3019,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                     class="tool-pill page-size-btn"
                     classList={{ 'is-active': sizeMenuOpen() }}
                     onClick={() => {
+                      setPenMenuOpen(false);
                       setPaperMenuOpen(false);
                       setSizeMenuOpen((v) => !v);
                     }}
@@ -2774,9 +3209,14 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 store={props.store}
                 pageId={currPage().id}
                 tool={tool()}
+                penStyle={penStyle()}
+                fountainNibAngle={fountainNibAngle()}
+                fountainFlatness={fountainFlatness()}
+                brushDynamics={brushDynamics()}
                 penColor={penColor()}
                 highlighterColor={highlighterColor()}
                 penWidth={penWidth()}
+                shapeWidth={shapeWidth()}
                 highlighterWidth={highlighterWidth()}
                 eraserSize={eraserSize()}
                 textFontSize={textFontSize()}
@@ -2853,9 +3293,14 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   totalPages={pages().length}
                   cssScale={docScale()}
                   tool={tool()}
+                  penStyle={penStyle()}
+                  fountainNibAngle={fountainNibAngle()}
+                  fountainFlatness={fountainFlatness()}
+                  brushDynamics={brushDynamics()}
                   penColor={penColor()}
                   highlighterColor={highlighterColor()}
                   penWidth={penWidth()}
+                  shapeWidth={shapeWidth()}
                   highlighterWidth={highlighterWidth()}
                   eraserSize={eraserSize()}
                   textFontSize={textFontSize()}
@@ -3006,7 +3451,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               ? lassoSelection()
                 ? `Lasso · ${formatLassoCountLabel(getLassoItemCount(lassoSelection()))}`
                 : 'Lasso · Einkreisen'
-              : pointerTypeLabel()}
+              : tool() === 'pen'
+                ? `${penStyleConfig().label} · ${pointerTypeLabel()}`
+                : pointerTypeLabel()}
         </span>
         <span class="status-spacer" />
         <div class="zoom-controls">

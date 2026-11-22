@@ -11,6 +11,8 @@ export type DrawingTool =
   | 'rect'
   | 'ellipse';
 
+export type PenStyle = 'ballpoint' | 'fountain' | 'brush';
+
 export type PaperPattern = 'blank' | 'lined' | 'grid' | 'dots';
 
 export type CanvasFontFamily = 'sans' | 'serif' | 'hand' | 'mono';
@@ -56,11 +58,21 @@ export interface StrokePoint {
   x: number;
   y: number;
   pressure: number;
+  /** Optional relative timestamp in ms since stroke start (for velocity-aware nib/brush rendering) */
+  t?: number;
 }
 
 export interface Stroke {
   id: string;
   tool: Exclude<DrawingTool, 'select' | 'lasso' | 'eraser' | 'text' | 'scribble'>;
+  /** Pen tip style when tool === 'pen' (undefined preserves legacy smooth pen rendering) */
+  penStyle?: PenStyle;
+  /** Calligraphic nib angle in degrees for fountain pen strokes (default 40° right-handed, 140° left-handed) */
+  nibAngle?: number;
+  /** Calligraphic nib flatness / contrast for fountain pen strokes (0 .. 0.85, default 0.52) */
+  nibFlatness?: number;
+  /** Dynamic pressure/taper intensity for brush pen strokes (0.5 .. 1.5, default 1.0) */
+  brushDynamics?: number;
   /** 'auto' adapts to the canvas background luminance; otherwise hex color */
   color: string;
   width: number;

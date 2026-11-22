@@ -122,6 +122,7 @@ export class StrokeStabilizer {
       x: this.x,
       y: this.y,
       pressure: raw.pressure,
+      ...(raw.t !== undefined ? { t: raw.t } : {}),
     };
   }
 
@@ -145,6 +146,7 @@ export class StrokeStabilizer {
           x: last.x + (this.lastRawX - last.x) * 0.72,
           y: last.y + (this.lastRawY - last.y) * 0.72,
           pressure: this.lastPressure,
+          ...(last.t !== undefined ? { t: last.t + 6 } : {}),
         });
       }
     }
@@ -189,6 +191,7 @@ export class StrokeStabilizer {
         x: curr.x + (avgX - curr.x) * factor,
         y: curr.y + (avgY - curr.y) * factor,
         pressure: curr.pressure + (avgP - curr.pressure) * factor,
+        ...(curr.t !== undefined ? { t: curr.t } : {}),
       });
     }
     polished.push(result[result.length - 1]);

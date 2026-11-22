@@ -59,6 +59,32 @@ export const IconPen = (p: IconProps) => (
   </svg>
 );
 
+export const IconBallpointPen = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M17.5 3.5a2.12 2.12 0 0 1 3 3L8.2 18.8 3.5 20.5l1.7-4.7Z" />
+    <path d="m14.5 6.5 3 3" />
+    <path d="M19.8 4.2 21.3 2.7" />
+    <path d="m5.5 16 2.5 2.5" />
+    <circle cx="3" cy="21" r="0.7" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconFountainPen = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="m12 19 7-7 3 3-7 7-3-3z" />
+    <path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+    <path d="m2 2 7.586 7.586" />
+    <circle cx="11" cy="11" r="1.7" />
+  </svg>
+);
+
+export const IconBrushPen = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M19.6 3.4a1.9 1.9 0 0 1 1 2.5l-5.7 7.6a2 2 0 0 1-2.8.3l-1.9-1.9a2 2 0 0 1 .3-2.8l7.6-5.7a1.9 1.9 0 0 1 1.5 0Z" />
+    <path d="M10.4 12.6c-1.8 0-3.3 1.2-3.8 2.9-.4 1.3-.9 2.9-3.1 3.7 1.2 1.3 3.2 2.1 5.2 1.8 2.6-.4 4.3-2.3 4.3-4.8 0-.6-.1-1.2-.4-1.7" />
+  </svg>
+);
+
 export const IconHighlighter = (p: IconProps) => (
   <svg {...baseProps(p.size)} class={p.class}>
     <path d="m9 11-6 6v3h9l3-3" />
