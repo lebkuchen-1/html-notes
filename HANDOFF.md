@@ -7,14 +7,12 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Drei eigene Stiftarten hinzugefügt — Kugelschreiber, Füllerfederhalter & Pinselstift (`src/utils/penEngine.ts`, `src/types.ts`, `src/utils/canvasRenderer.ts`, `src/components/CanvasPageSheet.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/Icons.tsx`, `src/styles.css`):**
-   - **Datenmodell & Abwärtskompatibilität (`src/types.ts`, `src/utils/strokeStabilizer.ts`, `src/utils/lasso.ts`):** `PenStyle = 'ballpoint' | 'fountain' | 'brush'`, optionale Strich-Metadaten (`penStyle`, `nibAngle`, `nibFlatness`, `brushDynamics`) auf `Stroke` sowie optionale relative Zeitstempel `t` auf `StrokePoint` (durch Stabilizer & Lasso-Operationen erhalten). Bestehende ältere Striche (`penStyle === undefined`) behalten exakt ihr bisheriges Aussehen.
-   - **Stift-Engine (`src/utils/penEngine.ts`):**
-     - **Kugelschreiber (`ballpoint`):** Gleichmäßige, präzise Linie (`0.88 + pressure * 0.20`) mit minimaler Drucknuance und eigener Standardstärke (`2.6 px`).
-     - **Füllerfederhalter (`fountain`):** Elliptischer Kalligrafie-Federwinkel (Standard `40°` Rechtshänder, umschaltbar auf `20°`, `60°`, `140°` Linkshänder + einstellbarer Feder-Kontrast `18–78 %`), Druck- & Tempo-Tintenfluss, schräge Feder-Punkte bei Einzeltipps und sanft verjüngter Auslauf.
-     - **Pinselstift (`brush`):** Nichtlineare Druckkurve (`p^1.32`, anpassbare Dynamik `55–145 %`), Tempo-Modulation sowie spitzer An- und Auslauf; Apple-Pencil-Druck-Untergrenze auf `0.05` gesenkt für feine Haarlinien.
-     - **O(1)-120Hz-Live-Rendering:** Neue Bitangenten-Kapsel-Geometrie (`fillTaperedCapsule`) für nahtlose variable Breitenübergänge ohne Perlen-/Stufen-Artefakte im Seiten- wie im Unendlich-Modus.
-   - **Toolbar & Popover (`src/components/DrawingCanvas.tsx`):** Direkte 3-Stift-Gruppe (1 Tipp pro Stift) + Stift-Optionen-Popover (durch nochmaliges Tippen auf den aktiven Stift oder `▾`) mit live gerenderten Canvas-Vorschaukurven, eigener persistierter Strichstärke pro Stiftart (`solid-notes:pen-widths`) und separater Formen-Strichstärke.
+1. **Interaktives Zeichenlineal & gruppierte geometrische Formen (`src/utils/ruler.ts`, `src/components/CanvasRulerOverlay.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/CanvasPageSheet.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/Icons.tsx`, `src/styles.css`):**
+   - **Gruppierte geometrische Symbole in der Toolbar:** `Linie`, `Pfeil`, `Rechteck` und `Ellipse` sind in einem kompakten Split-Button (`.shape-tool-group` analog zur 3-Stift-Gruppe) gebündelt — zeigt die zuletzt gewählte Form (persistiert in `solid-notes:shape-tool`), aktiviert sie per 1 Tipp und öffnet per erneutem Tipp oder `▾` das 2×2-Formen-Popover inkl. Linienstärken-Schnellwahl (`S`/`M`/`L`/`XL`).
+   - **Interaktives physisches Lineal (`CanvasRulerOverlay.tsx` & `ruler.ts`):**
+     - Über den Lineal-Button in der Toolbar oder Taste `R` ein-/ausblendbar; funktioniert einheitlich im **Seiten-Modus** und **Unendlich-Modus** über `.canvas-stage-wrapper`.
+     - **Präzises Zeichnen entlang beider Kanten:** Stift (Kugelschreiber, Füllerfederhalter, Pinselstift) und Textmarker rasten beim Aufsetzen in der Kanten-Fangzone magnetisch ein und projizieren jeden Punkt exakt auf die Linealkante — Druckdynamik, Federwinkel und O(1)-120Hz-Live-Rendering bleiben vollständig erhalten, während die aktive Kante aufleuchtet und die gezeichnete Länge live in `cm` angezeigt wird.
+     - **Zoom-adaptive Skala & Bedienung:** Retina-scharfe SVG-cm/mm-Skala (A4-kalibriert: `794 px = 21 cm`, passt sich live auch während Pinch-Zoom an), 1-Finger-/Maus-Verschieben, 2-Finger-Drehen + Verschieben (per `targetTouches` palm-geschützt), 1-Finger-/Pencil-Drehgriffe links/rechts, Mausrad-Drehung (`1°` / `Shift: 15°`), magnetisches Winkel-Snapping (`0°/15°/45°/90°`, mit `Alt` frei) sowie eine stets aufrechte Winkel-Kapsel mit Schnellwinkeln (`0°`, `45°`, `90°`, `-45°`) und Schließen-Button.
 
 ## Offene Punkte
-- Praxistest der drei Stiftarten (Kugelschreiber, Füllerfederhalter, Pinselstift) auf dem iPad mit Apple Pencil — bei Bedarf anschließendes Feintuning von Druckkurven, Feder-Kontrast oder Auslauf.
+- Praxistest von Lineal (2-Finger-Drehung, Kanten-Fangzone, Drehgriffe) und gruppierter Formen-Auswahl auf dem iPad mit Apple Pencil.

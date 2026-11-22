@@ -58,6 +58,11 @@ import {
   type StabilizationLevel,
 } from '../utils/strokeStabilizer';
 import {
+  projectClientPointToRulerLock,
+  type RulerDrawAdapter,
+  type RulerStrokeLock,
+} from '../utils/ruler';
+import {
   CanvasLassoOverlay,
   type LassoResizeCorner,
 } from './CanvasLassoOverlay';
@@ -157,6 +162,7 @@ interface CanvasPageSheetProps {
   onImportPagesFiles: (files: File[]) => void;
   registerElement: (pageId: string, el: HTMLDivElement | null) => void;
   registerTouchAbort: (pageId: string, fn: (() => void) | null) => void;
+  rulerAdapter?: RulerDrawAdapter;
 }
 
 export function CanvasPageSheet(props: CanvasPageSheetProps) {
@@ -177,6 +183,10 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
   let lastPointerEventWallTime = 0;
   let activeStroke: Stroke | null = null;
   let activeStabilizer: StrokeStabilizer | null = null;
+  let activeRulerLock: RulerStrokeLock | null = null;
+  let rulerMinAlong = 0;
+  let rulerMaxAlong = 0;
+  let rulerScaleCssPerLogical = 1;
 
   // Freehand lasso loop state
   let isLassoDrawing = false;
@@ -525,15 +535,18 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
   const toLogicalPoint = (
     e: PointerEvent,
     explicitPointerType?: string,
-    explicitTimeMs?: number
+    explicitTimeMs?: number,
+    overrideClient?: { clientX: number; clientY: number }
   ): StrokePoint => {
     const canvas = liveCanvasRef!;
     const p = page()!;
     const rect = canvas.getBoundingClientRect();
     const safeW = Math.max(1, rect.width);
     const safeH = Math.max(1, rect.height);
-    const x = ((e.clientX - rect.left) / safeW) * p.width;
-    const y = ((e.clientY - rect.top) / safeH) * p.height;
+    const clientX = overrideClient ? overrideClient.clientX : e.clientX;
+    const clientY = overrideClient ? overrideClient.clientY : e.clientY;
+    const x = ((clientX - rect.left) / safeW) * p.width;
+    const y = ((clientY - rect.top) / safeH) * p.height;
 
     const evTime = explicitTimeMs ?? (e.timeStamp || performance.now());
     const relTime =
@@ -627,6 +640,10 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     activePointerType = null;
     activeStroke = null;
     activeStabilizer = null;
+    if (activeRulerLock) {
+      activeRulerLock = null;
+      props.rulerAdapter?.releaseLock();
+    }
     isLassoDrawing = false;
     lassoPoints = [];
     hadLassoSelectionAtDown = false;
@@ -652,6 +669,10 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     activePointerId = null;
     activePointerType = null;
     lastPoint = null;
+    if (activeRulerLock) {
+      activeRulerLock = null;
+      props.rulerAdapter?.releaseLock();
+    }
 
     if (isLassoDrawing) {
       const pts = lassoPoints;
@@ -923,12 +944,32 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
     const currentTool = isStylusEraser ? 'eraser' : props.tool;
     const isHighlighter = currentTool === 'highlighter';
     const isPen = currentTool === 'pen';
-    const useStabilizer = isPen || isHighlighter;
+    const isRulerGuideable = isPen || isHighlighter;
+
+    let startOverrideClient: { clientX: number; clientY: number } | undefined;
+    activeRulerLock = null;
+    if (isRulerGuideable && props.rulerAdapter) {
+      const rect = liveCanvasRef.getBoundingClientRect();
+      rulerScaleCssPerLogical = Math.max(0.1, rect.width / Math.max(1, p.width));
+      const strokeWidthCss =
+        (isHighlighter ? props.highlighterWidth : props.penWidth) * rulerScaleCssPerLogical;
+      const lock = props.rulerAdapter.acquireLock(e.clientX, e.clientY, strokeWidthCss);
+      if (lock) {
+        activeRulerLock = lock;
+        const proj = projectClientPointToRulerLock(e.clientX, e.clientY, lock);
+        startOverrideClient = { clientX: proj.clientX, clientY: proj.clientY };
+        rulerMinAlong = proj.alongPx;
+        rulerMaxAlong = proj.alongPx;
+        props.rulerAdapter.updateActiveLength(lock.side, 0);
+      }
+    }
+
+    const useStabilizer = (isPen || isHighlighter) && !activeRulerLock;
     activeStabilizer = useStabilizer
       ? new StrokeStabilizer(isHighlighter ? 'light' : props.stabilization)
       : null;
 
-    const rawPt = toLogicalPoint(e, e.pointerType, startEvTime);
+    const rawPt = toLogicalPoint(e, e.pointerType, startEvTime, startOverrideClient);
     const pt = activeStabilizer
       ? activeStabilizer.filter(rawPt, startEvTime)
       : rawPt;
@@ -1036,7 +1077,18 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
       }
 
       const evTime = ev.timeStamp || e.timeStamp || performance.now();
-      const rawPt = toLogicalPoint(ev, parentPointerType, evTime);
+      let overrideClient: { clientX: number; clientY: number } | undefined;
+      if (activeRulerLock) {
+        const proj = projectClientPointToRulerLock(ev.clientX, ev.clientY, activeRulerLock);
+        overrideClient = { clientX: proj.clientX, clientY: proj.clientY };
+        if (proj.alongPx < rulerMinAlong) rulerMinAlong = proj.alongPx;
+        if (proj.alongPx > rulerMaxAlong) rulerMaxAlong = proj.alongPx;
+        props.rulerAdapter?.updateActiveLength(
+          activeRulerLock.side,
+          (rulerMaxAlong - rulerMinAlong) / rulerScaleCssPerLogical
+        );
+      }
+      const rawPt = toLogicalPoint(ev, parentPointerType, evTime, overrideClient);
       lastMoveTime = evTime;
 
       if (isLassoDrawing) {

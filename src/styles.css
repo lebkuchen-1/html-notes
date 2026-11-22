@@ -7473,3 +7473,417 @@ button {
     align-items: flex-start;
   }
 }
+
+/* ==========================================================================
+   Grouped Geometric Shapes Toolbar Control & Popover
+   ========================================================================== */
+
+.shape-tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.shape-tool-group.is-shape-active {
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.shape-tool-group .shape-main-btn {
+  width: 28px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .shape-tool-group {
+  padding: 1px;
+  border-radius: 7px;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .shape-main-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.app-shell.is-fullscreen .pane-toolbar .shape-options-trigger {
+  width: 16px;
+  height: 24px;
+}
+
+.shape-popover {
+  width: 268px;
+  gap: 10px;
+}
+
+.shape-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 7px;
+}
+
+.shape-option-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 8px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+
+.shape-option-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.shape-option-card.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 1px 6px rgba(79, 70, 229, 0.14);
+}
+
+.shape-option-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+}
+
+.shape-option-card.is-active .shape-option-icon {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.shape-option-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.shape-option-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+.shape-width-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.shape-width-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ==========================================================================
+   Canvas Stage Wrapper & Interactive Physical Drawing Ruler Overlay
+   ========================================================================== */
+
+.canvas-stage-wrapper {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.canvas-ruler {
+  position: absolute;
+  z-index: 38;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.9) 0%,
+    rgba(248, 250, 252, 0.78) 50%,
+    rgba(255, 255, 255, 0.9) 100%
+  );
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  box-shadow:
+    0 8px 26px rgba(15, 23, 42, 0.16),
+    0 1px 3px rgba(15, 23, 42, 0.12);
+  color: #1e293b;
+  will-change: transform, left, top;
+}
+
+.canvas-ruler.is-dark-paper,
+[data-theme='dark'] .canvas-ruler {
+  background: linear-gradient(
+    to bottom,
+    rgba(30, 41, 59, 0.9) 0%,
+    rgba(15, 23, 42, 0.78) 50%,
+    rgba(30, 41, 59, 0.9) 100%
+  );
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.42),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+  color: #e2e8f0;
+}
+
+.canvas-ruler-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  pointer-events: none;
+  background: rgba(15, 23, 42, 0.34);
+  transition: background-color 0.1s ease, box-shadow 0.1s ease, height 0.1s ease;
+}
+
+.canvas-ruler.is-dark-paper .canvas-ruler-edge,
+[data-theme='dark'] .canvas-ruler-edge {
+  background: rgba(226, 232, 240, 0.36);
+}
+
+.canvas-ruler-edge.is-top {
+  top: 0;
+}
+
+.canvas-ruler-edge.is-bottom {
+  bottom: 0;
+}
+
+.canvas-ruler.is-edge-top .canvas-ruler-edge.is-top,
+.canvas-ruler.is-edge-bottom .canvas-ruler-edge.is-bottom {
+  height: 2.5px;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(79, 70, 229, 0.65);
+}
+
+.canvas-ruler-ticks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.ruler-tick-major {
+  stroke: currentColor;
+  stroke-opacity: 0.78;
+  stroke-width: 1.25;
+  fill: none;
+}
+
+.ruler-tick-mid {
+  stroke: currentColor;
+  stroke-opacity: 0.54;
+  stroke-width: 1;
+  fill: none;
+}
+
+.ruler-tick-minor {
+  stroke: currentColor;
+  stroke-opacity: 0.34;
+  stroke-width: 0.85;
+  fill: none;
+}
+
+.ruler-tick-label {
+  fill: currentColor;
+  fill-opacity: 0.72;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-sans);
+  pointer-events: none;
+}
+
+.canvas-ruler-centerline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.canvas-ruler-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  bottom: 6px;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+.canvas-ruler.is-dragging .canvas-ruler-body {
+  cursor: grabbing;
+}
+
+.ruler-rotate-handle {
+  position: absolute;
+  top: 50%;
+  width: 32px;
+  height: 32px;
+  margin-top: -16px;
+  margin-left: -16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: grab;
+  touch-action: none;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.14);
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+}
+
+.ruler-rotate-handle.is-left {
+  left: calc(50% - 148px);
+}
+
+.ruler-rotate-handle.is-right {
+  left: calc(50% + 148px);
+}
+
+.ruler-rotate-handle:hover,
+.canvas-ruler.is-rotating .ruler-rotate-handle {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.canvas-ruler.is-rotating .ruler-rotate-handle {
+  cursor: grabbing;
+}
+
+.ruler-center-hud {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.ruler-center-hud.is-above {
+  flex-direction: column-reverse;
+}
+
+.ruler-angle-pill {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.16);
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ruler-angle-pill:hover,
+.ruler-angle-pill.is-open {
+  border-color: var(--accent);
+}
+
+.ruler-angle-pill.is-snapped,
+.ruler-angle-pill.is-measuring {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.ruler-hud-sep {
+  opacity: 0.7;
+}
+
+.ruler-length-val {
+  font-weight: 700;
+}
+
+.ruler-quick-bar {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.22);
+}
+
+.ruler-quick-btn {
+  height: 26px;
+  min-width: 34px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.ruler-quick-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.ruler-quick-btn.is-active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.ruler-quick-btn.is-close {
+  min-width: 26px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.ruler-quick-btn.is-close:hover {
+  color: var(--danger);
+  border-color: rgba(220, 38, 38, 0.45);
+}

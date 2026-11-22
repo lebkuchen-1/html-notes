@@ -59,6 +59,11 @@ import { extractPdfFilesFromTransfer } from '../utils/pageImport';
 import { generateId } from '../utils/storage';
 import { StrokeStabilizer } from '../utils/strokeStabilizer';
 import {
+  projectClientPointToRulerLock,
+  type RulerDrawAdapter,
+  type RulerStrokeLock,
+} from '../utils/ruler';
+import {
   createScrollAxisState,
   filterScrollDelta,
   getOneFingerPanThreshold,
@@ -158,6 +163,7 @@ interface InfiniteCanvasViewProps {
   ) => void;
   onImportPagesFiles: (files: File[]) => void;
   registerHandle: (handle: InfiniteCanvasHandle | null) => void;
+  rulerAdapter?: RulerDrawAdapter;
 }
 
 export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
@@ -185,6 +191,10 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
   let lastPointerEventWallTime = 0;
   let activeStroke: Stroke | null = null;
   let activeStabilizer: StrokeStabilizer | null = null;
+  let activeRulerLock: RulerStrokeLock | null = null;
+  let rulerMinAlong = 0;
+  let rulerMaxAlong = 0;
+  let rulerScaleCssPerLogical = 1;
 
   // Freehand lasso loop state
   let isLassoDrawing = false;
@@ -620,9 +630,12 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
   const toWorldStrokePoint = (
     e: PointerEvent,
     explicitPointerType?: string,
-    explicitTimeMs?: number
+    explicitTimeMs?: number,
+    overrideClient?: { clientX: number; clientY: number }
   ): StrokePoint => {
-    const { x, y } = clientToWorld(e.clientX, e.clientY);
+    const clientX = overrideClient ? overrideClient.clientX : e.clientX;
+    const clientY = overrideClient ? overrideClient.clientY : e.clientY;
+    const { x, y } = clientToWorld(clientX, clientY);
     const evTime = explicitTimeMs ?? (e.timeStamp || performance.now());
     const relTime =
       strokeStartEventTime > 0 ? Math.max(0, Math.round(evTime - strokeStartEventTime)) : 0;
@@ -715,6 +728,10 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     activePointerType = null;
     activeStroke = null;
     activeStabilizer = null;
+    if (activeRulerLock) {
+      activeRulerLock = null;
+      props.rulerAdapter?.releaseLock();
+    }
     isLassoDrawing = false;
     lassoPoints = [];
     hadLassoSelectionAtDown = false;
@@ -740,6 +757,10 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     activePointerId = null;
     activePointerType = null;
     lastPoint = null;
+    if (activeRulerLock) {
+      activeRulerLock = null;
+      props.rulerAdapter?.releaseLock();
+    }
 
     if (isLassoDrawing) {
       const pts = lassoPoints;
@@ -1039,7 +1060,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-ruler'
         )
       );
     };
@@ -1587,12 +1608,31 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     const currentTool = isStylusEraser ? 'eraser' : props.tool;
     const isHighlighter = currentTool === 'highlighter';
     const isPen = currentTool === 'pen';
-    const useStabilizer = isPen || isHighlighter;
+    const isRulerGuideable = isPen || isHighlighter;
+
+    let startOverrideClient: { clientX: number; clientY: number } | undefined;
+    activeRulerLock = null;
+    if (isRulerGuideable && props.rulerAdapter) {
+      rulerScaleCssPerLogical = Math.max(0.1, camera().zoom);
+      const strokeWidthCss =
+        (isHighlighter ? props.highlighterWidth : props.penWidth) * rulerScaleCssPerLogical;
+      const lock = props.rulerAdapter.acquireLock(e.clientX, e.clientY, strokeWidthCss);
+      if (lock) {
+        activeRulerLock = lock;
+        const proj = projectClientPointToRulerLock(e.clientX, e.clientY, lock);
+        startOverrideClient = { clientX: proj.clientX, clientY: proj.clientY };
+        rulerMinAlong = proj.alongPx;
+        rulerMaxAlong = proj.alongPx;
+        props.rulerAdapter.updateActiveLength(lock.side, 0);
+      }
+    }
+
+    const useStabilizer = (isPen || isHighlighter) && !activeRulerLock;
     activeStabilizer = useStabilizer
       ? new StrokeStabilizer(isHighlighter ? 'light' : props.stabilization)
       : null;
 
-    const rawPt = toWorldStrokePoint(e, e.pointerType, startEvTime);
+    const rawPt = toWorldStrokePoint(e, e.pointerType, startEvTime, startOverrideClient);
     const pt = activeStabilizer
       ? activeStabilizer.filter(rawPt, startEvTime)
       : rawPt;
@@ -1715,7 +1755,18 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       }
 
       const evTime = ev.timeStamp || e.timeStamp || performance.now();
-      const rawPt = toWorldStrokePoint(ev, parentPointerType, evTime);
+      let overrideClient: { clientX: number; clientY: number } | undefined;
+      if (activeRulerLock) {
+        const proj = projectClientPointToRulerLock(ev.clientX, ev.clientY, activeRulerLock);
+        overrideClient = { clientX: proj.clientX, clientY: proj.clientY };
+        if (proj.alongPx < rulerMinAlong) rulerMinAlong = proj.alongPx;
+        if (proj.alongPx > rulerMaxAlong) rulerMaxAlong = proj.alongPx;
+        props.rulerAdapter?.updateActiveLength(
+          activeRulerLock.side,
+          (rulerMaxAlong - rulerMinAlong) / rulerScaleCssPerLogical
+        );
+      }
+      const rawPt = toWorldStrokePoint(ev, parentPointerType, evTime, overrideClient);
       lastMoveTime = evTime;
 
       if (isLassoDrawing) {

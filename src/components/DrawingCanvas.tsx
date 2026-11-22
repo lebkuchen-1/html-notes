@@ -82,7 +82,17 @@ import {
   InfiniteCanvasView,
   type InfiniteCanvasHandle,
 } from './InfiniteCanvasView';
+import { CanvasRulerOverlay } from './CanvasRulerOverlay';
 import { ColorPickerPopover } from './ColorPickerPopover';
+import {
+  clampRulerCenter,
+  computeRulerGeometry,
+  formatRulerLengthCm,
+  trySnapToRulerEdge,
+  type RulerDrawAdapter,
+  type RulerSide,
+  type RulerState,
+} from '../utils/ruler';
 import {
   IconArrow,
   IconBallpointPen,
@@ -185,15 +195,27 @@ const LEADING_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'lasso', label: 'Lasso (Einkreisen, Verschieben & Skalieren)' },
 ];
 
-const TRAILING_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
-  { id: 'scribble', label: 'Handschrift → Text (Kritzeln)' },
+type ShapeTool = 'line' | 'arrow' | 'rect' | 'ellipse';
+
+const SHAPE_TOOL_ITEMS: { id: ShapeTool; label: string; description: string }[] = [
+  { id: 'line', label: 'Linie', description: 'Gerade Strecke' },
+  { id: 'arrow', label: 'Pfeil', description: 'Gerichteter Pfeil' },
+  { id: 'rect', label: 'Rechteck', description: 'Rahmen / Kasten' },
+  { id: 'ellipse', label: 'Ellipse', description: 'Kreis / Oval' },
+];
+
+const SHAPE_TOOL_LABEL_MAP = new Map<ShapeTool, string>(
+  SHAPE_TOOL_ITEMS.map((item) => [item.id, item.label])
+);
+
+function isShapeTool(t: DrawingTool): t is ShapeTool {
+  return t === 'line' || t === 'arrow' || t === 'rect' || t === 'ellipse';
+}
+
+const MIDDLE_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
   { id: 'highlighter', label: 'Textmarker' },
+  { id: 'scribble', label: 'Handschrift → Text (Kritzeln)' },
   { id: 'text', label: 'Text auf Canvas' },
-  { id: 'line', label: 'Linie' },
-  { id: 'arrow', label: 'Pfeil' },
-  { id: 'rect', label: 'Rechteck' },
-  { id: 'ellipse', label: 'Ellipse' },
-  { id: 'eraser', label: 'Radierer' },
 ];
 
 function PenPreviewCanvas(props: {
@@ -261,6 +283,19 @@ const PEN_WIDTHS_KEY = 'solid-notes:pen-widths';
 const FOUNTAIN_ANGLE_KEY = 'solid-notes:fountain-nib-angle';
 const FOUNTAIN_FLATNESS_KEY = 'solid-notes:fountain-flatness';
 const BRUSH_DYNAMICS_KEY = 'solid-notes:brush-dynamics';
+const SHAPE_TOOL_KEY = 'solid-notes:shape-tool';
+
+function loadStoredShapeTool(): ShapeTool {
+  try {
+    const raw = localStorage.getItem(SHAPE_TOOL_KEY);
+    if (raw === 'line' || raw === 'arrow' || raw === 'rect' || raw === 'ellipse') {
+      return raw;
+    }
+  } catch {
+    // ignore
+  }
+  return 'line';
+}
 
 function loadStoredPenStyle(): PenStyle {
   try {
@@ -511,6 +546,10 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   };
 
   const [penMenuOpen, setPenMenuOpen] = createSignal<boolean>(false);
+  const [shapeMenuOpen, setShapeMenuOpen] = createSignal<boolean>(false);
+  const [activeShapeTool, setActiveShapeTool] = createSignal<ShapeTool>(
+    loadStoredShapeTool()
+  );
   const [paperMenuOpen, setPaperMenuOpen] = createSignal<boolean>(false);
   const [sizeMenuOpen, setSizeMenuOpen] = createSignal<boolean>(false);
   const [overviewOpen, setOverviewOpen] = createSignal<boolean>(false);
@@ -518,15 +557,32 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [isDragOver, setIsDragOver] = createSignal<boolean>(false);
   const [importProgress, setImportProgress] = createSignal<string | null>(null);
 
+  const [stageSize, setStageSize] = createSignal({ width: 800, height: 600 });
+  const [rulerState, setRulerState] = createSignal<RulerState>({
+    visible: false,
+    cx: 400,
+    cy: 260,
+    angleDeg: 0,
+  });
+  const [rulerActiveEdge, setRulerActiveEdge] = createSignal<{
+    side: RulerSide;
+    lengthCm: string;
+  } | null>(null);
+  let rulerPositionedOnce = false;
+
+  createEffect(() => saveStorageValue(SHAPE_TOOL_KEY, activeShapeTool()));
+
   const [editingText, setEditingText] = createSignal<EditingTextState | null>(null);
   const [selectedImage, setSelectedImage] = createSignal<SelectedImageState | null>(null);
   const [lassoSelection, setLassoSelection] = createSignal<LassoSelection | null>(null);
 
+  let stageWrapperRef: HTMLDivElement | undefined;
   let viewportRef: HTMLDivElement | undefined;
   let scrollContentRef: HTMLDivElement | undefined;
   let zoomStageRef: HTMLDivElement | undefined;
   let infiniteHandle: InfiniteCanvasHandle | null = null;
   let penMenuRef: HTMLDivElement | undefined;
+  let shapeMenuRef: HTMLDivElement | undefined;
   let paperMenuRef: HTMLDivElement | undefined;
   let sizeMenuRef: HTMLDivElement | undefined;
   let imageFileInputRef: HTMLInputElement | undefined;
@@ -830,6 +886,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         setSizeMenuOpen(false);
         setPaperMenuOpen(false);
         setPenMenuOpen(false);
+        setShapeMenuOpen(false);
+        setRulerActiveEdge(null);
       }
       prevNoteId = id;
     });
@@ -967,7 +1025,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .paper-popover'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-ruler, .paper-popover'
         )
       );
     };
@@ -1643,6 +1701,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (penMenuOpen() && penMenuRef && !penMenuRef.contains(e.target as Node)) {
         setPenMenuOpen(false);
       }
+      if (shapeMenuOpen() && shapeMenuRef && !shapeMenuRef.contains(e.target as Node)) {
+        setShapeMenuOpen(false);
+      }
       if (paperMenuOpen() && paperMenuRef && !paperMenuRef.contains(e.target as Node)) {
         setPaperMenuOpen(false);
       }
@@ -1654,6 +1715,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     const handleDocKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (penMenuOpen()) setPenMenuOpen(false);
+        if (shapeMenuOpen()) setShapeMenuOpen(false);
         if (paperMenuOpen()) setPaperMenuOpen(false);
         if (sizeMenuOpen()) setSizeMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
@@ -1667,6 +1729,18 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         Boolean(target?.isContentEditable);
+
+      if (
+        !isEditable &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === 'r'
+      ) {
+        e.preventDefault();
+        toggleRuler();
+        return;
+      }
 
       if (!isEditable && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (lassoSelection()) {
@@ -1734,7 +1808,29 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     document.addEventListener('keydown', handleDocKeyDown);
     document.addEventListener('paste', handleDocPaste);
 
+    let stageRo: ResizeObserver | null = null;
+    if (stageWrapperRef) {
+      const syncStageSize = () => {
+        if (!stageWrapperRef) return;
+        const w = stageWrapperRef.clientWidth;
+        const h = stageWrapperRef.clientHeight;
+        if (w > 0 && h > 0) {
+          setStageSize({ width: w, height: h });
+          setRulerState((prev) => {
+            if (!prev.visible) return prev;
+            const clamped = clampRulerCenter(prev.cx, prev.cy, w, h);
+            if (clamped.cx === prev.cx && clamped.cy === prev.cy) return prev;
+            return { ...prev, cx: clamped.cx, cy: clamped.cy };
+          });
+        }
+      };
+      syncStageSize();
+      stageRo = new ResizeObserver(syncStageSize);
+      stageRo.observe(stageWrapperRef);
+    }
+
     onCleanup(() => {
+      stageRo?.disconnect();
       document.removeEventListener('pointerdown', handleDocPointerDown);
       document.removeEventListener('keydown', handleDocKeyDown);
       document.removeEventListener('paste', handleDocPaste);
@@ -1838,6 +1934,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     if (nextTool !== 'pen') {
       setPenMenuOpen(false);
     }
+    if (!isShapeTool(nextTool)) {
+      setShapeMenuOpen(false);
+    }
     if (nextTool === 'scribble') {
       openDefaultScribbleBox();
       props.store.showToast(
@@ -1846,9 +1945,85 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
   };
 
+  const selectShapeTool = (shape: ShapeTool) => {
+    setActiveShapeTool(shape);
+    selectTool(shape);
+    setShapeMenuOpen(false);
+  };
+
+  const toggleRuler = () => {
+    const currentlyVisible = rulerState().visible;
+    setPenMenuOpen(false);
+    setShapeMenuOpen(false);
+    setPaperMenuOpen(false);
+    setSizeMenuOpen(false);
+
+    if (currentlyVisible) {
+      setRulerActiveEdge(null);
+      setRulerState((prev) => ({ ...prev, visible: false }));
+      return;
+    }
+
+    const w = stageWrapperRef?.clientWidth || stageSize().width || 800;
+    const h = stageWrapperRef?.clientHeight || stageSize().height || 600;
+    setStageSize({ width: w, height: h });
+
+    if (!rulerPositionedOnce) {
+      rulerPositionedOnce = true;
+      setRulerState({
+        visible: true,
+        cx: Math.round(w * 0.5),
+        cy: Math.round(h * 0.44),
+        angleDeg: 0,
+      });
+    } else {
+      setRulerState((prev) => {
+        const clamped = clampRulerCenter(prev.cx, prev.cy, w, h);
+        return { ...prev, visible: true, cx: clamped.cx, cy: clamped.cy };
+      });
+    }
+
+    if (tool() !== 'pen' && tool() !== 'highlighter') {
+      selectTool('pen');
+    }
+    props.store.showToast(
+      'Lineal aktiv — Stift oder Textmarker an der Kante führen · 2 Finger drehen'
+    );
+  };
+
+  const rulerAdapter: RulerDrawAdapter = {
+    acquireLock: (clientX, clientY, strokeWidthCss) => {
+      const st = rulerState();
+      if (!st.visible || !stageWrapperRef) return null;
+      const rect = stageWrapperRef.getBoundingClientRect();
+      const geom = computeRulerGeometry(st, rect);
+      return trySnapToRulerEdge(clientX, clientY, geom, strokeWidthCss);
+    },
+    updateActiveLength: (side, logicalLengthPx) => {
+      setRulerActiveEdge({
+        side,
+        lengthCm: formatRulerLengthCm(logicalLengthPx),
+      });
+    },
+    releaseLock: () => {
+      setRulerActiveEdge(null);
+    },
+  };
+
+  const livePagesScale = createMemo(() => {
+    const base = docScale();
+    const z = zoom();
+    const preview = liveZoomPreview();
+    if (preview !== null && z > 0) {
+      return base * (preview / z);
+    }
+    return base;
+  });
+
   const selectPenStyle = (style: PenStyle) => {
     const alreadyActive = tool() === 'pen' && penStyle() === style;
     if (alreadyActive) {
+      setShapeMenuOpen(false);
       setPaperMenuOpen(false);
       setSizeMenuOpen(false);
       setPenMenuOpen((v) => !v);
@@ -2082,6 +2257,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   }
                 }}
                 onClick={() => {
+                  setShapeMenuOpen(false);
                   setPaperMenuOpen(false);
                   setSizeMenuOpen(false);
                   if (tool() !== 'pen') selectTool('pen');
@@ -2252,7 +2428,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </Show>
           </div>
 
-          <For each={TRAILING_TOOL_ITEMS}>
+          <For each={MIDDLE_TOOL_ITEMS}>
             {(item) => (
               <button
                 type="button"
@@ -2280,14 +2456,176 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 )}
                 {item.id === 'highlighter' && <IconHighlighter size={15} />}
                 {item.id === 'text' && <IconText size={15} />}
-                {item.id === 'line' && <IconLine size={15} />}
-                {item.id === 'arrow' && <IconArrow size={15} />}
-                {item.id === 'rect' && <IconRect size={15} />}
-                {item.id === 'ellipse' && <IconEllipse size={15} />}
-                {item.id === 'eraser' && <IconEraser size={15} />}
               </button>
             )}
           </For>
+
+          {/* Grouped Geometric Shapes Split-Button + Popover (Linie, Pfeil, Rechteck, Ellipse) */}
+          <div class="paper-menu-anchor shape-menu-anchor" ref={shapeMenuRef}>
+            <div
+              class="shape-tool-group"
+              classList={{ 'is-shape-active': isShapeTool(tool()) }}
+              role="group"
+              aria-label="Geometrische Formen"
+            >
+              <button
+                type="button"
+                class="tool-btn shape-main-btn"
+                classList={{ 'is-active': isShapeTool(tool()) }}
+                onPointerDown={(e) => {
+                  if (tool() === 'scribble' || editingText()) {
+                    e.preventDefault();
+                  }
+                }}
+                onClick={() => {
+                  if (isShapeTool(tool())) {
+                    setPenMenuOpen(false);
+                    setPaperMenuOpen(false);
+                    setSizeMenuOpen(false);
+                    setShapeMenuOpen((v) => !v);
+                  } else {
+                    setShapeMenuOpen(false);
+                    selectTool(activeShapeTool());
+                  }
+                }}
+                title={
+                  isShapeTool(tool())
+                    ? `${SHAPE_TOOL_LABEL_MAP.get(activeShapeTool()) ?? 'Form'} aktiv — nochmal tippen für alle Formen`
+                    : `Formen (${SHAPE_TOOL_LABEL_MAP.get(activeShapeTool()) ?? 'Linie'})`
+                }
+                aria-label={`Geometrische Form: ${SHAPE_TOOL_LABEL_MAP.get(activeShapeTool()) ?? 'Linie'}`}
+                aria-pressed={isShapeTool(tool())}
+              >
+                {activeShapeTool() === 'line' && <IconLine size={15} />}
+                {activeShapeTool() === 'arrow' && <IconArrow size={15} />}
+                {activeShapeTool() === 'rect' && <IconRect size={15} />}
+                {activeShapeTool() === 'ellipse' && <IconEllipse size={15} />}
+              </button>
+              <button
+                type="button"
+                class="pen-options-trigger shape-options-trigger"
+                classList={{ 'is-open': shapeMenuOpen() }}
+                onPointerDown={(e) => {
+                  if (tool() === 'scribble' || editingText()) {
+                    e.preventDefault();
+                  }
+                }}
+                onClick={() => {
+                  setPenMenuOpen(false);
+                  setPaperMenuOpen(false);
+                  setSizeMenuOpen(false);
+                  setShapeMenuOpen((v) => !v);
+                }}
+                title="Geometrische Formen auswählen (Linie, Pfeil, Rechteck, Ellipse)"
+                aria-label="Geometrische Formen öffnen"
+                aria-expanded={shapeMenuOpen()}
+              >
+                <IconChevronDown size={12} />
+              </button>
+            </div>
+
+            <Show when={shapeMenuOpen()}>
+              <div
+                class="paper-popover shape-popover"
+                role="dialog"
+                aria-label="Geometrische Formen"
+              >
+                <div class="paper-popover-header">
+                  <span>Geometrische Formen</span>
+                  <button
+                    type="button"
+                    class="icon-btn-xs"
+                    onClick={() => setShapeMenuOpen(false)}
+                    aria-label="Schließen"
+                  >
+                    <IconX size={14} />
+                  </button>
+                </div>
+
+                <div class="shape-option-grid">
+                  <For each={SHAPE_TOOL_ITEMS}>
+                    {(item) => {
+                      const isSelected = () => tool() === item.id;
+                      return (
+                        <button
+                          type="button"
+                          class="shape-option-card"
+                          classList={{ 'is-active': isSelected() }}
+                          onClick={() => selectShapeTool(item.id)}
+                        >
+                          <span class="shape-option-icon">
+                            {item.id === 'line' && <IconLine size={18} />}
+                            {item.id === 'arrow' && <IconArrow size={18} />}
+                            {item.id === 'rect' && <IconRect size={18} />}
+                            {item.id === 'ellipse' && <IconEllipse size={18} />}
+                          </span>
+                          <span class="shape-option-label">{item.label}</span>
+                          <span class="shape-option-desc">{item.description}</span>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </div>
+
+                <div class="shape-width-row">
+                  <span class="paper-section-label">Linienstärke</span>
+                  <div class="shape-width-pills">
+                    <For each={SHAPE_SIZES}>
+                      {(preset) => (
+                        <button
+                          type="button"
+                          class="mini-reset-btn"
+                          classList={{ 'is-active': Math.abs(shapeWidth() - preset.value) < 0.45 }}
+                          onClick={() => setShapeWidth(preset.value)}
+                        >
+                          {preset.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </div>
+            </Show>
+          </div>
+
+          {/* Interactive Drawing Ruler Toggle */}
+          <button
+            type="button"
+            class="tool-btn ruler-toggle-btn"
+            classList={{ 'is-active': rulerState().visible }}
+            onPointerDown={(e) => {
+              if (tool() === 'scribble' || editingText()) {
+                e.preventDefault();
+              }
+            }}
+            onClick={() => toggleRuler()}
+            title={
+              rulerState().visible
+                ? 'Lineal ausblenden (R)'
+                : 'Lineal einblenden — gerade Linien mit Stift & Textmarker zeichnen (R)'
+            }
+            aria-label={rulerState().visible ? 'Lineal ausblenden' : 'Lineal einblenden'}
+            aria-pressed={rulerState().visible}
+          >
+            <IconRuler size={15} />
+          </button>
+
+          {/* Eraser */}
+          <button
+            type="button"
+            class="tool-btn"
+            classList={{ 'is-active': tool() === 'eraser' }}
+            onPointerDown={(e) => {
+              if (tool() === 'scribble' || editingText()) {
+                e.preventDefault();
+              }
+            }}
+            onClick={() => selectTool('eraser')}
+            title="Radierer"
+            aria-label="Radierer"
+          >
+            <IconEraser size={15} />
+          </button>
 
           <button
             type="button"
@@ -2380,6 +2718,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               resetTitle={`Ausgewählte Farbe auf ${selectedSlotDefault().label} zurücksetzen`}
               onOpen={() => {
                 setPenMenuOpen(false);
+                setShapeMenuOpen(false);
                 setPaperMenuOpen(false);
                 setSizeMenuOpen(false);
               }}
@@ -2471,6 +2810,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             classList={{ 'is-active': paperMenuOpen() }}
             onClick={() => {
               setPenMenuOpen(false);
+              setShapeMenuOpen(false);
               setSizeMenuOpen(false);
               setPaperMenuOpen((v) => !v);
             }}
@@ -2938,6 +3278,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               classList={{ 'is-active': overviewOpen() }}
               onClick={() => {
                 if (editingText()) commitEditingText();
+                setPenMenuOpen(false);
+                setShapeMenuOpen(false);
                 setSizeMenuOpen(false);
                 setPaperMenuOpen(false);
                 setOverviewAutoCreator(false);
@@ -3020,6 +3362,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                     classList={{ 'is-active': sizeMenuOpen() }}
                     onClick={() => {
                       setPenMenuOpen(false);
+                      setShapeMenuOpen(false);
                       setPaperMenuOpen(false);
                       setSizeMenuOpen((v) => !v);
                     }}
@@ -3200,6 +3543,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       </Show>
 
       {/* Main Canvas Area: Infinite OneNote-style Canvas OR Continuous Multi-Page Document */}
+      <div ref={stageWrapperRef} class="canvas-stage-wrapper">
       <Show
         when={!isInfiniteMode()}
         fallback={
@@ -3258,6 +3602,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 registerHandle={(h) => {
                   infiniteHandle = h;
                 }}
+                rulerAdapter={rulerAdapter}
               />
             )}
           </Show>
@@ -3333,6 +3678,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   }}
                   onOpenSizeMenu={(targetId) => {
                     props.store.setActivePage(targetId);
+                    setPenMenuOpen(false);
+                    setShapeMenuOpen(false);
                     setPaperMenuOpen(false);
                     setSizeMenuOpen(true);
                   }}
@@ -3344,6 +3691,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   }}
                   registerElement={registerPageElement}
                   registerTouchAbort={registerTouchAbort}
+                  rulerAdapter={rulerAdapter}
                 />
               )}
             </For>
@@ -3397,6 +3745,24 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         </div>
         </div>
       </Show>
+
+      {/* Interactive Physical Ruler Overlay (Works identically in Pages & Infinite mode) */}
+      <Show when={rulerState().visible}>
+        <CanvasRulerOverlay
+          state={rulerState()}
+          canvasScale={isInfiniteMode() ? infiniteZoom() : livePagesScale()}
+          containerWidth={stageSize().width}
+          containerHeight={stageSize().height}
+          activeEdge={rulerActiveEdge()}
+          paperIsDark={paperIsDark()}
+          onUpdate={(patch) => setRulerState((prev) => ({ ...prev, ...patch }))}
+          onClose={() => {
+            setRulerActiveEdge(null);
+            setRulerState((prev) => ({ ...prev, visible: false }));
+          }}
+        />
+      </Show>
+      </div>
 
       <Show when={!isInfiniteMode() && liveZoomPreview() !== null}>
         <div class="pinch-zoom-badge" aria-live="polite">
@@ -3452,8 +3818,10 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 ? `Lasso · ${formatLassoCountLabel(getLassoItemCount(lassoSelection()))}`
                 : 'Lasso · Einkreisen'
               : tool() === 'pen'
-                ? `${penStyleConfig().label} · ${pointerTypeLabel()}`
-                : pointerTypeLabel()}
+                ? `${penStyleConfig().label}${rulerState().visible ? ' · Lineal' : ''} · ${pointerTypeLabel()}`
+                : isShapeTool(tool())
+                  ? `${SHAPE_TOOL_LABEL_MAP.get(tool() as ShapeTool) ?? 'Form'} · ${pointerTypeLabel()}`
+                  : `${rulerState().visible ? 'Lineal · ' : ''}${pointerTypeLabel()}`}
         </span>
         <span class="status-spacer" />
         <div class="zoom-controls">
