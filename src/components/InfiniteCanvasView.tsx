@@ -111,6 +111,7 @@ interface InfiniteCanvasViewProps {
   onZoomChange: (zoom: number) => void;
   onSetEditingText: (next: EditingTextState | null) => void;
   onCommitEditingText: () => void;
+  onExitScribble: () => void;
   onSetSelectedImage: (next: SelectedImageState | null) => void;
   onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onSyncTextStyle: (patch: {
@@ -2013,8 +2014,12 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
                     const id = item().id;
                     props.onSetEditingText(null);
                     props.store.deleteCanvasText(id, props.pageId);
+                    if (props.tool === 'scribble') {
+                      props.onExitScribble();
+                    }
                   }}
                   onCommit={props.onCommitEditingText}
+                  onExitScribble={props.onExitScribble}
                   onStartNewBlock={() => {
                     const curr = item();
                     const lines = Math.max(2, curr.text.split('\n').length + 1);

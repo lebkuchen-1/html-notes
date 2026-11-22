@@ -27,6 +27,7 @@ import {
   IconScribble,
   IconSpellCheck,
   IconTrash,
+  IconX,
 } from './Icons';
 
 const FONT_FAMILIES: { value: CanvasFontFamily; label: string }[] = [
@@ -57,6 +58,7 @@ interface CanvasTextOverlayProps {
   onChangeSpellLanguage: (lang: SpellCheckLanguage) => void;
   onDelete: () => void;
   onCommit: () => void;
+  onExitScribble?: () => void;
   onStartNewBlock?: () => void;
   onStartDrag: (e: PointerEvent) => void;
   onMoveDrag: (e: PointerEvent) => void;
@@ -167,10 +169,36 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
     return undefined;
   });
 
+  const blurInput = () => {
+    textareaRef?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  };
+
+  const handleFinish = () => {
+    blurInput();
+    if (props.isScribbleMode && props.onExitScribble) {
+      props.onExitScribble();
+    } else {
+      props.onCommit();
+    }
+  };
+
+  const handleDelete = () => {
+    blurInput();
+    props.onDelete();
+  };
+
+  const placeBarInsideTop = () => props.topPx < 46;
+
   return (
     <div
       class="canvas-text-overlay"
-      classList={{ 'is-scribble-overlay': props.isScribbleMode }}
+      classList={{
+        'is-scribble-overlay': props.isScribbleMode,
+        'is-bar-below-top': placeBarInsideTop(),
+      }}
       style={{
         left: `${props.leftPx}px`,
         top: `${props.topPx}px`,
@@ -192,10 +220,16 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
         </button>
 
         <Show when={props.isScribbleMode}>
-          <span class="ctb-scribble-badge" title="Apple Pencil Kritzeln direkt in diesem Feld">
+          <button
+            type="button"
+            class="ctb-scribble-badge"
+            onClick={handleFinish}
+            title="Handschrift → Text (Kritzeln) beenden und zum Stift zurückkehren"
+          >
             <IconScribble size={12} />
             <span>Kritzeln</span>
-          </span>
+            <IconX size={11} />
+          </button>
         </Show>
 
         <button
@@ -277,8 +311,8 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
         <button
           type="button"
           class="ctb-btn is-danger"
-          onClick={props.onDelete}
-          title="Text löschen"
+          onClick={handleDelete}
+          title={props.isScribbleMode ? 'Text löschen & Kritzeln beenden' : 'Text löschen'}
         >
           <IconTrash size={13} />
         </button>
@@ -286,8 +320,12 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
         <button
           type="button"
           class="ctb-btn is-confirm"
-          onClick={props.onCommit}
-          title="Übernehmen (Strg+Enter)"
+          onClick={handleFinish}
+          title={
+            props.isScribbleMode
+              ? 'Übernehmen & Kritzeln beenden (Strg+Enter / Esc)'
+              : 'Übernehmen (Strg+Enter)'
+          }
         >
           <IconCheck size={13} />
         </button>
@@ -333,7 +371,7 @@ export function CanvasTextOverlay(props: CanvasTextOverlayProps) {
             ((e.ctrlKey || e.metaKey) && e.key === 'Enter')
           ) {
             e.preventDefault();
-            props.onCommit();
+            handleFinish();
           }
         }}
       />

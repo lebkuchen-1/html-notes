@@ -185,6 +185,7 @@ const MAX_ZOOM = 3.5;
 
 export function DrawingCanvas(props: DrawingCanvasProps) {
   const [tool, setTool] = createSignal<DrawingTool>('pen');
+  let lastNonScribbleTool: DrawingTool = 'pen';
   const [penColor, setPenColor] = createSignal<string>('auto');
   const [highlighterColor, setHighlighterColor] = createSignal<string>('#fde047');
   const [penWidth, setPenWidth] = createSignal<number>(3.8);
@@ -364,11 +365,37 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
   };
 
+  const blurActiveTextInput = () => {
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLInputElement
+    ) {
+      active.blur();
+    }
+  };
+
   const commitEditingText = () => {
     const current = editingText();
     if (!current) return;
+    blurActiveTextInput();
     setEditingText(null);
     props.store.upsertCanvasText(current.item, current.pageId);
+  };
+
+  const exitScribbleMode = (targetTool?: DrawingTool) => {
+    if (editingText()) {
+      commitEditingText();
+    } else {
+      blurActiveTextInput();
+    }
+    const next =
+      targetTool && targetTool !== 'scribble'
+        ? targetTool
+        : lastNonScribbleTool !== 'scribble'
+          ? lastNonScribbleTool
+          : 'pen';
+    setTool(next);
   };
 
   const registerPageElement = (pageId: string, el: HTMLDivElement | null) => {
@@ -1180,6 +1207,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         if (spellMenuOpen()) setSpellMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
         if (selectedImage()) setSelectedImage(null);
+        if (tool() === 'scribble') exitScribbleMode();
       }
 
       const target = e.target as HTMLElement | null;
@@ -1291,22 +1319,36 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   };
 
   const selectTool = (nextTool: DrawingTool) => {
+    // Tapping the active H→Text (Scribble) button again toggles Scribble cleanly OFF
+    if (nextTool === 'scribble' && tool() === 'scribble') {
+      exitScribbleMode();
+      props.store.showToast('Handschrift → Text beendet');
+      return;
+    }
+
+    if (tool() !== 'scribble') {
+      lastNonScribbleTool = tool();
+    }
+
     if (
       editingText() &&
       nextTool !== 'text' &&
-      nextTool !== 'scribble' &&
-      nextTool !== 'select'
+      nextTool !== 'scribble'
     ) {
       commitEditingText();
+    } else if (nextTool !== 'scribble' && nextTool !== 'text') {
+      blurActiveTextInput();
     }
+
     if (nextTool !== 'select') {
       setSelectedImage(null);
     }
+
     setTool(nextTool);
     if (nextTool === 'scribble') {
       openDefaultScribbleBox();
       props.store.showToast(
-        'Handschrift → Text (Kritzeln) aktiv · Direkt ins Feld schreiben oder anderswo tippen'
+        'Handschrift → Text (Kritzeln) aktiv · Nochmal auf H→Text oder ✓ zum Beenden'
       );
     }
   };
@@ -1500,8 +1542,18 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 type="button"
                 class={item.id === 'scribble' ? 'tool-pill scribble-tool-btn' : 'tool-btn'}
                 classList={{ 'is-active': tool() === item.id }}
+                onPointerDown={(e) => {
+                  // Prevent iPadOS Safari Scribble/focus-shift from swallowing the tap on toolbar buttons
+                  if (tool() === 'scribble' || editingText()) {
+                    e.preventDefault();
+                  }
+                }}
                 onClick={() => selectTool(item.id)}
-                title={item.label}
+                title={
+                  item.id === 'scribble' && tool() === 'scribble'
+                    ? 'Handschrift → Text (Kritzeln) beenden'
+                    : item.label
+                }
                 aria-label={item.label}
               >
                 {item.id === 'select' && <IconPointer size={15} />}
@@ -2061,7 +2113,23 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   </div>
                 </div>
 
-                <Show when={tool() !== 'scribble'}>
+                <Show
+                  when={tool() !== 'scribble'}
+                  fallback={
+                    <button
+                      type="button"
+                      class="spell-start-scribble-btn is-exit"
+                      onClick={() => {
+                        setSpellMenuOpen(false);
+                        exitScribbleMode();
+                        props.store.showToast('Handschrift → Text beendet');
+                      }}
+                    >
+                      <IconX size={14} />
+                      <span>Handschrift → Text beenden</span>
+                    </button>
+                  }
+                >
                   <button
                     type="button"
                     class="spell-start-scribble-btn"
@@ -2606,6 +2674,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 onZoomChange={setInfiniteZoom}
                 onSetEditingText={setEditingText}
                 onCommitEditingText={commitEditingText}
+                onExitScribble={() => exitScribbleMode()}
                 onSetSelectedImage={setSelectedImage}
                 onChangeSpellLanguage={setSpellCheckLanguagePersisted}
                 onSyncTextStyle={(patch) => {
@@ -2677,6 +2746,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   onPenPointerDown={() => penContactNotifier?.()}
                   onSetEditingText={setEditingText}
                   onCommitEditingText={commitEditingText}
+                  onExitScribble={() => exitScribbleMode()}
                   onSetSelectedImage={setSelectedImage}
                   onChangeSpellLanguage={setSpellCheckLanguagePersisted}
                   onSyncTextStyle={(patch) => {
