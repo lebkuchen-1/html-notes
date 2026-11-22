@@ -1,4 +1,5 @@
 import { createSignal, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
+import { CloudBackupDialog } from './components/CloudBackupDialog';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { HomePage } from './components/HomePage';
 import { ImportDialog } from './components/ImportDialog';
@@ -63,6 +64,12 @@ export function App() {
         } else {
           store.openSettings(store.activeScreen() === 'note' ? 'local' : 'global');
         }
+        return;
+      }
+
+      if (e.key === 'Escape' && store.cloudSyncOpen()) {
+        e.preventDefault();
+        store.closeCloudSync();
         return;
       }
 
@@ -194,6 +201,7 @@ export function App() {
       </main>
 
       <ImportDialog store={store} />
+      <CloudBackupDialog store={store} />
 
       <Show when={store.toastMessage()}>
         {(msg) => (

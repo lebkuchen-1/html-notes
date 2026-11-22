@@ -6,6 +6,7 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconClipboardPaste,
+  IconCloud,
   IconCopy,
   IconDownload,
   IconEdit,
@@ -493,6 +494,22 @@ export function Sidebar(props: SidebarProps) {
         >
           <IconClipboardPaste size={15} />
           <span class="nav-item-label">Schnellimport</span>
+        </button>
+
+        <button
+          type="button"
+          class="nav-item"
+          onClick={() => {
+            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+            props.store.openCloudSync();
+          }}
+          title="Online-Backup & Import (S3 / Cloudflare R2 / Backblaze B2)"
+        >
+          <IconCloud size={15} />
+          <span class="nav-item-label">Online-Backup</span>
+          <Show when={props.store.isCloudConfigured()}>
+            <span class="cloud-nav-dot" title="Cloud-Bucket verbunden" />
+          </Show>
         </button>
 
         <button

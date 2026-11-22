@@ -7,12 +7,10 @@
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Stift-Bedienung von UI-Knöpfen im Vollbildmodus & iPadOS-Kritzeln-Schutz (`src/store/notesStore.ts`, `src/components/NoteHeader.tsx`, `src/components/ColorPickerPopover.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/Sidebar.tsx`, `src/styles.css`):**
-   - `handleFullscreenTouchMoveGuard` lässt Stylus-Touches (`touchType === 'stylus'`), interaktive Elemente, scrollbare Bereiche und Tap-Jitter (`< 10px`) durch.
-   - **Click-to-Edit + Capture-Phase-Auto-Close:** Notiztitel (`NoteHeader.tsx`) und Hex-Eingabe (`ColorPickerPopover.tsx`) sind Click-to-Edit (mit klarem Fokusrahmen im Bearbeitungsmodus) und schließen sich per Capture-Phase `pointerdown`/`touchstart` sofort bei jedem Tipp oder Strich außerhalb (auch direkt auf dem Canvas, wo `preventDefault()` sonst ein natives `blur` unterdrücken würde). Filter-Input der eingeklappten Sidebar per `disabled` deaktiviert.
-2. **Eigener iPadOS-sicherer Regenbogen-Farbwähler + persistenter eigener Farb-Knopf (`src/components/ColorPickerPopover.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/CanvasLassoOverlay.tsx`, `src/styles.css`):**
-   - Eigenes HSV-Popover im `<Portal>` mit 2D-Farbfeld, Regenbogen-Farbtonregler, 16er-Palette, gespeicherten „Zuletzt“-Farben und Click-to-Edit-Hex-Feld.
-   - Persistenter vollflächiger eigener Farb-Knopf (`.is-custom-slot`) direkt neben dem Regenbogen sowie `localStorage`-Persistenz der aktiven und gespeicherten Stift-/Textmarker-Farben.
+1. **Optionales inkrementelles Online-Backup & -Import über S3-kompatiblen Speicher (`src/utils/s3Client.ts`, `src/utils/cloudSync.ts`, `src/components/CloudBackupDialog.tsx`, `src/store/notesStore.ts`, `src/components/Sidebar.tsx`, `src/components/SettingsPage.tsx`, `src/App.tsx`, `src/components/Icons.tsx`, `src/styles.css`):**
+   - **Pure Web-Crypto S3-Client (AWS SigV4):** Unterstützt Cloudflare R2, Backblaze B2 und benutzerdefinierte S3-Buckets direkt im Browser ohne Backend oder externe SDKs; Zugangsdaten liegen ausschließlich lokal im Browser, inkl. Verbindungstest und 1-Klick-CORS-Snippets.
+   - **Pro-Notiz + Content-Addressable Media-Blobs + Gzip:** Trennt Notizen (`notes/<id>.json.gz`) von deduplizierten Binär-Medien (`blobs/<sha256>`, ohne +33 % Base64-Overhead) — ideal für 430 MB+ Workspaces mit vielen PDF-Seiten/Bildern; lädt/lädt herunter Notiz für Notiz (RAM-schonend auf iPadOS) mit periodischen Manifest-Checkpoints für Wiederaufnahme nach Abbruch.
+   - **Gesamt- & Einzelauswahl + 3-Wege-Desync-Schutz:** Hierarchische Ordner-/Notiz-Auswahl (inkl. automatischer Elternordner-Mitnahme), 3-Wege-Abgleich über lokale Sync-Baseline (`Synchron`, `Neu`, `Geändert/Aktueller`, `Konflikt`), Konfliktlösungs-UI pro Eintrag & Bulk (`Lokal behalten` / `Kopie` / `Ersetzen` bzw. `Überspringen` / `Online ersetzen`) mit sicherem Standard, expliziter Vorab-Zusammenfassung aller aktualisierten/ersetzten Notizen & Ordner sowie Garantie, dass niemals lokale Notizen gelöscht oder nicht ausgewählte Cloud-Notizen entfernt werden.
 
 ## Offene Punkte
 - Keine offenen Aufgaben — bereit für das nächste Feature nach `/clear`.

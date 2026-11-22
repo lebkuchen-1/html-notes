@@ -12,6 +12,8 @@ import {
   type ViewMode,
 } from '../types';
 import { queryBrowserStorageEstimate, type StorageEstimateInfo } from '../utils/db';
+import { loadCloudBaseline } from '../utils/cloudSync';
+import { loadCloudConfig } from '../utils/s3Client';
 import {
   getPersonalDictionary,
   removeWordFromPersonalDictionary,
@@ -23,6 +25,9 @@ import {
 } from '../utils/storage';
 import {
   IconArrowLeft,
+  IconCloud,
+  IconCloudDownload,
+  IconCloudUpload,
   IconDownload,
   IconFileText,
   IconMoon,
@@ -175,6 +180,24 @@ export function SettingsPage(props: SettingsPageProps) {
         ? Math.min(100, Math.round((bytes / quota) * 100))
         : Math.min(100, Math.round((bytes / (250 * 1024 * 1024)) * 100));
     return { bytes, quota, persisted: est.persisted, backend, totalPages, totalStrokes, pct };
+  });
+
+  const cloudInfo = createMemo(() => {
+    props.store.cloudConfigVersion();
+    const cfg = loadCloudConfig();
+    if (!cfg || !props.store.isCloudConfigured()) return null;
+    const base = loadCloudBaseline(cfg);
+    return {
+      provider:
+        cfg.provider === 'r2'
+          ? 'Cloudflare R2'
+          : cfg.provider === 'b2'
+            ? 'Backblaze B2'
+            : 'S3',
+      bucket: cfg.bucket,
+      lastBackupAt: base.lastBackupAt,
+      lastImportAt: base.lastImportAt,
+    };
   });
 
   const handleImportFile = (e: Event) => {
@@ -1156,6 +1179,89 @@ export function SettingsPage(props: SettingsPageProps) {
                       <IconRotateCcw size={13} />
                       <span>Globale Einstellungen zurücksetzen</span>
                     </button>
+                  </div>
+                </div>
+
+                <div class="setting-row is-stacked">
+                  <div class="setting-info">
+                    <div class="setting-label-row">
+                      <span class="setting-label">Online-Backup &amp; Import (Cloud / S3)</span>
+                      <span
+                        class="setting-scope-tag"
+                        classList={{
+                          'is-local': Boolean(cloudInfo()),
+                          'is-inherited': !cloudInfo(),
+                        }}
+                      >
+                        <Show when={cloudInfo()} fallback="Nicht verbunden">
+                          {(ci) => (
+                            <>
+                              {ci().provider} · {ci().bucket}
+                            </>
+                          )}
+                        </Show>
+                      </span>
+                    </div>
+                    <span class="setting-desc">
+                      Inkrementelles Pro-Notiz-Backup mit ausgelagerten Medien-Blobs (Cloudflare R2,
+                      Backblaze B2 oder eigenes S3) — Gesamt- oder Einzelauswahl mit
+                      Konfliktlösung, ohne lokales Löschen.
+                      <Show when={cloudInfo()?.lastBackupAt}>
+                        {(ts) => (
+                          <>
+                            {' '}
+                            Letztes Backup:{' '}
+                            {new Intl.DateTimeFormat('de-DE', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            }).format(new Date(ts()))}
+                            .
+                          </>
+                        )}
+                      </Show>
+                    </span>
+                  </div>
+                  <div class="settings-footer-actions">
+                    <Show
+                      when={cloudInfo()}
+                      fallback={
+                        <button
+                          type="button"
+                          class="tool-pill"
+                          onClick={() => props.store.openCloudSync('setup')}
+                        >
+                          <IconCloud size={14} />
+                          <span>Cloud-Speicher verbinden…</span>
+                        </button>
+                      }
+                    >
+                      <button
+                        type="button"
+                        class="tool-pill"
+                        onClick={() => props.store.openCloudSync('backup')}
+                      >
+                        <IconCloudUpload size={14} />
+                        <span>Online sichern</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="tool-pill"
+                        onClick={() => props.store.openCloudSync('import')}
+                      >
+                        <IconCloudDownload size={14} />
+                        <span>Online importieren</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-ghost-sm"
+                        onClick={() => props.store.openCloudSync('setup')}
+                      >
+                        Verbindung bearbeiten
+                      </button>
+                    </Show>
                   </div>
                 </div>
 

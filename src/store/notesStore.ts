@@ -25,6 +25,7 @@ import {
   type QuickImportPayload,
 } from '../utils/clipboardImport';
 import { requestPersistentStorage } from '../utils/db';
+import { isCloudConfigComplete, loadCloudConfig } from '../utils/s3Client';
 import { ensureSpellCheckerLoaded } from '../utils/spellcheck';
 import {
   clampPageHeight,
@@ -54,6 +55,7 @@ import {
 export type SidebarFilterMode = 'all' | 'pinned' | 'unfiled' | 'folder';
 export type ActiveScreen = 'home' | 'note' | 'settings';
 export type SettingsScopeTab = 'global' | 'local';
+export type CloudSyncModalTab = 'backup' | 'import' | 'setup';
 
 const MAX_HISTORY = 50;
 
@@ -85,6 +87,26 @@ export function createNotesStore() {
   const [importDialogDefaultTarget, setImportDialogDefaultTarget] = createSignal<
     'new' | 'existing'
   >('new');
+  const [cloudSyncOpen, setCloudSyncOpen] = createSignal<boolean>(false);
+  const [cloudSyncTab, setCloudSyncTab] = createSignal<CloudSyncModalTab>('backup');
+  const [cloudConfigVersion, setCloudConfigVersion] = createSignal<number>(0);
+
+  const isCloudConfigured = createMemo(() => {
+    cloudConfigVersion();
+    return isCloudConfigComplete(loadCloudConfig());
+  });
+
+  const bumpCloudConfigVersion = () => setCloudConfigVersion((v) => v + 1);
+
+  const openCloudSync = (tab?: CloudSyncModalTab) => {
+    const configured = isCloudConfigComplete(loadCloudConfig());
+    setCloudSyncTab(tab ?? (configured ? 'backup' : 'setup'));
+    setCloudSyncOpen(true);
+  };
+
+  const closeCloudSync = () => {
+    setCloudSyncOpen(false);
+  };
 
   let enteredNativeFullscreen = false;
   let sidebarWasOpenBeforeFullscreen = false;
@@ -239,6 +261,10 @@ export function createNotesStore() {
       '.import-note-list',
       '.import-folder-chips',
       '.import-paste-input',
+      '.cloud-modal-body',
+      '.cloud-tree-list',
+      '.cloud-conflicts-list',
+      '.cloud-code-block',
       '.canvas-text-overlay',
       '.canvas-text-input',
       '.canvas-image-selection',
@@ -1850,6 +1876,71 @@ export function createNotesStore() {
     }
   };
 
+  const applyCloudImport = (payload: {
+    upsertNotes: Note[];
+    upsertFolders: Folder[];
+    settings?: AppSettings | null;
+  }) => {
+    const incomingFolders = payload.upsertFolders;
+    const incomingNotes = payload.upsertNotes;
+
+    batch(() => {
+      if (incomingFolders.length > 0) {
+        setFolders((prev) => {
+          const map = new Map(prev.map((f) => [f.id, f]));
+          for (const f of incomingFolders) {
+            map.set(f.id, f);
+          }
+          const merged = [...map.values()];
+          const validIds = new Set(merged.map((f) => f.id));
+          return merged
+            .map((f) => ({
+              ...f,
+              parentId:
+                f.parentId && validIds.has(f.parentId) && f.parentId !== f.id
+                  ? f.parentId
+                  : null,
+            }))
+            .sort((a, b) => a.createdAt - b.createdAt);
+        });
+      }
+
+      if (incomingNotes.length > 0) {
+        const replacedIds = new Set(incomingNotes.map((n) => n.id));
+        const validFolderIds = new Set(folders().map((f) => f.id));
+        for (const f of incomingFolders) validFolderIds.add(f.id);
+
+        setNotes((prev) => {
+          const map = new Map(prev.map((n) => [n.id, n]));
+          for (const n of incomingNotes) {
+            map.set(n.id, {
+              ...n,
+              folderId: n.folderId && validFolderIds.has(n.folderId) ? n.folderId : null,
+            });
+          }
+          return [...map.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+        });
+
+        // Clear stale undo history only for notes whose contents were replaced
+        setHistories((prev) => {
+          const next: Record<string, HistoryState> = {};
+          for (const [k, v] of Object.entries(prev)) {
+            const noteId = k.split(':')[0];
+            if (!replacedIds.has(noteId)) next[k] = v;
+          }
+          return next;
+        });
+      }
+
+      if (payload.settings) {
+        setSettings({
+          ...payload.settings,
+          defaultPaperConfig: { ...payload.settings.defaultPaperConfig },
+        });
+      }
+    });
+  };
+
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
@@ -1919,6 +2010,15 @@ export function createNotesStore() {
     openImportDialog,
     closeImportDialog,
     quickImportFromClipboard,
+    cloudSyncOpen,
+    cloudSyncTab,
+    setCloudSyncTab,
+    cloudConfigVersion,
+    bumpCloudConfigVersion,
+    isCloudConfigured,
+    openCloudSync,
+    closeCloudSync,
+    applyCloudImport,
     canUndo,
     canRedo,
     createNote,
