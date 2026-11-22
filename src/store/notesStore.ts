@@ -233,6 +233,7 @@ export function createNotesStore() {
       '.note-list',
       '.note-tabs-list',
       '.paper-popover',
+      '.color-popover',
       '.page-filmstrip',
       '.import-modal-body',
       '.import-note-list',

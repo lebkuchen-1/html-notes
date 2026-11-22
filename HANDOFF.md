@@ -8,9 +8,10 @@
 
 ## Zuletzt umgesetzt (abgeschlossen)
 1. **Stift-Bedienung von UI-Knöpfen im Vollbildmodus behoben (`src/store/notesStore.ts`, `src/components/DrawingCanvas.tsx`, `src/components/InfiniteCanvasView.tsx`):**
-   - **Ursache:** `handleFullscreenTouchMoveGuard` rief im Vollbildmodus auf `document`-Ebene `e.preventDefault()` bei jedem `touchmove` auf UI-Leisten/Knöpfen auf. Da der Apple Pencil fast bei jedem Tippen minimale Sub-Pixel-`touchmove`-Events erzeugt, unterdrückte iPadOS WebKit dadurch das synthetische `click`-Event auf allen UI-Buttons.
-   - **Fix:** `handleFullscreenTouchMoveGuard` ignoriert nun konsequent Stylus-Touches (`touchType === 'stylus'`), alle interaktiven Steuerelemente (`button`, `a`, `input`, `select`, `textarea`, `label`, `[role="button"]`, `[role="tab"]`, …), korrigierte scrollbare Container (inkl. `.page-filmstrip`) sowie kleinen Tap-Jitter (`< 10px`), sodass nur echte Finger-Overscroll-Wischgesten auf leerer UI-Chrome abgefangen werden.
-   - **WebKit-Textknoten-Härtung:** `getTargetElement` löst `TouchEvent.target` sowohl im Fullscreen-Guard als auch in `DrawingCanvas.tsx` und `InfiniteCanvasView.tsx` sauber über `target.parentElement` auf, falls WebKit bei einem Tipp auf Button-Beschriftungen einen `Text`-Knoten als Event-Target liefert.
+   - `handleFullscreenTouchMoveGuard` ignoriert nun Stylus-Touches (`touchType === 'stylus'`), interaktive Steuerelemente, scrollbare Bereiche und Tap-Jitter (`< 10px`), sodass Apple-Pencil-Tipps auf UI-Buttons im Vollbildmodus zuverlässig `click`-Events auslösen.
+2. **Eigener iPadOS-sicherer Regenbogen-Farbwähler (`src/components/ColorPickerPopover.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/CanvasLassoOverlay.tsx`, `src/styles.css`):**
+   - **Ursache:** Das native `<input type="color">` (nur mit `onInput`, ohne `onChange`) ist in iPadOS Safari / Standalone-PWA & Vollbildmodus bekannt fehleranfällig (übernimmt Farbauswahlen aus dem nativen Regenbogen-Dialog oft gar nicht und zeigte keine aktive Vorschau im Toolbar-Kreis).
+   - **Fix:** Durch ein eigenes, per `<Portal>` positioniertes HSV-Popover (`ColorPickerPopover`) ersetzt: 2D-Sättigungs-/Helligkeitsfläche + Regenbogen-Farbtonregler mit Pointer-Capture (120Hz-Drag mit Apple Pencil, Finger & Maus), 16er-Farbpalette, gespeicherte „Zuletzt“-Farben (`localStorage`), Hex-Eingabe sowie aktiver Farbpunkt direkt im Regenbogen-Button. Eingesetzt für Stift-/Textmarkerfarbe, Papierfarbe, Linienfarbe und Lasso-Umfärben.
 
 ## Offene Punkte
 - Keine offenen Aufgaben — bereit für das nächste Feature nach `/clear`.

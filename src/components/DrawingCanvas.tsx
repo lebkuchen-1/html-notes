@@ -81,6 +81,7 @@ import {
   InfiniteCanvasView,
   type InfiniteCanvasHandle,
 } from './InfiniteCanvasView';
+import { ColorPickerPopover } from './ColorPickerPopover';
 import {
   IconArrow,
   IconChevronLeft,
@@ -1290,6 +1291,15 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
   onMount(() => {
     const handleDocPointerDown = (e: PointerEvent) => {
+      const targetEl =
+        e.target instanceof Element
+          ? e.target
+          : e.target instanceof Node
+            ? e.target.parentElement
+            : null;
+      if (targetEl?.closest('.color-popover')) {
+        return;
+      }
       if (paperMenuOpen() && paperMenuRef && !paperMenuRef.contains(e.target as Node)) {
         setPaperMenuOpen(false);
       }
@@ -1785,20 +1795,32 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 );
               }}
             </For>
-            <label class="color-picker-wrap" title="Eigene Farbe wählen">
-              <input
-                type="color"
-                value={
-                  activeColor() === 'auto'
-                    ? paperIsDark()
-                      ? '#f1f5f9'
-                      : '#1e293b'
-                    : activeColor()
-                }
-                onInput={(e) => setActiveColor(e.currentTarget.value)}
-              />
-              <span class="color-picker-ring" />
-            </label>
+            <ColorPickerPopover
+              value={
+                activeColor() === 'auto'
+                  ? paperIsDark()
+                    ? '#f1f5f9'
+                    : '#1e293b'
+                  : activeColor()
+              }
+              isCustomActive={
+                !colorPalette().some(
+                  (sw) => sw.value.toLowerCase() === activeColor().toLowerCase()
+                )
+              }
+              palette={tool() === 'highlighter' ? 'highlighter' : 'ink'}
+              title={
+                tool() === 'highlighter'
+                  ? 'Eigene Textmarker-Farbe'
+                  : 'Eigene Stiftfarbe wählen'
+              }
+              onOpen={() => {
+                setPaperMenuOpen(false);
+                setSizeMenuOpen(false);
+                setSpellMenuOpen(false);
+              }}
+              onChange={(hex) => setActiveColor(hex)}
+            />
           </div>
           <div class="toolbar-divider" />
         </Show>
@@ -1963,22 +1985,17 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 <div class="paper-color-col">
                   <div class="paper-section-label">Papierfarbe</div>
                   <div class="paper-color-controls">
-                    <label class="paper-color-input" title="Beliebige Hintergrundfarbe">
-                      <input
-                        type="color"
-                        value={resolvedPaperBg()}
-                        onInput={(e) =>
-                          props.store.updatePaperConfig({
-                            backgroundColor: e.currentTarget.value,
-                          })
-                        }
-                      />
-                      <span
-                        class="paper-color-preview"
-                        style={{ background: resolvedPaperBg() }}
-                      />
-                      <span>{resolvedPaperBg().toUpperCase()}</span>
-                    </label>
+                    <ColorPickerPopover
+                      variant="pill"
+                      palette="paper"
+                      title="Papierfarbe wählen"
+                      value={resolvedPaperBg()}
+                      onChange={(hex) =>
+                        props.store.updatePaperConfig({
+                          backgroundColor: hex,
+                        })
+                      }
+                    />
                     <button
                       type="button"
                       class="mini-reset-btn"
@@ -2018,21 +2035,28 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                           />
                         )}
                       </For>
-                      <label class="color-picker-wrap is-sm" title="Eigene Linienfarbe">
-                        <input
-                          type="color"
-                          value={
-                            paperConfig().lineColor === 'auto'
-                              ? '#64748b'
-                              : paperConfig().lineColor
-                          }
-                          onInput={(e) =>
-                            props.store.updatePaperConfig({
-                              lineColor: e.currentTarget.value,
-                            })
-                          }
-                        />
-                      </label>
+                      <ColorPickerPopover
+                        size="sm"
+                        palette="ink"
+                        title="Eigene Linienfarbe"
+                        value={
+                          paperConfig().lineColor === 'auto'
+                            ? '#64748b'
+                            : paperConfig().lineColor
+                        }
+                        isCustomActive={
+                          !LINE_COLOR_SWATCHES.some(
+                            (sw) =>
+                              sw.value.toLowerCase() ===
+                              paperConfig().lineColor.toLowerCase()
+                          )
+                        }
+                        onChange={(hex) =>
+                          props.store.updatePaperConfig({
+                            lineColor: hex,
+                          })
+                        }
+                      />
                     </div>
                   </div>
                 </Show>

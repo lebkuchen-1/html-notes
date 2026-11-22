@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from 'solid-js';
+import { ColorPickerPopover } from './ColorPickerPopover';
 import {
   IconCheck,
   IconCopy,
@@ -162,13 +163,13 @@ export function CanvasLassoOverlay(props: CanvasLassoOverlayProps) {
                   );
                 }}
               </For>
-              <label class="color-picker-wrap is-sm" title="Eigene Farbe wählen">
-                <input
-                  type="color"
-                  value={props.paperIsDark ? '#f1f5f9' : '#4f46e5'}
-                  onInput={(e) => props.onRecolor(e.currentTarget.value)}
-                />
-              </label>
+              <ColorPickerPopover
+                size="sm"
+                palette="ink"
+                title="Eigene Farbe wählen"
+                value={props.paperIsDark ? '#f1f5f9' : '#4f46e5'}
+                onCommit={(hex) => props.onRecolor(hex)}
+              />
             </div>
           </Show>
         </div>
