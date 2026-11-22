@@ -5365,6 +5365,56 @@ button {
   background: var(--danger);
 }
 
+.storage-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.storage-breakdown-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+}
+
+.storage-breakdown-chip.is-warn {
+  border-color: rgba(217, 119, 6, 0.45);
+  background: rgba(217, 119, 6, 0.08);
+}
+
+.storage-breakdown-chip .sbc-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.storage-breakdown-chip .sbc-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-breakdown-chip.is-warn .sbc-val {
+  color: #d97706;
+}
+
+.storage-overhead-banner {
+  margin-top: 8px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: rgba(217, 119, 6, 0.1);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+}
+
 .settings-footer-actions {
   display: flex;
   align-items: center;

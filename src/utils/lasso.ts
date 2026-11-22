@@ -495,8 +495,8 @@ export function applyTransformToPageSnapshot(
       points: s.points.map((pt) => {
         const next = transformPoint(pt.x, pt.y, transform);
         return {
-          x: next.x,
-          y: next.y,
+          x: Math.round(next.x * 10) / 10,
+          y: Math.round(next.y * 10) / 10,
           pressure: pt.pressure,
           ...(pt.t !== undefined ? { t: pt.t } : {}),
         };

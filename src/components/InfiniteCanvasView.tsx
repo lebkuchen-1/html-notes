@@ -57,6 +57,7 @@ import {
 } from '../utils/lasso';
 import { extractPdfFilesFromTransfer } from '../utils/pageImport';
 import { generateId } from '../utils/storage';
+import { optimizeStroke } from '../utils/strokeCodec';
 import { StrokeStabilizer } from '../utils/strokeStabilizer';
 import {
   projectClientPointToRulerLock,
@@ -875,8 +876,9 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
         if (stabilizer && (finished.tool === 'pen' || finished.tool === 'highlighter')) {
           finished.points = stabilizer.finalize(finished.points);
         }
+        const compacted = optimizeStroke(finished);
         pendingLiveClearAfterBaseRender = true;
-        props.store.addStroke(finished, props.pageId);
+        props.store.addStroke(compacted, props.pageId);
       } else {
         clearLiveCanvas();
       }

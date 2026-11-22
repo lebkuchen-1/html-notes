@@ -14,7 +14,7 @@ import { queryBrowserStorageEstimate, type StorageEstimateInfo } from '../utils/
 import { loadCloudBaseline } from '../utils/cloudSync';
 import { loadCloudConfig } from '../utils/s3Client';
 import {
-  estimateWorkspacePayloadBytes,
+  computeWorkspaceStorageBreakdown,
   exportNotesAsJson,
   PAPER_PRESETS,
 } from '../utils/storage';
@@ -133,17 +133,23 @@ export function SettingsPage(props: SettingsPageProps) {
   };
 
   const [storageEstimate, setStorageEstimate] = createSignal<StorageEstimateInfo>({
+    browserUsageBytes: null,
     usageBytes: 0,
     quotaBytes: null,
     persisted: null,
   });
+  const [storageRefreshTick, setStorageRefreshTick] = createSignal(0);
+  const [isCompacting, setIsCompacting] = createSignal(false);
+
+  const storageBreakdown = createMemo(() =>
+    computeWorkspaceStorageBreakdown(props.store.notes(), props.store.folders())
+  );
 
   createEffect(() => {
-    const notes = props.store.notes();
-    const folders = props.store.folders();
-    const payloadBytes = estimateWorkspacePayloadBytes(notes, folders);
+    storageRefreshTick();
+    const breakdown = storageBreakdown();
     let cancelled = false;
-    void queryBrowserStorageEstimate(payloadBytes).then((info) => {
+    void queryBrowserStorageEstimate(breakdown.totalLogicalBytes).then((info) => {
       if (!cancelled) setStorageEstimate(info);
     });
     return () => {
@@ -152,24 +158,73 @@ export function SettingsPage(props: SettingsPageProps) {
   });
 
   const storageStats = createMemo(() => {
-    const notes = props.store.notes();
-    const folders = props.store.folders();
     const backend = props.store.storageBackend();
     const est = storageEstimate();
-    const fallbackBytes = estimateWorkspacePayloadBytes(notes, folders);
-    const bytes = Math.max(est.usageBytes, fallbackBytes);
+    const breakdown = storageBreakdown();
+    const logicalBytes = breakdown.totalLogicalBytes;
+    const browserBytes = est.browserUsageBytes;
+    const bytes = Math.max(est.usageBytes, logicalBytes);
     const quota = backend === 'indexeddb' ? est.quotaBytes : 5 * 1024 * 1024;
-    const totalPages = notes.reduce((acc, n) => acc + n.pages.length, 0);
-    const totalStrokes = notes.reduce(
-      (acc, n) => acc + n.pages.reduce((pAcc, p) => pAcc + p.strokes.length, 0),
-      0
-    );
+    const overheadBytes =
+      browserBytes !== null ? Math.max(0, browserBytes - logicalBytes) : 0;
+    const hasHighOverhead =
+      backend === 'indexeddb' &&
+      browserBytes !== null &&
+      overheadBytes > 10 * 1024 * 1024 &&
+      browserBytes > logicalBytes * 2;
     const pct =
       quota && quota > 0
         ? Math.min(100, Math.round((bytes / quota) * 100))
         : Math.min(100, Math.round((bytes / (250 * 1024 * 1024)) * 100));
-    return { bytes, quota, persisted: est.persisted, backend, totalPages, totalStrokes, pct };
+    return {
+      bytes,
+      logicalBytes,
+      browserBytes,
+      overheadBytes,
+      hasHighOverhead,
+      quota,
+      persisted: est.persisted,
+      backend,
+      breakdown,
+      pct,
+    };
   });
+
+  const handleCompactStorage = async () => {
+    if (isCompacting()) return;
+    setIsCompacting(true);
+    const beforeBrowserBytes = storageStats().bytes;
+    try {
+      const res = await props.store.compactStorage();
+      if (!res.ok) return;
+
+      // Give WebKit a brief moment to reclaim the deleted database files before re-querying
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const freshBreakdown = computeWorkspaceStorageBreakdown(
+        props.store.notes(),
+        props.store.folders()
+      );
+      const afterInfo = await queryBrowserStorageEstimate(freshBreakdown.totalLogicalBytes);
+      setStorageEstimate(afterInfo);
+      setStorageRefreshTick((v) => v + 1);
+
+      const savedPts = Math.max(0, res.beforePoints - res.afterPoints);
+      const afterBytes = Math.max(afterInfo.usageBytes, freshBreakdown.totalLogicalBytes);
+      if (beforeBrowserBytes > afterBytes + 512 * 1024) {
+        props.store.showToast(
+          `Speicher bereinigt: ${formatBytes(beforeBrowserBytes)} → ${formatBytes(afterBytes)}`
+        );
+      } else if (savedPts > 0) {
+        props.store.showToast(
+          `Komprimiert: ${savedPts.toLocaleString('de-DE')} Strichpunkte eingespart`
+        );
+      } else {
+        props.store.showToast('Datenbank erfolgreich neu gepackt & bereinigt');
+      }
+    } finally {
+      setIsCompacting(false);
+    }
+  };
 
   const cloudInfo = createMemo(() => {
     props.store.cloudConfigVersion();
@@ -1035,18 +1090,74 @@ export function SettingsPage(props: SettingsPageProps) {
                       <Show when={storageStats().quota}>
                         {(q) => <> von {formatBytes(q())}</>}
                       </Show>{' '}
-                      · {props.store.notes().length} Notizen · {storageStats().totalPages} Seiten ·{' '}
-                      {storageStats().totalStrokes} Striche
+                      · {props.store.notes().length} Notizen · {storageStats().breakdown.totalPages}{' '}
+                      Seiten · {storageStats().breakdown.totalStrokes.toLocaleString('de-DE')}{' '}
+                      Striche
                     </span>
                   </div>
                   <div class="storage-meter-bar">
                     <div
                       class="storage-meter-fill"
-                      classList={{ 'is-warn': storageStats().pct > 75 }}
+                      classList={{ 'is-warn': storageStats().pct > 75 || storageStats().hasHighOverhead }}
                       style={{ width: `${Math.max(2, storageStats().pct)}%` }}
                     />
                   </div>
+                  <div class="storage-breakdown-grid">
+                    <div class="storage-breakdown-chip">
+                      <span class="sbc-label">Nutzdaten gesamt</span>
+                      <strong class="sbc-val">{formatBytes(storageStats().logicalBytes)}</strong>
+                    </div>
+                    <div class="storage-breakdown-chip">
+                      <span class="sbc-label">
+                        Striche (binär · {storageStats().breakdown.totalPoints.toLocaleString('de-DE')} Pkt.)
+                      </span>
+                      <strong class="sbc-val">
+                        {formatBytes(storageStats().breakdown.strokeBytes)}
+                      </strong>
+                    </div>
+                    <div class="storage-breakdown-chip">
+                      <span class="sbc-label">
+                        PDFs &amp; Bilder ({storageStats().breakdown.uniqueMediaCount} Medien)
+                      </span>
+                      <strong class="sbc-val">
+                        {formatBytes(storageStats().breakdown.mediaBytes)}
+                      </strong>
+                    </div>
+                    <Show when={storageStats().overheadBytes > 1024 * 1024}>
+                      <div
+                        class="storage-breakdown-chip"
+                        classList={{ 'is-warn': storageStats().hasHighOverhead }}
+                      >
+                        <span class="sbc-label">Browser-DB-Altlast (SQLite)</span>
+                        <strong class="sbc-val">
+                          {formatBytes(storageStats().overheadBytes)}
+                        </strong>
+                      </div>
+                    </Show>
+                  </div>
+                  <Show when={storageStats().hasHighOverhead}>
+                    <div class="storage-overhead-banner">
+                      <span>
+                        Die Browser-Datenbank belegt aktuell {formatBytes(storageStats().overheadBytes)}{' '}
+                        ungenutzten SQLite-Speicher auf dem Gerät (Nutzdaten:{' '}
+                        {formatBytes(storageStats().logicalBytes)}). Mit „Speicher komprimieren“
+                        wird die Datenbank sauber neu aufgebaut und der Speicher freigegeben.
+                      </span>
+                    </div>
+                  </Show>
                   <div class="settings-footer-actions">
+                    <button
+                      type="button"
+                      class="tool-pill"
+                      classList={{ 'is-active': storageStats().hasHighOverhead }}
+                      disabled={isCompacting()}
+                      onClick={() => void handleCompactStorage()}
+                    >
+                      <IconRotateCcw size={14} />
+                      <span>
+                        {isCompacting() ? 'Komprimiere…' : 'Speicher komprimieren'}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       class="tool-pill"

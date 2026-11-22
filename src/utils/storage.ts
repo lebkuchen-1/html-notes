@@ -28,12 +28,15 @@ import {
   type ViewMode,
 } from '../types';
 import {
+  compactIndexedDbWorkspace,
   isIndexedDbAvailable,
   loadWorkspaceFromIndexedDb,
+  migrateWorkspaceToV2AndCleanupLegacy,
   replaceFoldersInIndexedDb,
   saveFullWorkspaceToIndexedDb,
   syncNotesDeltaToIndexedDb,
 } from './db';
+import { estimateStrokeBinaryBytes, optimizeStroke } from './strokeCodec';
 
 export type StorageBackend = 'indexeddb' | 'localstorage';
 
@@ -844,33 +847,137 @@ export function estimateStorageUsageBytes(): number {
   }
 }
 
+export interface WorkspaceStorageBreakdown {
+  strokeBytes: number;
+  mediaBytes: number;
+  textAndMetaBytes: number;
+  totalLogicalBytes: number;
+  totalPages: number;
+  totalStrokes: number;
+  totalPoints: number;
+  uniqueMediaCount: number;
+}
+
+function makeMediaDedupKey(src: string): string {
+  const len = src.length;
+  if (len <= 160) return src;
+  return `${len}:${src.slice(0, 80)}:${src.slice(len - 80)}`;
+}
+
+function estimateRawMediaBytes(src: string): number {
+  if (!src) return 0;
+  if (src.startsWith('data:')) {
+    const commaIdx = src.indexOf(',');
+    if (commaIdx > 0 && src.slice(5, commaIdx).includes(';base64')) {
+      const b64Len = src.length - commaIdx - 1;
+      return Math.round(b64Len * 0.75);
+    }
+  }
+  return src.length;
+}
+
+export function computeWorkspaceStorageBreakdown(
+  notes: Note[],
+  folders: Folder[]
+): WorkspaceStorageBreakdown {
+  let strokeBytes = 0;
+  let mediaBytes = 0;
+  let textAndMetaBytes = folders.length * 140;
+  let totalPages = 0;
+  let totalStrokes = 0;
+  let totalPoints = 0;
+  const seenMedia = new Set<string>();
+
+  const countMedia = (src: string | undefined) => {
+    if (!src) return;
+    const key = makeMediaDedupKey(src);
+    if (seenMedia.has(key)) return;
+    seenMedia.add(key);
+    mediaBytes += estimateRawMediaBytes(src);
+  };
+
+  for (const note of notes) {
+    textAndMetaBytes += 220 + (note.title.length + note.content.length) * 2;
+    for (const att of note.attachments) {
+      textAndMetaBytes += 64;
+      countMedia(att.src);
+    }
+    totalPages += note.pages.length;
+    for (const page of note.pages) {
+      textAndMetaBytes += 180 + page.title.length * 2;
+      if (page.backgroundImage?.src) {
+        textAndMetaBytes += 80;
+        countMedia(page.backgroundImage.src);
+      }
+      for (const img of page.images) {
+        textAndMetaBytes += 110;
+        countMedia(img.src);
+      }
+      for (const text of page.texts) {
+        textAndMetaBytes += 90 + text.text.length * 2;
+      }
+      totalStrokes += page.strokes.length;
+      for (const stroke of page.strokes) {
+        totalPoints += stroke.points.length;
+        strokeBytes += estimateStrokeBinaryBytes(stroke);
+      }
+    }
+  }
+
+  return {
+    strokeBytes,
+    mediaBytes,
+    textAndMetaBytes,
+    totalLogicalBytes: strokeBytes + mediaBytes + textAndMetaBytes,
+    totalPages,
+    totalStrokes,
+    totalPoints,
+    uniqueMediaCount: seenMedia.size,
+  };
+}
+
 export function estimateWorkspacePayloadBytes(
   notes: Note[],
   folders: Folder[]
 ): number {
-  let bytes = folders.length * 140;
-  for (const note of notes) {
-    bytes += 220 + (note.title.length + note.content.length) * 2;
-    for (const att of note.attachments) {
-      bytes += 80 + att.src.length;
+  return computeWorkspaceStorageBreakdown(notes, folders).totalLogicalBytes;
+}
+
+export function optimizeWorkspaceStrokes(notes: Note[]): {
+  notes: Note[];
+  beforePoints: number;
+  afterPoints: number;
+  changed: boolean;
+} {
+  let beforePoints = 0;
+  let afterPoints = 0;
+  let changed = false;
+
+  const nextNotes = notes.map((note) => {
+    let noteChanged = false;
+    const nextPages = note.pages.map((page) => {
+      let pageChanged = false;
+      const nextStrokes = page.strokes.map((stroke) => {
+        beforePoints += stroke.points.length;
+        const opt = optimizeStroke(stroke);
+        afterPoints += opt.points.length;
+        if (opt !== stroke && opt.points.length !== stroke.points.length) {
+          pageChanged = true;
+        }
+        return opt;
+      });
+      if (pageChanged) {
+        noteChanged = true;
+      }
+      return { ...page, strokes: nextStrokes };
+    });
+    if (noteChanged) {
+      changed = true;
     }
-    for (const page of note.pages) {
-      bytes += 180 + page.title.length * 2;
-      if (page.backgroundImage?.src) {
-        bytes += 100 + page.backgroundImage.src.length;
-      }
-      for (const img of page.images) {
-        bytes += 140 + img.src.length;
-      }
-      for (const text of page.texts) {
-        bytes += 100 + text.text.length * 2;
-      }
-      for (const stroke of page.strokes) {
-        bytes += 96 + stroke.points.length * 28;
-      }
-    }
-  }
-  return bytes;
+    return { ...note, pages: nextPages };
+  });
+
+  return { notes: nextNotes, beforePoints, afterPoints, changed };
 }
 
 function createDefaultStarterWorkspace(): { notes: Note[]; folders: Folder[] } {
@@ -947,10 +1054,13 @@ export interface LoadedWorkspaceResult {
   notes: Note[];
   folders: Folder[];
   backend: StorageBackend;
+  migratedFromV1?: boolean;
+  savedPointsOnMigration?: number;
 }
 
 /**
- * Loads the workspace from IndexedDB (no ~5 MB localStorage limit!),
+ * Loads the workspace from normalized IndexedDB v2 (binary packed stroke chunks + binary media blobs),
+ * transparently migrating & deleting any bloated legacy v1 `notizblock-db` database on first load,
  * with a clean fallback to localStorage if IndexedDB is unavailable.
  */
 export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
@@ -960,13 +1070,29 @@ export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
 
       if (dbData.initialized) {
         const clean = sanitizeNormalizedWorkspace(dbData.notes, dbData.folders);
+
+        if (dbData.needsMigrationFromV1) {
+          const optimized = optimizeWorkspaceStrokes(clean.notes);
+          const migratedOk = await migrateWorkspaceToV2AndCleanupLegacy(
+            optimized.notes,
+            clean.folders
+          );
+          return {
+            notes: migratedOk ? optimized.notes : clean.notes,
+            folders: clean.folders,
+            backend: 'indexeddb',
+            migratedFromV1: migratedOk,
+            savedPointsOnMigration: Math.max(0, optimized.beforePoints - optimized.afterPoints),
+          };
+        }
+
         return {
           ...clean,
           backend: 'indexeddb',
         };
       }
 
-      // Brand-new workspace: seed starter notes/folders directly into IndexedDB
+      // Brand-new workspace: seed starter notes/folders directly into IndexedDB v2
       const starter = createDefaultStarterWorkspace();
       const savedOk = await saveFullWorkspaceToIndexedDb(starter.notes, starter.folders);
       if (savedOk) {
@@ -985,6 +1111,18 @@ export async function loadWorkspaceAsync(): Promise<LoadedWorkspaceResult> {
     ...fallback,
     backend: 'localstorage',
   };
+}
+
+export async function compactWorkspaceStorageAsync(
+  notes: Note[],
+  folders: Folder[],
+  backend: StorageBackend
+): Promise<boolean> {
+  if (backend === 'indexeddb') {
+    return compactIndexedDbWorkspace(notes, folders);
+  }
+  saveFolders(folders);
+  return saveNotes(notes);
 }
 
 export async function saveNotesDeltaAsync(
@@ -1130,7 +1268,7 @@ export function exportNotesAsJson(
   const payload = settings
     ? { version: 2, folders, notes, settings }
     : { version: 2, folders, notes };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+  const blob = new Blob([JSON.stringify(payload)], {
     type: 'application/json',
   });
   const url = URL.createObjectURL(blob);

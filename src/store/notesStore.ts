@@ -29,6 +29,7 @@ import { isCloudConfigComplete, loadCloudConfig } from '../utils/s3Client';
 import {
   clampPageHeight,
   clampPageWidth,
+  compactWorkspaceStorageAsync,
   createCanvasPage,
   generateId,
   loadActiveNoteId,
@@ -40,6 +41,7 @@ import {
   loadWorkspaceAsync,
   normalizeFolder,
   normalizeNote,
+  optimizeWorkspaceStrokes,
   saveActiveNoteId,
   saveActiveScreen,
   saveAppSettings,
@@ -400,6 +402,15 @@ export function createNotesStore() {
 
     if (loaded.backend === 'indexeddb') {
       void requestPersistentStorage();
+    }
+
+    if (loaded.migratedFromV1) {
+      const savedPts = loaded.savedPointsOnMigration ?? 0;
+      showToast(
+        savedPts > 0
+          ? `Speicherformat optimiert (${savedPts.toLocaleString('de-DE')} Punkte gespart) & Alt-DB bereinigt`
+          : 'Speicherformat auf binäre Chunks optimiert & Alt-Datenbank bereinigt'
+      );
     }
   });
 
@@ -1934,6 +1945,51 @@ export function createNotesStore() {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
+  /**
+   * Optimizes all existing strokes and rebuilds a fresh IndexedDB database slot,
+   * deleting the old database so WebKit/iPadOS Safari immediately reclaims SQLite WAL & freelist space.
+   */
+  const compactStorage = async (): Promise<{
+    ok: boolean;
+    beforePoints: number;
+    afterPoints: number;
+  }> => {
+    if (saveTimer !== undefined) {
+      window.clearTimeout(saveTimer);
+      saveTimer = undefined;
+    }
+
+    const currentNotes = notes();
+    const currentFolders = folders();
+    const optimized = optimizeWorkspaceStrokes(currentNotes);
+    const targetNotes = optimized.notes;
+
+    const ok = await compactWorkspaceStorageAsync(
+      targetNotes,
+      currentFolders,
+      storageBackend()
+    );
+    if (!ok) {
+      showToast('Speicher-Komprimierung fehlgeschlagen');
+      return {
+        ok: false,
+        beforePoints: optimized.beforePoints,
+        afterPoints: optimized.beforePoints,
+      };
+    }
+
+    // Update snapshots BEFORE setting signal so autosave effect doesn't re-write all notes
+    lastSavedNotesMap = new Map(targetNotes.map((n) => [n.id, n]));
+    lastSavedFoldersRef = currentFolders;
+    setNotes(targetNotes);
+
+    return {
+      ok: true,
+      beforePoints: optimized.beforePoints,
+      afterPoints: optimized.afterPoints,
+    };
+  };
+
   return {
     isHydrated,
     storageBackend,
@@ -2049,6 +2105,7 @@ export function createNotesStore() {
     updatePaperConfig,
     extendCanvasHeight,
     importNotesFromJson,
+    compactStorage,
   };
 }
 
