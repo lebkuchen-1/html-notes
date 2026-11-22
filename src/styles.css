@@ -445,12 +445,15 @@ button {
   color: var(--text-secondary);
   font-size: 12.5px;
   cursor: pointer;
+  touch-action: manipulation;
   transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
 }
 
-.tree-note-row:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+@media (hover: hover) and (pointer: fine) {
+  .tree-note-row:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
 }
 
 .tree-note-row.is-active {
@@ -512,12 +515,24 @@ button {
   flex-shrink: 0;
 }
 
-.tree-note-row:hover .tree-row-actions {
-  display: inline-flex;
+@media (hover: hover) and (pointer: fine) {
+  .tree-note-row:hover .tree-row-actions {
+    display: inline-flex;
+  }
+
+  .tree-note-row:hover .tree-note-meta {
+    display: none;
+  }
 }
 
-.tree-note-row:hover .tree-note-meta {
-  display: none;
+@media (hover: none), (pointer: coarse) {
+  .tree-note-row.is-active .tree-row-actions {
+    display: inline-flex;
+  }
+
+  .tree-note-row.is-active .tree-note-meta {
+    display: none;
+  }
 }
 
 .sidebar-filters {
@@ -681,12 +696,15 @@ button {
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
+  touch-action: manipulation;
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
-.folder-row:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+@media (hover: hover) and (pointer: fine) {
+  .folder-row:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
 }
 
 .folder-row.is-active {
@@ -770,16 +788,32 @@ button {
   flex-shrink: 0;
 }
 
-.folder-row:hover .folder-actions {
-  display: inline-flex;
+@media (hover: hover) and (pointer: fine) {
+  .folder-row:hover .folder-actions {
+    display: inline-flex;
+  }
+
+  .folder-row:hover .folder-count {
+    display: none;
+  }
+
+  .folder-row.is-unfiled-row:hover .folder-count {
+    display: inline;
+  }
 }
 
-.folder-row:hover .folder-count {
-  display: none;
-}
+@media (hover: none), (pointer: coarse) {
+  .folder-row.is-active .folder-actions {
+    display: inline-flex;
+  }
 
-.folder-row.is-unfiled-row:hover .folder-count {
-  display: inline;
+  .folder-row.is-active .folder-count {
+    display: none;
+  }
+
+  .folder-row.is-unfiled-row.is-active .folder-count {
+    display: inline;
+  }
 }
 
 .empty-list-actions {
@@ -951,9 +985,20 @@ button {
   transition: opacity 0.12s ease;
 }
 
-.note-card:hover .note-card-actions,
 .note-card.is-active .note-card-actions {
   opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .note-card:hover .note-card-actions {
+    opacity: 1;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .note-card-actions {
+    opacity: 1;
+  }
 }
 
 .icon-btn-xs {
@@ -1080,13 +1125,16 @@ button {
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
+  touch-action: manipulation;
   flex-shrink: 0;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-.note-tab:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+@media (hover: hover) and (pointer: fine) {
+  .note-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
 }
 
 .note-tab.is-active {
@@ -1177,10 +1225,21 @@ button {
   transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
 
-.note-tab:hover .note-tab-close,
 .note-tab.is-active .note-tab-close,
 .note-tab-close:focus-visible {
   opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .note-tab:hover .note-tab-close {
+    opacity: 1;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .note-tab-close {
+    opacity: 0.72;
+  }
 }
 
 .note-tab-close:hover {
@@ -3038,9 +3097,20 @@ button {
   transition: opacity 0.15s ease;
 }
 
-.continuous-page-block:hover .sheet-header-right,
 .continuous-page-block.is-active-page .sheet-header-right {
   opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .continuous-page-block:hover .sheet-header-right {
+    opacity: 1;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sheet-header-right {
+    opacity: 1;
+  }
 }
 
 .sheet-dim-btn {
@@ -4330,14 +4400,17 @@ button {
   background: var(--bg-surface);
   overflow: hidden;
   cursor: pointer;
+  touch-action: manipulation;
   box-shadow: var(--shadow-sm);
   transition: border-color 0.15s ease, transform 0.14s ease, box-shadow 0.15s ease;
 }
 
-.home-note-card:hover {
-  border-color: var(--accent);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sheet);
+@media (hover: hover) and (pointer: fine) {
+  .home-note-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-sheet);
+  }
 }
 
 .home-note-preview {
@@ -4392,8 +4465,16 @@ button {
   transition: opacity 0.14s ease;
 }
 
-.home-note-card:hover .home-note-hover-actions {
-  opacity: 1;
+@media (hover: hover) and (pointer: fine) {
+  .home-note-card:hover .home-note-hover-actions {
+    opacity: 1;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .home-note-hover-actions {
+    opacity: 1;
+  }
 }
 
 .hnh-btn {
