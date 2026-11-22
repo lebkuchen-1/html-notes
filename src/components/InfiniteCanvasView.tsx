@@ -84,6 +84,11 @@ import {
   type LassoResizeCorner,
 } from './CanvasLassoOverlay';
 import { CanvasTextOverlay } from './CanvasTextOverlay';
+import { InfiniteExportRegionOverlay } from './InfiniteExportRegionOverlay';
+import type {
+  InfiniteViewportSnapshot,
+  WorldRect,
+} from '../utils/infiniteExport';
 import {
   IconBringFront,
   IconCheck,
@@ -98,6 +103,7 @@ export interface InfiniteCanvasHandle {
   fitToContent: () => void;
   resetView: () => void;
   getViewportCenterWorld: () => { x: number; y: number };
+  getViewportSnapshot: () => InfiniteViewportSnapshot;
 }
 
 interface AppleTouch extends Touch {
@@ -164,6 +170,11 @@ interface InfiniteCanvasViewProps {
   onImportPagesFiles: (files: File[]) => void;
   registerHandle: (handle: InfiniteCanvasHandle | null) => void;
   rulerAdapter?: RulerDrawAdapter;
+  exportRegionActive?: boolean;
+  exportRegion?: WorldRect | null;
+  onExportRegionChange?: (rect: WorldRect) => void;
+  onConfirmExportRegion?: (rect: WorldRect) => void;
+  onCancelExportRegion?: () => void;
 }
 
 export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
@@ -617,6 +628,33 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     };
   };
 
+  const getViewportSnapshot = (): InfiniteViewportSnapshot => {
+    const cam = camera();
+    const vp = vpSize();
+    return {
+      camera: { ...cam },
+      viewportWidth: vp.width,
+      viewportHeight: vp.height,
+      worldRect: {
+        x: cam.x,
+        y: cam.y,
+        width: vp.width / Math.max(0.05, cam.zoom),
+        height: vp.height / Math.max(0.05, cam.zoom),
+      },
+    };
+  };
+
+  const pageContentBounds = createMemo(() => {
+    if (!props.exportRegionActive) return null;
+    const p = page();
+    if (!p) return null;
+    void p.strokes;
+    void p.texts;
+    void p.images;
+    void p.backgroundImage;
+    return computePageContentBounds(p, baseCanvasRef?.getContext('2d') ?? null);
+  });
+
   // Coordinate conversions
   const clientToWorld = (clientX: number, clientY: number): { x: number; y: number } => {
     const rect = liveCanvasRef!.getBoundingClientRect();
@@ -924,6 +962,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       fitToContent,
       resetView,
       getViewportCenterWorld,
+      getViewportSnapshot,
     });
 
     const handleWindowPointerEnd = (e: PointerEvent) => {
@@ -1060,13 +1099,14 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-ruler'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-ruler, .export-region-interactive'
         )
       );
     };
 
     const canOneFingerPan = (target: EventTarget | null): boolean => {
       if (isInteractiveTarget(target)) return false;
+      if (props.exportRegionActive) return true;
       if (props.stylusOnly) return props.oneFingerScroll;
       return props.tool === 'select';
     };
@@ -1471,6 +1511,25 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
   const handlePointerDown = (e: PointerEvent) => {
     const p = page();
     if (!p || !liveCanvasRef) return;
+
+    // While picking an export region in "Canvas schieben" mode, allow mouse panning only (never draw ink)
+    if (props.exportRegionActive) {
+      if (e.pointerType === 'mouse' && (e.button === 0 || e.button === 1)) {
+        e.preventDefault();
+        mousePanState = {
+          pointerId: e.pointerId,
+          lastX: e.clientX,
+          lastY: e.clientY,
+        };
+        setIsMousePanning(true);
+        try {
+          liveCanvasRef.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
 
     // Desktop pan with Middle-Mouse OR Space + Left-Click
     if (
@@ -2420,7 +2479,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
           </Show>
 
           {/* Floating Back-to-Content Pill when user pans far away from drawings */}
-          <Show when={isContentOffscreen()}>
+          <Show when={isContentOffscreen() && !props.exportRegionActive}>
             <button
               type="button"
               class="infinite-return-pill"
@@ -2430,6 +2489,25 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
               <IconCrosshair size={14} />
               <span>Zurück zum Inhalt</span>
             </button>
+          </Show>
+
+          {/* Interactive Custom Export Region Picker Overlay */}
+          <Show when={props.exportRegionActive}>
+            <InfiniteExportRegionOverlay
+              camera={camera()}
+              viewportWidth={vpSize().width}
+              viewportHeight={vpSize().height}
+              region={props.exportRegion ?? null}
+              contentBounds={pageContentBounds()}
+              onChangeRegion={(rect) => props.onExportRegionChange?.(rect)}
+              onConfirm={(rect) => props.onConfirmExportRegion?.(rect)}
+              onCancel={() => props.onCancelExportRegion?.()}
+              onZoomBy={(delta) => {
+                const vp = vpSize();
+                zoomAroundScreenPoint(camera().zoom + delta, vp.width / 2, vp.height / 2);
+              }}
+              onFitToContent={fitToContent}
+            />
           </Show>
 
           {/* Floating Zoom Badge while pinching */}

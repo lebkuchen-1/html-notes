@@ -7887,3 +7887,614 @@ button {
   color: var(--danger);
   border-color: rgba(220, 38, 38, 0.45);
 }
+
+
+/* ==========================================================================
+   Infinite Canvas Granular Export Dialog & Interactive Region Picker
+   ========================================================================== */
+
+.inf-export-backdrop {
+  z-index: 1300;
+}
+
+.inf-export-modal {
+  width: min(880px, calc(100vw - 24px));
+  max-width: 880px;
+  max-height: min(88vh, 780px);
+}
+
+.inf-export-body {
+  padding: 16px;
+}
+
+.inf-export-grid {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.inf-export-preview-col {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inf-export-preview-stage {
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.inf-export-preview-frame {
+  width: 100%;
+  min-height: 196px;
+  max-height: 250px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.inf-export-preview-frame.is-checkerboard {
+  background-color: #f8fafc;
+  background-image:
+    linear-gradient(45deg, #e2e8f0 25%, transparent 25%),
+    linear-gradient(-45deg, #e2e8f0 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e2e8f0 75%),
+    linear-gradient(-45deg, transparent 75%, #e2e8f0 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+[data-theme='dark'] .inf-export-preview-frame.is-checkerboard {
+  background-color: #1e293b;
+  background-image:
+    linear-gradient(45deg, #334155 25%, transparent 25%),
+    linear-gradient(-45deg, #334155 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #334155 75%),
+    linear-gradient(-45deg, transparent 75%, #334155 75%);
+}
+
+.inf-export-preview-canvas {
+  display: block;
+  border-radius: 5px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.14);
+  max-width: 100%;
+  max-height: 230px;
+}
+
+.inf-export-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.iem-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.inf-export-notice {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.inf-export-notice.is-warn {
+  background: rgba(217, 119, 6, 0.1);
+  border-color: rgba(217, 119, 6, 0.35);
+  color: var(--text-primary);
+}
+
+.inf-export-notice.is-warn svg {
+  color: #d97706;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.inf-export-pick-btn {
+  width: 100%;
+  justify-content: center;
+  min-height: 36px;
+}
+
+.inf-export-controls-col {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  min-width: 0;
+}
+
+.inf-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.inf-scope-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.inf-scope-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.inf-scope-card svg {
+  flex-shrink: 0;
+}
+
+.inf-scope-card.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.isc-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+  line-height: 1.25;
+}
+
+.inf-scope-card.is-active .isc-title {
+  color: var(--accent);
+}
+
+.isc-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inf-format-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.inf-format-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  text-align: center;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.inf-format-card.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ifc-icon {
+  display: inline-flex;
+  margin-bottom: 1px;
+}
+
+.ifc-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.inf-format-card.is-active .ifc-label {
+  color: var(--accent);
+}
+
+.ifc-sub {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.15;
+}
+
+.inf-pdf-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 11px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+}
+
+.inf-inline-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.inf-compact-pill {
+  min-height: 31px;
+  padding: 0 10px;
+  font-size: 12px;
+  touch-action: manipulation;
+}
+
+.inf-compact-pill:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.inf-scale-hint {
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.inf-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-top: 2px;
+}
+
+.inf-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.inf-check-label input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.inf-filename-wrap {
+  display: flex;
+  align-items: stretch;
+}
+
+.inf-filename-wrap .import-text-input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.inf-filename-ext {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+  background: var(--bg-surface-alt);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+/* ==================== Interactive Canvas Export Region Overlay ==================== */
+
+.export-region-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 44;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.export-region-overlay.is-pan-mode {
+  pointer-events: none;
+  cursor: grab;
+}
+
+.export-region-frame {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 99999px rgba(15, 23, 42, 0.48),
+    0 0 0 1px rgba(255, 255, 255, 0.65) inset;
+  cursor: move;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.export-region-overlay.is-pan-mode .export-region-frame {
+  pointer-events: none;
+  border-style: dashed;
+}
+
+.erf-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.28) 1px, transparent 1px);
+  background-size: 33.333% 33.333%;
+  background-position: -1px -1px;
+}
+
+.erf-dims-badge {
+  position: absolute;
+  left: 50%;
+  top: -32px;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.28);
+}
+
+.erf-dims-badge.is-inside {
+  top: 8px;
+}
+
+.erf-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px solid var(--accent);
+  background: #ffffff;
+  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.28);
+  touch-action: none;
+  z-index: 3;
+}
+
+/* Generous invisible touch hit target for iPadOS finger / Apple Pencil */
+.erf-handle::before {
+  content: '';
+  position: absolute;
+  inset: -11px;
+}
+
+.erf-handle.is-nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.erf-handle.is-ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.erf-handle.is-sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.erf-handle.is-se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+
+.erf-handle.is-n {
+  left: 50%;
+  top: -6px;
+  width: 24px;
+  height: 10px;
+  margin-left: -12px;
+  border-radius: 999px;
+  cursor: ns-resize;
+}
+
+.erf-handle.is-s {
+  left: 50%;
+  bottom: -6px;
+  width: 24px;
+  height: 10px;
+  margin-left: -12px;
+  border-radius: 999px;
+  cursor: ns-resize;
+}
+
+.erf-handle.is-w {
+  left: -6px;
+  top: 50%;
+  width: 10px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 999px;
+  cursor: ew-resize;
+}
+
+.erf-handle.is-e {
+  right: -6px;
+  top: 50%;
+  width: 10px;
+  height: 24px;
+  margin-top: -12px;
+  border-radius: 999px;
+  cursor: ew-resize;
+}
+
+.export-region-top-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.22);
+  max-width: calc(100% - 24px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.export-region-top-banner svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.export-region-dock {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
+  max-width: calc(100% - 20px);
+}
+
+.erd-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border-subtle);
+}
+
+.erd-btn,
+.erd-pill,
+.erd-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.erd-icon-btn {
+  width: 30px;
+  padding: 0;
+}
+
+.erd-btn.is-active,
+.erd-pill.is-active {
+  background: var(--bg-surface);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.erd-pill:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.erd-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.erd-cancel-btn,
+.erd-confirm-btn {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .inf-scope-card:hover:not(.is-active),
+  .inf-format-card:hover:not(.is-active) {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
+  }
+
+  .erd-btn:hover:not(.is-active),
+  .erd-pill:hover:not(.is-active):not(:disabled),
+  .erd-icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+}
+
+@media (max-width: 760px) {
+  .inf-export-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inf-export-preview-col {
+    position: static;
+  }
+
+  .inf-format-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .inf-scope-grid {
+    grid-template-columns: 1fr;
+  }
+}

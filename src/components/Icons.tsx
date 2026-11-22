@@ -595,3 +595,33 @@ export const IconShapes = (p: IconProps) => (
     <circle cx="17.5" cy="17.5" r="3.5" />
   </svg>
 );
+
+export const IconCrop = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+    <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+  </svg>
+);
+
+export const IconMonitor = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <rect x="2" y="3" width="20" height="14" rx="2" />
+    <path d="M8 21h8M12 17v4" />
+  </svg>
+);
+
+export const IconShare = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+    <polyline points="16 6 12 2 8 6" />
+    <line x1="12" y1="2" x2="12" y2="15" />
+  </svg>
+);
+
+export const IconLayers = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+    <polyline points="2 12 12 17 22 12" />
+    <polyline points="2 17 12 22 22 17" />
+  </svg>
+);

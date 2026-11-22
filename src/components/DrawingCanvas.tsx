@@ -24,10 +24,14 @@ import {
 } from '../types';
 import {
   exportCanvasToPng,
-  exportInfiniteCanvasToPng,
   isPaperDark,
   resolvePaperBackgroundColor,
 } from '../utils/canvasRenderer';
+import type {
+  InfiniteExportScope,
+  InfiniteViewportSnapshot,
+  WorldRect,
+} from '../utils/infiniteExport';
 import {
   BRUSH_DYNAMICS_PRESETS,
   createPenPreviewStroke,
@@ -84,6 +88,7 @@ import {
 } from './InfiniteCanvasView';
 import { CanvasRulerOverlay } from './CanvasRulerOverlay';
 import { ColorPickerPopover } from './ColorPickerPopover';
+import { InfiniteExportDialog } from './InfiniteExportDialog';
 import {
   clampRulerCenter,
   computeRulerGeometry,
@@ -575,6 +580,28 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [editingText, setEditingText] = createSignal<EditingTextState | null>(null);
   const [selectedImage, setSelectedImage] = createSignal<SelectedImageState | null>(null);
   const [lassoSelection, setLassoSelection] = createSignal<LassoSelection | null>(null);
+
+  // Infinite Canvas granular export modal + interactive region picker state
+  const [infiniteExportOpen, setInfiniteExportOpen] = createSignal<boolean>(false);
+  const [infiniteExportScope, setInfiniteExportScope] =
+    createSignal<InfiniteExportScope>('viewport');
+  const [infiniteExportViewport, setInfiniteExportViewport] =
+    createSignal<InfiniteViewportSnapshot | null>(null);
+  const [infiniteExportRegion, setInfiniteExportRegion] = createSignal<WorldRect | null>(null);
+  const [isPickingExportRegion, setIsPickingExportRegion] = createSignal<boolean>(false);
+  let exportRegionBackupBeforePick: WorldRect | null = null;
+
+  // Clear custom export region when switching note/page or leaving infinite mode
+  createEffect(() => {
+    void props.store.activeNoteId();
+    void props.store.activePage()?.id;
+    const inf = isInfiniteMode();
+    setInfiniteExportRegion(null);
+    if (!inf) {
+      setInfiniteExportOpen(false);
+      setIsPickingExportRegion(false);
+    }
+  });
 
   let stageWrapperRef: HTMLDivElement | undefined;
   let viewportRef: HTMLDivElement | undefined;
@@ -1714,6 +1741,12 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
     const handleDocKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (isPickingExportRegion()) {
+          setInfiniteExportRegion(exportRegionBackupBeforePick);
+          setIsPickingExportRegion(false);
+          openInfiniteExportDialog(exportRegionBackupBeforePick ? 'region' : 'viewport');
+          return;
+        }
         if (penMenuOpen()) setPenMenuOpen(false);
         if (shapeMenuOpen()) setShapeMenuOpen(false);
         if (paperMenuOpen()) setPaperMenuOpen(false);
@@ -2046,11 +2079,40 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
   };
 
+  const openInfiniteExportDialog = (scope: InfiniteExportScope = 'viewport') => {
+    if (editingText()) commitEditingText();
+    setPenMenuOpen(false);
+    setShapeMenuOpen(false);
+    setPaperMenuOpen(false);
+    setSizeMenuOpen(false);
+    const snap = infiniteHandle?.getViewportSnapshot() ?? {
+      camera: { x: 0, y: 0, zoom: infiniteZoom() || 1 },
+      viewportWidth: stageSize().width || 800,
+      viewportHeight: stageSize().height || 600,
+      worldRect: {
+        x: 0,
+        y: 0,
+        width: (stageSize().width || 800) / Math.max(0.25, infiniteZoom() || 1),
+        height: (stageSize().height || 600) / Math.max(0.25, infiniteZoom() || 1),
+      },
+    };
+    setInfiniteExportViewport(snap);
+    setInfiniteExportScope(scope);
+    setIsPickingExportRegion(false);
+    setInfiniteExportOpen(true);
+  };
+
   const handleExportPng = async () => {
     if (editingText()) commitEditingText();
     const currentNote = note();
     const currentPage = page();
     if (!currentNote || !currentPage) return;
+
+    if (isInfiniteMode()) {
+      openInfiniteExportDialog('viewport');
+      return;
+    }
+
     const baseName = currentNote.title.trim() || 'skizze';
     const suffix = pages().length > 1 ? `-${currentPage.title}` : '';
     const safeName = `${baseName}${suffix}`
@@ -2058,23 +2120,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       .replace(/[^a-z0-9äöüß_-]+/gi, '-')
       .replace(/^-+|-+$/g, '');
     const filename = `${safeName || 'skizze'}.png`;
-    if (isInfiniteMode()) {
-      await exportInfiniteCanvasToPng(
-        currentPage,
-        props.store.theme(),
-        filename,
-        effSettings().pngExportScale
-      );
-      props.store.showToast('Unendlicher Canvas als PNG exportiert');
-    } else {
-      await exportCanvasToPng(
-        currentPage,
-        props.store.theme(),
-        filename,
-        effSettings().pngExportScale
-      );
-      props.store.showToast(`Seite „${currentPage.title}“ als PNG exportiert`);
-    }
+    await exportCanvasToPng(
+      currentPage,
+      props.store.theme(),
+      filename,
+      effSettings().pngExportScale
+    );
+    props.store.showToast(`Seite „${currentPage.title}“ als PNG exportiert`);
   };
 
   const goToAdjacentPage = (delta: -1 | 1) => {
@@ -3172,9 +3224,16 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           <button
             type="button"
             class="tool-btn"
+            classList={{ 'is-active': infiniteExportOpen() || isPickingExportRegion() }}
             onClick={() => void handleExportPng()}
-            title="Aktuelle Seite als PNG exportieren"
-            aria-label="Als PNG exportieren"
+            title={
+              isInfiniteMode()
+                ? 'Unendlichen Canvas exportieren (Bildschirm, Inhalt, Bereich, PDF…)'
+                : 'Aktuelle Seite als PNG exportieren'
+            }
+            aria-label={
+              isInfiniteMode() ? 'Unendlichen Canvas exportieren' : 'Als PNG exportieren'
+            }
           >
             <IconDownload size={15} />
           </button>
@@ -3349,6 +3408,16 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 >
                   <IconCrosshair size={13} />
                   <span class="hide-compact">Ursprung</span>
+                </button>
+                <button
+                  type="button"
+                  class="tool-pill"
+                  classList={{ 'is-active': infiniteExportOpen() || isPickingExportRegion() }}
+                  onClick={() => openInfiniteExportDialog('viewport')}
+                  title="Unendlichen Canvas exportieren (Bildschirm, Bereich, PNG, JPEG, PDF)"
+                >
+                  <IconDownload size={13} />
+                  <span class="hide-compact">Export…</span>
                 </button>
               </>
             }
@@ -3603,6 +3672,19 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   infiniteHandle = h;
                 }}
                 rulerAdapter={rulerAdapter}
+                exportRegionActive={isPickingExportRegion()}
+                exportRegion={infiniteExportRegion()}
+                onExportRegionChange={(rect) => setInfiniteExportRegion(rect)}
+                onConfirmExportRegion={(rect) => {
+                  setInfiniteExportRegion(rect);
+                  setIsPickingExportRegion(false);
+                  openInfiniteExportDialog('region');
+                }}
+                onCancelExportRegion={() => {
+                  setInfiniteExportRegion(exportRegionBackupBeforePick);
+                  setIsPickingExportRegion(false);
+                  openInfiniteExportDialog(exportRegionBackupBeforePick ? 'region' : 'viewport');
+                }}
               />
             )}
           </Show>
@@ -3747,7 +3829,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       </Show>
 
       {/* Interactive Physical Ruler Overlay (Works identically in Pages & Infinite mode) */}
-      <Show when={rulerState().visible}>
+      <Show when={rulerState().visible && !isPickingExportRegion()}>
         <CanvasRulerOverlay
           state={rulerState()}
           canvasScale={isInfiniteMode() ? infiniteZoom() : livePagesScale()}
@@ -3763,6 +3845,32 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         />
       </Show>
       </div>
+
+      {/* Granular Infinite Canvas Export Modal */}
+      <Show when={isInfiniteMode() && infiniteExportOpen() && page() && infiniteExportViewport()}>
+        <InfiniteExportDialog
+          open={infiniteExportOpen()}
+          noteTitle={note()?.title ?? 'Notiz'}
+          page={page()!}
+          theme={props.store.theme()}
+          defaultScale={effSettings().pngExportScale}
+          viewport={infiniteExportViewport()!}
+          customRegion={infiniteExportRegion()}
+          initialScope={infiniteExportScope()}
+          lassoSelection={lassoSelection()}
+          onClose={() => setInfiniteExportOpen(false)}
+          onStartRegionPick={(existing) => {
+            exportRegionBackupBeforePick = existing ? { ...existing } : null;
+            if (existing) setInfiniteExportRegion(existing);
+            setInfiniteExportOpen(false);
+            setIsPickingExportRegion(true);
+            props.store.showToast(
+              'Exportbereich ziehen oder an den Griffen anpassen'
+            );
+          }}
+          onToast={(msg) => props.store.showToast(msg)}
+        />
+      </Show>
 
       <Show when={!isInfiniteMode() && liveZoomPreview() !== null}>
         <div class="pinch-zoom-badge" aria-live="polite">

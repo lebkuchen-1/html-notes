@@ -953,10 +953,13 @@ export function renderInfiniteCanvas(
     hoveredTextId?: string | null;
     onImageLoad?: () => void;
     hiddenIds?: CanvasHiddenIds;
+    skipPaperBackground?: boolean;
   }
 ) {
-  // 0. Infinite seamless paper background
-  drawInfinitePaperBackground(ctx, vpWidth, vpHeight, cam, page.paperConfig, theme, dpr);
+  // 0. Infinite seamless paper background (skipped when exporting transparent PNG)
+  if (!options?.skipPaperBackground) {
+    drawInfinitePaperBackground(ctx, vpWidth, vpHeight, cam, page.paperConfig, theme, dpr);
+  }
 
   const hiddenStrokes = options?.hiddenIds?.strokes;
   const hiddenTexts = options?.hiddenIds?.texts;
