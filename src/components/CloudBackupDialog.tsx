@@ -3,9 +3,11 @@ import type { NotesStore } from '../store/notesStore';
 import {
   buildBackupPlan,
   buildImportPlan,
+  buildSyncPlan,
   compareWithCloud,
   executeCloudBackup,
   executeCloudImport,
+  executeCloudSync,
   loadCloudBaseline,
   type BackupConflictResolution,
   type CloudTransferProgress,
@@ -13,6 +15,9 @@ import {
   type FolderConflictResolution,
   type ImportConflictResolution,
   type NoteComparison,
+  type SyncConflictResolution,
+  type SyncFolderConflictResolution,
+  type SyncSettingsMode,
 } from '../utils/cloudSync';
 import {
   buildB2CorsRulesJson,
@@ -48,8 +53,13 @@ import {
   IconX,
 } from './Icons';
 
-export type CloudSyncTab = 'backup' | 'import' | 'setup';
+export type CloudSyncTab = 'sync' | 'backup' | 'import' | 'setup';
+type ActionTab = 'sync' | 'backup' | 'import';
 type SelectionScope = 'all' | 'custom';
+
+function isActionTab(tab: CloudSyncTab): tab is ActionTab {
+  return tab === 'sync' || tab === 'backup' || tab === 'import';
+}
 
 interface CloudBackupDialogProps {
   store: NotesStore;
@@ -104,6 +114,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   const [collapsedFolders, setCollapsedFolders] = createSignal<Set<string>>(new Set());
   const [treeSearch, setTreeSearch] = createSignal('');
   const [includeSettings, setIncludeSettings] = createSignal(false);
+  const [syncSettingsMode, setSyncSettingsMode] = createSignal<SyncSettingsMode>('none');
 
   // Conflict resolution state
   const [backupConflicts, setBackupConflicts] = createSignal<
@@ -114,6 +125,12 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   >({});
   const [folderConflicts, setFolderConflicts] = createSignal<
     Record<string, FolderConflictResolution>
+  >({});
+  const [syncNoteConflicts, setSyncNoteConflicts] = createSignal<
+    Record<string, SyncConflictResolution>
+  >({});
+  const [syncFolderConflicts, setSyncFolderConflicts] = createSignal<
+    Record<string, SyncFolderConflictResolution>
   >({});
 
   // Transfer execution state
@@ -146,10 +163,13 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     cancelOngoing();
   });
 
-  const selectAllForTab = (tab: 'backup' | 'import', cmp: CloudWorkspaceComparison) => {
+  const selectAllForTab = (tab: ActionTab, cmp: CloudWorkspaceComparison) => {
     const nextNotes = new Set<string>();
     const nextFolders = new Set<string>();
-    if (tab === 'backup') {
+    if (tab === 'sync') {
+      for (const id of cmp.notesById.keys()) nextNotes.add(id);
+      for (const id of cmp.foldersById.keys()) nextFolders.add(id);
+    } else if (tab === 'backup') {
       for (const n of props.store.notes()) nextNotes.add(n.id);
       for (const f of props.store.folders()) nextFolders.add(f.id);
     } else {
@@ -164,10 +184,17 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     setSelectedFolderIds(nextFolders);
   };
 
-  const selectOnlyChangedForTab = (tab: 'backup' | 'import', cmp: CloudWorkspaceComparison) => {
+  const selectOnlyChangedForTab = (tab: ActionTab, cmp: CloudWorkspaceComparison) => {
     const nextNotes = new Set<string>();
     const nextFolders = new Set<string>();
-    if (tab === 'backup') {
+    if (tab === 'sync') {
+      for (const [id, entry] of cmp.notesById) {
+        if (entry.status !== 'synced') nextNotes.add(id);
+      }
+      for (const [id, entry] of cmp.foldersById) {
+        if (entry.status !== 'synced') nextFolders.add(id);
+      }
+    } else if (tab === 'backup') {
       for (const [id, entry] of cmp.notesById) {
         if (entry.local && entry.status !== 'synced') {
           nextNotes.add(id);
@@ -219,7 +246,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
       if (ctrl.signal.aborted) return;
       setComparison(cmp);
       const tab = activeTab();
-      if (tab === 'backup' || tab === 'import') {
+      if (isActionTab(tab)) {
         if (scope() === 'all') {
           selectAllForTab(tab, cmp);
         } else {
@@ -257,7 +284,10 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
       setBackupConflicts({});
       setImportConflicts({});
       setFolderConflicts({});
+      setSyncNoteConflicts({});
+      setSyncFolderConflicts({});
       setIncludeSettings(false);
+      setSyncSettingsMode('none');
       setScope('all');
 
       const tab = untrack(() => activeTab());
@@ -271,10 +301,10 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     })
   );
 
-  // Re-initialize selection when switching between Backup & Import tabs
+  // Re-initialize selection when switching between Sync / Backup / Import tabs
   createEffect(
     on(activeTab, (tab) => {
-      if (!untrack(() => isOpen()) || (tab !== 'backup' && tab !== 'import')) return;
+      if (!untrack(() => isOpen()) || !isActionTab(tab)) return;
       const cmp = untrack(() => comparison());
       setLastResultMessage(null);
       setRunError(null);
@@ -289,11 +319,15 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
         const validFolders = new Set<string>();
         for (const id of untrack(() => selectedNoteIds())) {
           const entry = cmp.notesById.get(id);
-          if (tab === 'backup' ? entry?.local : entry?.remote) validNotes.add(id);
+          if (tab === 'sync' ? entry : tab === 'backup' ? entry?.local : entry?.remote) {
+            validNotes.add(id);
+          }
         }
         for (const id of untrack(() => selectedFolderIds())) {
           const entry = cmp.foldersById.get(id);
-          if (tab === 'backup' ? entry?.local : entry?.remote) validFolders.add(id);
+          if (tab === 'sync' ? entry : tab === 'backup' ? entry?.local : entry?.remote) {
+            validFolders.add(id);
+          }
         }
         if (validNotes.size === 0 && validFolders.size === 0) {
           selectAllForTab(tab, cmp);
@@ -329,10 +363,20 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   const tabFolders = createMemo<TreeFolderNode[]>(() => {
     const cmp = comparison();
     const tab = activeTab();
-    if (!cmp || (tab !== 'backup' && tab !== 'import')) return [];
+    if (!cmp || !isActionTab(tab)) return [];
     const list: TreeFolderNode[] = [];
     for (const entry of cmp.foldersById.values()) {
-      if (tab === 'backup' && entry.local) {
+      if (tab === 'sync') {
+        const src = entry.local ?? entry.remote;
+        if (!src) continue;
+        list.push({
+          id: entry.id,
+          name: src.name,
+          color: src.color,
+          parentId: src.parentId,
+          status: entry.status,
+        });
+      } else if (tab === 'backup' && entry.local) {
         list.push({
           id: entry.id,
           name: entry.local.name,
@@ -356,11 +400,11 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   const tabNotes = createMemo<TreeNoteNode[]>(() => {
     const cmp = comparison();
     const tab = activeTab();
-    if (!cmp || (tab !== 'backup' && tab !== 'import')) return [];
+    if (!cmp || !isActionTab(tab)) return [];
 
-    // Local blob set for import transfer hints
+    // Local blob set for import/sync transfer hints
     const localBlobSet = new Set<string>();
-    if (tab === 'import') {
+    if (tab === 'import' || tab === 'sync') {
       for (const entry of cmp.notesById.values()) {
         if (entry.local) {
           for (const h of entry.local.blobHashes) localBlobSet.add(h);
@@ -370,7 +414,47 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
 
     const list: TreeNoteNode[] = [];
     for (const entry of cmp.notesById.values()) {
-      if (tab === 'backup' && entry.local) {
+      if (tab === 'sync') {
+        const useRemote =
+          entry.status === 'remote-only' ||
+          (entry.status === 'remote-ahead' && Boolean(entry.remote));
+        if (useRemote && entry.remote) {
+          const missingBlobBytes = entry.remote.blobHashes.reduce(
+            (sum, h) =>
+              localBlobSet.has(h) ? sum : sum + (cmp.manifest?.blobs[h]?.size ?? 0),
+            0
+          );
+          list.push({
+            id: entry.id,
+            title: entry.remote.title.trim() || 'Unbenannte Notiz',
+            folderId: entry.remote.folderId,
+            pageCount: entry.remote.pageCount,
+            updatedAt: entry.remote.updatedAt,
+            sizeBytes: entry.remote.noteBytes + entry.remote.totalBlobBytes,
+            transferHintBytes: entry.remote.noteBytes + missingBlobBytes,
+            comparison: entry,
+          });
+        } else if (entry.local) {
+          const missingBlobBytes = entry.local.blobHashes.reduce(
+            (sum, h) =>
+              cmp.remoteBlobKeys.has(h) ? sum : sum + (entry.local!.blobMeta[h]?.size ?? 0),
+            0
+          );
+          list.push({
+            id: entry.id,
+            title: entry.local.title.trim() || 'Unbenannte Notiz',
+            folderId: entry.local.folderId,
+            pageCount: entry.local.pageCount,
+            updatedAt: entry.local.updatedAt,
+            sizeBytes: entry.local.estimatedNoteBytes + entry.local.totalBlobBytes,
+            transferHintBytes:
+              entry.status === 'synced'
+                ? 0
+                : entry.local.estimatedNoteBytes + missingBlobBytes,
+            comparison: entry,
+          });
+        }
+      } else if (tab === 'backup' && entry.local) {
         const missingBlobBytes = entry.local.blobHashes.reduce(
           (sum, h) =>
             cmp.remoteBlobKeys.has(h) ? sum : sum + (entry.local!.blobMeta[h]?.size ?? 0),
@@ -525,6 +609,18 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
 
   // ==================== Plans & Conflicts ====================
 
+  const syncPlan = createMemo(() => {
+    const cmp = comparison();
+    if (!cmp || activeTab() !== 'sync') return null;
+    return buildSyncPlan(
+      cmp,
+      selectedNoteIds(),
+      selectedFolderIds(),
+      syncNoteConflicts(),
+      syncFolderConflicts()
+    );
+  });
+
   const backupPlan = createMemo(() => {
     const cmp = comparison();
     if (!cmp || activeTab() !== 'backup') return null;
@@ -552,13 +648,18 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   const conflictingSelectedNotes = createMemo(() => {
     const cmp = comparison();
     const tab = activeTab();
-    if (!cmp || (tab !== 'backup' && tab !== 'import')) return [];
+    if (!cmp || !isActionTab(tab)) return [];
     const sel = selectedNoteIds();
     const out: NoteComparison[] = [];
     for (const id of sel) {
       const entry = cmp.notesById.get(id);
       if (!entry) continue;
-      if (tab === 'backup' && (entry.status === 'conflict' || entry.status === 'remote-ahead')) {
+      if (tab === 'sync' && entry.status === 'conflict') {
+        out.push(entry);
+      } else if (
+        tab === 'backup' &&
+        (entry.status === 'conflict' || entry.status === 'remote-ahead')
+      ) {
         out.push(entry);
       } else if (
         tab === 'import' &&
@@ -573,63 +674,134 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   const conflictingRequiredFolders = createMemo(() => {
     const cmp = comparison();
     const tab = activeTab();
-    if (!cmp || (tab !== 'backup' && tab !== 'import')) return [];
-    const plan = tab === 'backup' ? backupPlan() : importPlan();
-    if (!plan) return [];
-    const ids =
-      tab === 'backup'
-        ? [
-            ...(plan as ReturnType<typeof buildBackupPlan>).overwriteRemoteFolderIds,
-            ...(plan as ReturnType<typeof buildBackupPlan>).skippedConflictFolderIds,
-          ]
-        : [
-            ...(plan as ReturnType<typeof buildImportPlan>).replaceLocalFolderIds,
-            ...(plan as ReturnType<typeof buildImportPlan>).skippedConflictFolderIds,
-          ];
+    if (!cmp || !isActionTab(tab)) return [];
+    let ids: string[] = [];
+    if (tab === 'sync') {
+      const p = syncPlan();
+      if (!p) return [];
+      ids = [
+        ...p.uploadConflictLocalFolderIds,
+        ...p.downloadConflictRemoteFolderIds,
+        ...p.skippedConflictFolderIds,
+      ];
+    } else if (tab === 'backup') {
+      const p = backupPlan();
+      if (!p) return [];
+      ids = [...p.overwriteRemoteFolderIds, ...p.skippedConflictFolderIds];
+    } else {
+      const p = importPlan();
+      if (!p) return [];
+      ids = [...p.replaceLocalFolderIds, ...p.skippedConflictFolderIds];
+    }
     return ids
       .map((id) => cmp.foldersById.get(id))
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
   });
 
-  // Explicit list of items that will be overwritten/replaced
+  // Explicit lists of items that will be overwritten/replaced (split into local vs. remote targets)
   const replacedItemsSummary = createMemo(() => {
+    const empty = {
+      localNotes: [] as { id: string; title: string; kind: 'update' | 'conflict' }[],
+      localFolders: [] as { id: string; name: string; kind: 'update' | 'conflict' }[],
+      remoteNotes: [] as { id: string; title: string; kind: 'update' | 'conflict' }[],
+      remoteFolders: [] as { id: string; name: string; kind: 'update' | 'conflict' }[],
+    };
     const cmp = comparison();
     const tab = activeTab();
-    if (!cmp || (tab !== 'backup' && tab !== 'import')) {
-      return { notes: [] as { id: string; title: string; kind: 'update' | 'conflict' }[], folders: [] as { id: string; name: string; kind: 'update' | 'conflict' }[] };
+    if (!cmp || !isActionTab(tab)) return empty;
+
+    if (tab === 'sync') {
+      const p = syncPlan();
+      if (!p) return empty;
+      return {
+        localNotes: [
+          ...p.downloadConflictRemoteNoteIds.map((id) => ({
+            id,
+            title: cmp.notesById.get(id)?.remote?.title.trim() || 'Unbenannte Notiz',
+            kind: 'conflict' as const,
+          })),
+          ...p.downloadUpdateNoteIds.map((id) => ({
+            id,
+            title: cmp.notesById.get(id)?.remote?.title.trim() || 'Unbenannte Notiz',
+            kind: 'update' as const,
+          })),
+        ],
+        localFolders: [
+          ...p.downloadConflictRemoteFolderIds.map((id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.remote?.name || 'Ordner',
+            kind: 'conflict' as const,
+          })),
+          ...p.downloadUpdateFolderIds.map((id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.remote?.name || 'Ordner',
+            kind: 'update' as const,
+          })),
+        ],
+        remoteNotes: [
+          ...p.uploadConflictLocalNoteIds.map((id) => ({
+            id,
+            title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
+            kind: 'conflict' as const,
+          })),
+          ...p.uploadUpdateNoteIds.map((id) => ({
+            id,
+            title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
+            kind: 'update' as const,
+          })),
+        ],
+        remoteFolders: [
+          ...p.uploadConflictLocalFolderIds.map((id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
+            kind: 'conflict' as const,
+          })),
+          ...p.uploadUpdateFolderIds.map((id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
+            kind: 'update' as const,
+          })),
+        ],
+      };
     }
+
     if (tab === 'backup') {
       const p = backupPlan();
-      if (!p) return { notes: [], folders: [] };
-      const notes = [
-        ...p.overwriteRemoteNoteIds.map((id) => ({
-          id,
-          title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
-          kind: 'conflict' as const,
-        })),
-        ...p.updateNoteIds.map((id) => ({
-          id,
-          title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
-          kind: 'update' as const,
-        })),
-      ];
-      const folders = [
-        ...p.overwriteRemoteFolderIds.map((id) => ({
-          id,
-          name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
-          kind: 'conflict' as const,
-        })),
-        ...p.updateFolderIds.map((id) => ({
-          id,
-          name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
-          kind: 'update' as const,
-        })),
-      ];
-      return { notes, folders };
-    } else {
-      const p = importPlan();
-      if (!p) return { notes: [], folders: [] };
-      const notes = [
+      if (!p) return empty;
+      return {
+        ...empty,
+        remoteNotes: [
+          ...p.overwriteRemoteNoteIds.map((id) => ({
+            id,
+            title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
+            kind: 'conflict' as const,
+          })),
+          ...p.updateNoteIds.map((id) => ({
+            id,
+            title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
+            kind: 'update' as const,
+          })),
+        ],
+        remoteFolders: [
+          ...p.overwriteRemoteFolderIds.map((id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
+            kind: 'conflict' as const,
+          })),
+          ...p.updateFolderIds.map((id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
+            kind: 'update' as const,
+          })),
+        ],
+      };
+    }
+
+    const p = importPlan();
+    if (!p) return empty;
+    return {
+      ...empty,
+      localNotes: [
         ...p.replaceLocalNoteIds.map((id) => ({
           id,
           title: cmp.notesById.get(id)?.remote?.title.trim() || 'Unbenannte Notiz',
@@ -640,8 +812,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
           title: cmp.notesById.get(id)?.remote?.title.trim() || 'Unbenannte Notiz',
           kind: 'update' as const,
         })),
-      ];
-      const folders = [
+      ],
+      localFolders: [
         ...p.replaceLocalFolderIds.map((id) => ({
           id,
           name: cmp.foldersById.get(id)?.remote?.name || 'Ordner',
@@ -652,13 +824,34 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
           name: cmp.foldersById.get(id)?.remote?.name || 'Ordner',
           kind: 'update' as const,
         })),
-      ];
-      return { notes, folders };
-    }
+      ],
+    };
   });
 
   const canExecuteAction = createMemo(() => {
     if (isRunning() || isAnalyzing()) return false;
+    if (activeTab() === 'sync') {
+      const p = syncPlan();
+      if (!p) return false;
+      const itemCount =
+        p.downloadNewNoteIds.length +
+        p.downloadUpdateNoteIds.length +
+        p.downloadConflictRemoteNoteIds.length +
+        p.downloadNewFolderIds.length +
+        p.downloadUpdateFolderIds.length +
+        p.downloadConflictRemoteFolderIds.length +
+        p.uploadNewNoteIds.length +
+        p.uploadUpdateNoteIds.length +
+        p.uploadConflictLocalNoteIds.length +
+        p.uploadNewFolderIds.length +
+        p.uploadUpdateFolderIds.length +
+        p.uploadConflictLocalFolderIds.length +
+        p.keepBothConflictNoteIds.length;
+      const settingsActive =
+        syncSettingsMode() === 'upload' ||
+        (syncSettingsMode() === 'download' && Boolean(comparison()?.manifest?.settings));
+      return itemCount > 0 || settingsActive;
+    }
     if (activeTab() === 'backup') {
       const p = backupPlan();
       if (!p) return false;
@@ -690,6 +883,73 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   });
 
   // ==================== Actions ====================
+
+  const handleRunSync = async () => {
+    const cfg = savedConfig();
+    const cmp = comparison();
+    const plan = syncPlan();
+    if (!cfg || !cmp || !plan) return;
+
+    cancelOngoing();
+    const ctrl = new AbortController();
+    activeAbort = ctrl;
+    setIsRunning(true);
+    setRunError(null);
+    setLastResultMessage(null);
+
+    try {
+      const res = await executeCloudSync(
+        cfg,
+        cmp,
+        plan,
+        props.store.notes(),
+        props.store.folders(),
+        {
+          settingsMode: syncSettingsMode(),
+          localSettings: props.store.settings(),
+          onApplyLocalImport: (payload) => props.store.applyCloudImport(payload),
+          onProgress: (p) => setProgress(p),
+          signal: ctrl.signal,
+        }
+      );
+
+      const parts: string[] = [];
+      if (res.downloadedNotes > 0 || res.downloadedFolders > 0) {
+        parts.push(
+          `↓ ${res.downloadedNotes} Notiz(en)${res.downloadedFolders > 0 ? `, ${res.downloadedFolders} Ordner` : ''} geladen`
+        );
+      }
+      if (res.uploadedNotes > 0 || res.uploadedFolders > 0) {
+        parts.push(
+          `↑ ${res.uploadedNotes} Notiz(en)${res.uploadedFolders > 0 ? `, ${res.uploadedFolders} Ordner` : ''} hochgeladen`
+        );
+      }
+      if (res.copiedConflictNotes > 0) {
+        parts.push(`${res.copiedConflictNotes} Konflikt-Kopie(n)`);
+      }
+      const totalBytes = res.bytesDownloaded + res.bytesUploaded;
+      const summary = res.cancelled
+        ? `Synchronisierung pausiert — ${parts.join(' · ') || 'Teilfortschritt gesichert'} (${formatBytes(totalBytes)}).`
+        : `Synchronisierung fertig: ${parts.join(' · ') || 'Einstellungen abgeglichen'} (${formatBytes(totalBytes)}).`;
+
+      setLastResultMessage(summary);
+      setSyncNoteConflicts({});
+      setSyncFolderConflicts({});
+      setSyncSettingsMode('none');
+      props.store.bumpCloudConfigVersion();
+      props.store.showToast(
+        res.cancelled ? 'Synchronisierung pausiert' : 'Synchronisierung erfolgreich'
+      );
+      await runComparison();
+    } catch (err) {
+      setRunError(
+        err instanceof Error ? err.message : 'Fehler bei der Synchronisierung.'
+      );
+    } finally {
+      if (activeAbort === ctrl) activeAbort = null;
+      setIsRunning(false);
+    }
+  };
 
   const handleRunBackup = async () => {
     const cfg = savedConfig();
@@ -836,7 +1096,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     setComparison(null);
     props.store.bumpCloudConfigVersion();
     props.store.showToast('Cloud-Verbindung lokal gespeichert');
-    props.store.setCloudSyncTab('backup');
+    props.store.setCloudSyncTab('sync');
   };
 
   const handleDeleteConfig = () => {
@@ -859,9 +1119,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
 
   // ==================== Badge Helpers ====================
 
-  const renderStatusBadge = (status: string, tab: 'backup' | 'import') => {
+  const renderStatusBadge = (status: string, tab: ActionTab) => {
     if (status === 'synced') {
       return <span class="cloud-badge is-synced">Synchron</span>;
+    }
+    if (tab === 'sync') {
+      if (status === 'local-only') return <span class="cloud-badge is-upload">↑ Neu hochladen</span>;
+      if (status === 'local-ahead') return <span class="cloud-badge is-upload">↑ Hochladen</span>;
+      if (status === 'remote-only') return <span class="cloud-badge is-download">↓ Neu laden</span>;
+      if (status === 'remote-ahead') return <span class="cloud-badge is-download">↓ Laden</span>;
+      return <span class="cloud-badge is-conflict">Konflikt</span>;
     }
     if (tab === 'backup') {
       if (status === 'local-only') return <span class="cloud-badge is-new">Neu</span>;
@@ -896,7 +1163,10 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
   };
 
   const renderNoteRow = (note: TreeNoteNode, depth: number) => {
-    const tab = activeTab() === 'import' ? 'import' : 'backup';
+    const tab = (): ActionTab => {
+      const t = activeTab();
+      return isActionTab(t) ? t : 'sync';
+    };
     const isChecked = () => selectedNoteIds().has(note.id);
     return (
       <label
@@ -904,10 +1174,11 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
         classList={{
           'is-selected': isChecked(),
           'is-conflict':
-            (tab === 'backup' &&
+            (tab() === 'sync' && note.comparison.status === 'conflict') ||
+            (tab() === 'backup' &&
               (note.comparison.status === 'conflict' ||
                 note.comparison.status === 'remote-ahead')) ||
-            (tab === 'import' &&
+            (tab() === 'import' &&
               (note.comparison.status === 'conflict' ||
                 note.comparison.status === 'local-ahead')),
         }}
@@ -933,13 +1204,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
             </Show>
           </span>
         </div>
-        {renderStatusBadge(note.comparison.status, tab)}
+        {renderStatusBadge(note.comparison.status, tab())}
       </label>
     );
   };
 
   const renderFolderBranch = (folder: TreeFolderNode, depth: number) => {
-    const tab = activeTab() === 'import' ? 'import' : 'backup';
+    const tab = (): ActionTab => {
+      const t = activeTab();
+      return isActionTab(t) ? t : 'sync';
+    };
     const children = () =>
       tabFolders().filter((f) => f.parentId === folder.id && folderMatchesSearch(f.id));
     const directNotes = () =>
@@ -997,7 +1271,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
           </button>
 
           <Show when={folder.status !== 'synced'}>
-            {renderStatusBadge(folder.status, tab)}
+            {renderStatusBadge(folder.status, tab())}
           </Show>
         </div>
 
@@ -1018,13 +1292,27 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     return loadCloudBaseline(cfg);
   });
 
+  const latestSyncMeta = createMemo(() => {
+    const info = baselineInfo();
+    if (!info) return null;
+    const latest = Math.max(info.lastSyncAt ?? 0, info.lastBackupAt ?? 0, info.lastImportAt ?? 0);
+    if (!latest) return null;
+    const label =
+      info.lastSyncAt && info.lastSyncAt >= latest
+        ? 'Letzter Sync'
+        : info.lastBackupAt && info.lastBackupAt >= latest
+          ? 'Letztes Backup'
+          : 'Letzter Import';
+    return { label, ts: latest };
+  });
+
   return (
     <Show when={isOpen()}>
       <div
         class="cloud-modal-backdrop"
         role="dialog"
         aria-modal="true"
-        aria-label="Online-Backup & Import"
+        aria-label="Online-Sync & Backup"
         onClick={(e) => {
           if (e.target === e.currentTarget && !isRunning()) {
             props.store.closeCloudSync();
@@ -1039,7 +1327,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                 <IconCloud size={18} />
               </span>
               <div>
-                <h2 class="cloud-modal-title">Online-Backup &amp; Import</h2>
+                <h2 class="cloud-modal-title">Online-Sync &amp; Backup</h2>
                 <div class="cloud-modal-subtitle">
                   <Show
                     when={isConfigured() && savedConfig()}
@@ -1048,8 +1336,13 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                     {(cfg) => (
                       <span>
                         {providerLabel(cfg().provider)} · <strong>{cfg().bucket}</strong>
-                        <Show when={baselineInfo()?.lastBackupAt}>
-                          {(ts) => <> · Letztes Backup: {formatShortDate(ts())}</>}
+                        <Show when={latestSyncMeta()}>
+                          {(meta) => (
+                            <>
+                              {' '}
+                              · {meta().label}: {formatShortDate(meta().ts)}
+                            </>
+                          )}
                         </Show>
                       </span>
                     )}
@@ -1075,6 +1368,19 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
             <button
               type="button"
               role="tab"
+              aria-selected={activeTab() === 'sync'}
+              class="cloud-tab-btn"
+              classList={{ 'is-active': activeTab() === 'sync' }}
+              disabled={!isConfigured() || isRunning()}
+              onClick={() => props.store.setCloudSyncTab('sync')}
+            >
+              <IconRefreshCw size={15} />
+              <span>Synchronisieren</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
               aria-selected={activeTab() === 'backup'}
               class="cloud-tab-btn"
               classList={{ 'is-active': activeTab() === 'backup' }}
@@ -1082,7 +1388,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
               onClick={() => props.store.setCloudSyncTab('backup')}
             >
               <IconCloudUpload size={15} />
-              <span>Hochladen (Backup)</span>
+              <span>Hochladen</span>
             </button>
 
             <button
@@ -1379,8 +1685,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
               </div>
             </Show>
 
-            {/* ==================== TAB: BACKUP OR IMPORT ==================== */}
-            <Show when={activeTab() === 'backup' || activeTab() === 'import'}>
+            {/* ==================== TAB: SYNC / BACKUP / IMPORT ==================== */}
+            <Show when={isActionTab(activeTab())}>
               {/* Analyzing Banner */}
               <Show when={isAnalyzing()}>
                 <div class="cloud-progress-card">
@@ -1496,7 +1802,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                 {(cmp) => (
                   <Show
                     when={
-                      activeTab() === 'backup' ||
+                      activeTab() !== 'import' ||
                       (cmp().manifest && Object.keys(cmp().manifest!.notes).length > 0)
                     }
                     fallback={
@@ -1505,16 +1811,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                         <strong>Noch kein Online-Backup vorhanden</strong>
                         <p>
                           Im Bucket <code>{savedConfig()?.bucket}</code> wurden noch keine
-                          gesicherten Notizen gefunden. Wechsle auf „Hochladen“, um dein erstes
-                          Backup anzulegen.
+                          gesicherten Notizen gefunden. Wechsle auf „Synchronisieren“ oder
+                          „Hochladen“, um dein erstes Backup anzulegen.
                         </p>
                         <button
                           type="button"
                           class="btn-primary"
-                          onClick={() => props.store.setCloudSyncTab('backup')}
+                          onClick={() => props.store.setCloudSyncTab('sync')}
                         >
-                          <IconCloudUpload size={14} />
-                          <span>Zum Online-Backup</span>
+                          <IconRefreshCw size={14} />
+                          <span>Zur Synchronisierung</span>
                         </button>
                       </div>
                     }
@@ -1529,10 +1835,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                           disabled={isRunning()}
                           onClick={() => {
                             setScope('all');
-                            selectAllForTab(
-                              activeTab() === 'import' ? 'import' : 'backup',
-                              cmp()
-                            );
+                            const tab = activeTab();
+                            if (isActionTab(tab)) selectAllForTab(tab, cmp());
                           }}
                         >
                           Gesamt ({tabNotes().length})
@@ -1555,10 +1859,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                           disabled={isRunning()}
                           onClick={() => {
                             setScope('custom');
-                            selectOnlyChangedForTab(
-                              activeTab() === 'import' ? 'import' : 'backup',
-                              cmp()
-                            );
+                            const tab = activeTab();
+                            if (isActionTab(tab)) selectOnlyChangedForTab(tab, cmp());
                           }}
                           title="Nur neue, geänderte oder konfliktbehaftete Einträge markieren"
                         >
@@ -1658,55 +1960,132 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                           </div>
 
                           <div class="cloud-conflict-bulk">
-                            <Show
-                              when={activeTab() === 'import'}
-                              fallback={
-                                <>
-                                  <button
-                                    type="button"
-                                    class="btn-ghost-sm"
-                                    onClick={() => {
-                                      const next: Record<string, BackupConflictResolution> = {
-                                        ...backupConflicts(),
-                                      };
-                                      for (const n of conflictingSelectedNotes()) next[n.id] = 'skip';
-                                      setBackupConflicts(next);
-                                      const nextF: Record<string, FolderConflictResolution> = {
-                                        ...folderConflicts(),
-                                      };
-                                      for (const f of conflictingRequiredFolders()) {
-                                        nextF[f.id] = 'keep-target';
-                                      }
-                                      setFolderConflicts(nextF);
-                                    }}
-                                  >
-                                    Alle überspringen
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="btn-ghost-sm"
-                                    onClick={() => {
-                                      const next: Record<string, BackupConflictResolution> = {
-                                        ...backupConflicts(),
-                                      };
-                                      for (const n of conflictingSelectedNotes()) {
-                                        next[n.id] = 'overwrite-remote';
-                                      }
-                                      setBackupConflicts(next);
-                                      const nextF: Record<string, FolderConflictResolution> = {
-                                        ...folderConflicts(),
-                                      };
-                                      for (const f of conflictingRequiredFolders()) {
-                                        nextF[f.id] = 'overwrite-target';
-                                      }
-                                      setFolderConflicts(nextF);
-                                    }}
-                                  >
-                                    Alle online ersetzen
-                                  </button>
-                                </>
-                              }
-                            >
+                            <Show when={activeTab() === 'sync'}>
+                              <button
+                                type="button"
+                                class="btn-ghost-sm"
+                                onClick={() => {
+                                  const next: Record<string, SyncConflictResolution> = {
+                                    ...syncNoteConflicts(),
+                                  };
+                                  for (const n of conflictingSelectedNotes()) next[n.id] = 'skip';
+                                  setSyncNoteConflicts(next);
+                                  const nextF: Record<string, SyncFolderConflictResolution> = {
+                                    ...syncFolderConflicts(),
+                                  };
+                                  for (const f of conflictingRequiredFolders()) nextF[f.id] = 'skip';
+                                  setSyncFolderConflicts(nextF);
+                                }}
+                              >
+                                Alle überspringen
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-ghost-sm"
+                                onClick={() => {
+                                  const next: Record<string, SyncConflictResolution> = {
+                                    ...syncNoteConflicts(),
+                                  };
+                                  for (const n of conflictingSelectedNotes()) {
+                                    next[n.id] = 'keep-both';
+                                  }
+                                  setSyncNoteConflicts(next);
+                                }}
+                              >
+                                Alle als Kopie
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-ghost-sm"
+                                onClick={() => {
+                                  const next: Record<string, SyncConflictResolution> = {
+                                    ...syncNoteConflicts(),
+                                  };
+                                  for (const n of conflictingSelectedNotes()) {
+                                    next[n.id] = 'use-local';
+                                  }
+                                  setSyncNoteConflicts(next);
+                                  const nextF: Record<string, SyncFolderConflictResolution> = {
+                                    ...syncFolderConflicts(),
+                                  };
+                                  for (const f of conflictingRequiredFolders()) {
+                                    nextF[f.id] = 'use-local';
+                                  }
+                                  setSyncFolderConflicts(nextF);
+                                }}
+                              >
+                                Alle ↑ Lokal
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-ghost-sm"
+                                onClick={() => {
+                                  const next: Record<string, SyncConflictResolution> = {
+                                    ...syncNoteConflicts(),
+                                  };
+                                  for (const n of conflictingSelectedNotes()) {
+                                    next[n.id] = 'use-remote';
+                                  }
+                                  setSyncNoteConflicts(next);
+                                  const nextF: Record<string, SyncFolderConflictResolution> = {
+                                    ...syncFolderConflicts(),
+                                  };
+                                  for (const f of conflictingRequiredFolders()) {
+                                    nextF[f.id] = 'use-remote';
+                                  }
+                                  setSyncFolderConflicts(nextF);
+                                }}
+                              >
+                                Alle ↓ Online
+                              </button>
+                            </Show>
+
+                            <Show when={activeTab() === 'backup'}>
+                              <button
+                                type="button"
+                                class="btn-ghost-sm"
+                                onClick={() => {
+                                  const next: Record<string, BackupConflictResolution> = {
+                                    ...backupConflicts(),
+                                  };
+                                  for (const n of conflictingSelectedNotes()) next[n.id] = 'skip';
+                                  setBackupConflicts(next);
+                                  const nextF: Record<string, FolderConflictResolution> = {
+                                    ...folderConflicts(),
+                                  };
+                                  for (const f of conflictingRequiredFolders()) {
+                                    nextF[f.id] = 'keep-target';
+                                  }
+                                  setFolderConflicts(nextF);
+                                }}
+                              >
+                                Alle überspringen
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-ghost-sm"
+                                onClick={() => {
+                                  const next: Record<string, BackupConflictResolution> = {
+                                    ...backupConflicts(),
+                                  };
+                                  for (const n of conflictingSelectedNotes()) {
+                                    next[n.id] = 'overwrite-remote';
+                                  }
+                                  setBackupConflicts(next);
+                                  const nextF: Record<string, FolderConflictResolution> = {
+                                    ...folderConflicts(),
+                                  };
+                                  for (const f of conflictingRequiredFolders()) {
+                                    nextF[f.id] = 'overwrite-target';
+                                  }
+                                  setFolderConflicts(nextF);
+                                }}
+                              >
+                                Alle online ersetzen
+                              </button>
+                            </Show>
+
+                            <Show when={activeTab() === 'import'}>
                               <button
                                 type="button"
                                 class="btn-ghost-sm"
@@ -1771,8 +2150,9 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                         </div>
 
                         <p class="cloud-conflicts-desc">
-                          Diese Einträge weichen lokal und online voneinander ab. Standardmäßig
-                          wird nichts überschrieben — wähle pro Eintrag, was passieren soll:
+                          {activeTab() === 'sync'
+                            ? 'Diese Einträge wurden auf beiden Geräten verändert (oder noch nie gemeinsam synchronisiert). Standardmäßig wird nichts überschrieben — wähle pro Eintrag, was passieren soll:'
+                            : 'Diese Einträge weichen lokal und online voneinander ab. Standardmäßig wird nichts überschrieben — wähle pro Eintrag, was passieren soll:'}
                         </p>
 
                         <div class="cloud-conflicts-list">
@@ -1782,6 +2162,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                 entry.local?.title.trim() ||
                                 entry.remote?.title.trim() ||
                                 'Unbenannte Notiz';
+                              const syncChoice = () => syncNoteConflicts()[entry.id] ?? 'skip';
                               const backupChoice = () => backupConflicts()[entry.id] ?? 'skip';
                               const importChoice = () =>
                                 importConflicts()[entry.id] ?? 'keep-local';
@@ -1806,41 +2187,100 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                   </div>
 
                                   <div class="cloud-conflict-controls">
-                                    <Show
-                                      when={activeTab() === 'import'}
-                                      fallback={
-                                        <div class="segmented-control">
-                                          <button
-                                            type="button"
-                                            class="seg-btn"
-                                            classList={{ 'is-active': backupChoice() === 'skip' }}
-                                            onClick={() =>
-                                              setBackupConflicts((p) => ({
-                                                ...p,
-                                                [entry.id]: 'skip',
-                                              }))
-                                            }
-                                          >
-                                            Überspringen
-                                          </button>
-                                          <button
-                                            type="button"
-                                            class="seg-btn is-warn-seg"
-                                            classList={{
-                                              'is-active': backupChoice() === 'overwrite-remote',
-                                            }}
-                                            onClick={() =>
-                                              setBackupConflicts((p) => ({
-                                                ...p,
-                                                [entry.id]: 'overwrite-remote',
-                                              }))
-                                            }
-                                          >
-                                            Online ersetzen
-                                          </button>
-                                        </div>
-                                      }
-                                    >
+                                    <Show when={activeTab() === 'sync'}>
+                                      <div class="segmented-control">
+                                        <button
+                                          type="button"
+                                          class="seg-btn"
+                                          classList={{ 'is-active': syncChoice() === 'skip' }}
+                                          onClick={() =>
+                                            setSyncNoteConflicts((p) => ({
+                                              ...p,
+                                              [entry.id]: 'skip',
+                                            }))
+                                          }
+                                        >
+                                          Überspringen
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="seg-btn"
+                                          classList={{ 'is-active': syncChoice() === 'keep-both' }}
+                                          onClick={() =>
+                                            setSyncNoteConflicts((p) => ({
+                                              ...p,
+                                              [entry.id]: 'keep-both',
+                                            }))
+                                          }
+                                          title="Beide Versionen auf beiden Geräten behalten (Online-Stand als Kopie)"
+                                        >
+                                          Beide
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="seg-btn is-warn-seg"
+                                          classList={{ 'is-active': syncChoice() === 'use-local' }}
+                                          onClick={() =>
+                                            setSyncNoteConflicts((p) => ({
+                                              ...p,
+                                              [entry.id]: 'use-local',
+                                            }))
+                                          }
+                                          title="Lokale Version hochladen (ersetzt Online-Version)"
+                                        >
+                                          ↑ Lokal
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="seg-btn is-warn-seg"
+                                          classList={{ 'is-active': syncChoice() === 'use-remote' }}
+                                          onClick={() =>
+                                            setSyncNoteConflicts((p) => ({
+                                              ...p,
+                                              [entry.id]: 'use-remote',
+                                            }))
+                                          }
+                                          title="Online-Version herunterladen (ersetzt lokale Version)"
+                                        >
+                                          ↓ Online
+                                        </button>
+                                      </div>
+                                    </Show>
+
+                                    <Show when={activeTab() === 'backup'}>
+                                      <div class="segmented-control">
+                                        <button
+                                          type="button"
+                                          class="seg-btn"
+                                          classList={{ 'is-active': backupChoice() === 'skip' }}
+                                          onClick={() =>
+                                            setBackupConflicts((p) => ({
+                                              ...p,
+                                              [entry.id]: 'skip',
+                                            }))
+                                          }
+                                        >
+                                          Überspringen
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="seg-btn is-warn-seg"
+                                          classList={{
+                                            'is-active': backupChoice() === 'overwrite-remote',
+                                          }}
+                                          onClick={() =>
+                                            setBackupConflicts((p) => ({
+                                              ...p,
+                                              [entry.id]: 'overwrite-remote',
+                                            }))
+                                          }
+                                        >
+                                          Online ersetzen
+                                        </button>
+                                      </div>
+                                    </Show>
+
+                                    <Show when={activeTab() === 'import'}>
                                       <div class="segmented-control">
                                         <button
                                           type="button"
@@ -1897,6 +2337,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
 
                           <For each={conflictingRequiredFolders()}>
                             {(fEntry) => {
+                              const syncDecision = () =>
+                                syncFolderConflicts()[fEntry.id] ?? 'skip';
                               const decision = () => folderConflicts()[fEntry.id] ?? 'keep-target';
                               return (
                                 <div class="cloud-conflict-row">
@@ -1910,40 +2352,91 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                     </div>
                                   </div>
                                   <div class="cloud-conflict-controls">
-                                    <div class="segmented-control">
-                                      <button
-                                        type="button"
-                                        class="seg-btn"
-                                        classList={{ 'is-active': decision() === 'keep-target' }}
-                                        onClick={() =>
-                                          setFolderConflicts((p) => ({
-                                            ...p,
-                                            [fEntry.id]: 'keep-target',
-                                          }))
-                                        }
-                                      >
-                                        {activeTab() === 'import'
-                                          ? 'Lokal behalten'
-                                          : 'Online behalten'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        class="seg-btn is-warn-seg"
-                                        classList={{
-                                          'is-active': decision() === 'overwrite-target',
-                                        }}
-                                        onClick={() =>
-                                          setFolderConflicts((p) => ({
-                                            ...p,
-                                            [fEntry.id]: 'overwrite-target',
-                                          }))
-                                        }
-                                      >
-                                        {activeTab() === 'import'
-                                          ? 'Online übernehmen'
-                                          : 'Online ersetzen'}
-                                      </button>
-                                    </div>
+                                    <Show
+                                      when={activeTab() === 'sync'}
+                                      fallback={
+                                        <div class="segmented-control">
+                                          <button
+                                            type="button"
+                                            class="seg-btn"
+                                            classList={{ 'is-active': decision() === 'keep-target' }}
+                                            onClick={() =>
+                                              setFolderConflicts((p) => ({
+                                                ...p,
+                                                [fEntry.id]: 'keep-target',
+                                              }))
+                                            }
+                                          >
+                                            {activeTab() === 'import'
+                                              ? 'Lokal behalten'
+                                              : 'Online behalten'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            class="seg-btn is-warn-seg"
+                                            classList={{
+                                              'is-active': decision() === 'overwrite-target',
+                                            }}
+                                            onClick={() =>
+                                              setFolderConflicts((p) => ({
+                                                ...p,
+                                                [fEntry.id]: 'overwrite-target',
+                                              }))
+                                            }
+                                          >
+                                            {activeTab() === 'import'
+                                              ? 'Online übernehmen'
+                                              : 'Online ersetzen'}
+                                          </button>
+                                        </div>
+                                      }
+                                    >
+                                      <div class="segmented-control">
+                                        <button
+                                          type="button"
+                                          class="seg-btn"
+                                          classList={{ 'is-active': syncDecision() === 'skip' }}
+                                          onClick={() =>
+                                            setSyncFolderConflicts((p) => ({
+                                              ...p,
+                                              [fEntry.id]: 'skip',
+                                            }))
+                                          }
+                                        >
+                                          Überspringen
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="seg-btn is-warn-seg"
+                                          classList={{
+                                            'is-active': syncDecision() === 'use-local',
+                                          }}
+                                          onClick={() =>
+                                            setSyncFolderConflicts((p) => ({
+                                              ...p,
+                                              [fEntry.id]: 'use-local',
+                                            }))
+                                          }
+                                        >
+                                          ↑ Lokal
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="seg-btn is-warn-seg"
+                                          classList={{
+                                            'is-active': syncDecision() === 'use-remote',
+                                          }}
+                                          onClick={() =>
+                                            setSyncFolderConflicts((p) => ({
+                                              ...p,
+                                              [fEntry.id]: 'use-remote',
+                                            }))
+                                          }
+                                        >
+                                          ↓ Online
+                                        </button>
+                                      </div>
+                                    </Show>
                                   </div>
                                 </div>
                               );
@@ -1958,6 +2451,17 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                       <div class="cloud-summary-head">
                         <strong>Zusammenfassung</strong>
                         <span class="cloud-transfer-pill">
+                          <Show when={activeTab() === 'sync' && syncPlan()}>
+                            {(p) => {
+                              const dl = p().estimatedDownloadBytes;
+                              const ul = p().estimatedUploadBytes;
+                              if (dl === 0 && ul === 0) return <>Kein Datentransfer nötig</>;
+                              const chunks: string[] = [];
+                              if (dl > 0) chunks.push(`↓ ~${formatBytes(dl)}`);
+                              if (ul > 0) chunks.push(`↑ ~${formatBytes(ul)}`);
+                              return <>Transfer: {chunks.join(' · ')}</>;
+                            }}
+                          </Show>
                           <Show when={activeTab() === 'backup' && backupPlan()}>
                             {(p) => (
                               <>
@@ -1987,6 +2491,60 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
 
                       {/* Stat Chips */}
                       <div class="cloud-summary-stats">
+                        <Show when={activeTab() === 'sync' && syncPlan()}>
+                          {(p) => {
+                            const dlNotes = () =>
+                              p().downloadNewNoteIds.length +
+                              p().downloadUpdateNoteIds.length +
+                              p().downloadConflictRemoteNoteIds.length;
+                            const dlFolders = () =>
+                              p().downloadNewFolderIds.length +
+                              p().downloadUpdateFolderIds.length +
+                              p().downloadConflictRemoteFolderIds.length;
+                            const ulNotes = () =>
+                              p().uploadNewNoteIds.length +
+                              p().uploadUpdateNoteIds.length +
+                              p().uploadConflictLocalNoteIds.length;
+                            const ulFolders = () =>
+                              p().uploadNewFolderIds.length +
+                              p().uploadUpdateFolderIds.length +
+                              p().uploadConflictLocalFolderIds.length;
+                            return (
+                              <>
+                                <span class="cloud-stat-chip is-download">
+                                  ↓ Laden: {dlNotes()} Notizen
+                                  <Show when={dlFolders() > 0}>, {dlFolders()} Ordner</Show>
+                                </span>
+                                <span class="cloud-stat-chip is-upload">
+                                  ↑ Hochladen: {ulNotes()} Notizen
+                                  <Show when={ulFolders() > 0}>, {ulFolders()} Ordner</Show>
+                                </span>
+                                <Show when={p().keepBothConflictNoteIds.length > 0}>
+                                  <span class="cloud-stat-chip is-new">
+                                    Beide (Kopie): {p().keepBothConflictNoteIds.length}
+                                  </span>
+                                </Show>
+                                <span class="cloud-stat-chip">
+                                  Synchron: {p().unchangedNoteIds.length}
+                                </span>
+                                <Show
+                                  when={
+                                    p().skippedConflictNoteIds.length +
+                                      p().skippedConflictFolderIds.length >
+                                    0
+                                  }
+                                >
+                                  <span class="cloud-stat-chip is-warn">
+                                    Übersprungen:{' '}
+                                    {p().skippedConflictNoteIds.length +
+                                      p().skippedConflictFolderIds.length}
+                                  </span>
+                                </Show>
+                              </>
+                            );
+                          }}
+                        </Show>
+
                         <Show when={activeTab() === 'backup' && backupPlan()}>
                           {(p) => (
                             <>
@@ -2067,21 +2625,19 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                         </Show>
                       </div>
 
-                      {/* Explicit list of notes/folders that will be replaced or updated */}
+                      {/* Explicit list of LOCAL entries that will be updated or replaced */}
                       <Show
                         when={
-                          replacedItemsSummary().notes.length > 0 ||
-                          replacedItemsSummary().folders.length > 0
+                          replacedItemsSummary().localNotes.length > 0 ||
+                          replacedItemsSummary().localFolders.length > 0
                         }
                       >
                         <div class="cloud-replace-preview">
                           <div class="cloud-replace-title">
-                            {activeTab() === 'import'
-                              ? 'Folgende lokale Einträge werden aktualisiert / ersetzt:'
-                              : 'Folgende Online-Einträge werden aktualisiert / ersetzt:'}
+                            Folgende lokale Einträge werden aktualisiert / ersetzt:
                           </div>
                           <div class="cloud-replace-chips">
-                            <For each={replacedItemsSummary().folders.slice(0, 8)}>
+                            <For each={replacedItemsSummary().localFolders.slice(0, 8)}>
                               {(f) => (
                                 <span
                                   class="cloud-replace-chip"
@@ -2092,7 +2648,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                 </span>
                               )}
                             </For>
-                            <For each={replacedItemsSummary().notes.slice(0, 10)}>
+                            <For each={replacedItemsSummary().localNotes.slice(0, 10)}>
                               {(n) => (
                                 <span
                                   class="cloud-replace-chip"
@@ -2105,15 +2661,15 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                             </For>
                             <Show
                               when={
-                                replacedItemsSummary().notes.length +
-                                  replacedItemsSummary().folders.length >
+                                replacedItemsSummary().localNotes.length +
+                                  replacedItemsSummary().localFolders.length >
                                 18
                               }
                             >
                               <span class="cloud-replace-more">
                                 +
-                                {replacedItemsSummary().notes.length +
-                                  replacedItemsSummary().folders.length -
+                                {replacedItemsSummary().localNotes.length +
+                                  replacedItemsSummary().localFolders.length -
                                   18}{' '}
                                 weitere
                               </span>
@@ -2122,32 +2678,124 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                         </div>
                       </Show>
 
-                      {/* Optional global settings checkbox */}
+                      {/* Explicit list of REMOTE entries that will be updated or replaced */}
                       <Show
                         when={
-                          activeTab() === 'backup' ||
-                          Boolean(cmp().manifest?.settings)
+                          replacedItemsSummary().remoteNotes.length > 0 ||
+                          replacedItemsSummary().remoteFolders.length > 0
                         }
                       >
-                        <label class="cloud-settings-opt">
-                          <input
-                            type="checkbox"
-                            class="cloud-checkbox"
-                            checked={includeSettings()}
-                            onChange={(e) => setIncludeSettings(e.currentTarget.checked)}
-                          />
-                          <span>
-                            {activeTab() === 'backup'
-                              ? 'Globale App-Einstellungen mitsichern'
-                              : 'Globale App-Einstellungen aus Online-Backup übernehmen'}
-                          </span>
-                        </label>
+                        <div class="cloud-replace-preview">
+                          <div class="cloud-replace-title">
+                            Folgende Online-Einträge werden aktualisiert / ersetzt:
+                          </div>
+                          <div class="cloud-replace-chips">
+                            <For each={replacedItemsSummary().remoteFolders.slice(0, 8)}>
+                              {(f) => (
+                                <span
+                                  class="cloud-replace-chip"
+                                  classList={{ 'is-conflict': f.kind === 'conflict' }}
+                                >
+                                  <IconFolder size={11} />
+                                  <span>{f.name}</span>
+                                </span>
+                              )}
+                            </For>
+                            <For each={replacedItemsSummary().remoteNotes.slice(0, 10)}>
+                              {(n) => (
+                                <span
+                                  class="cloud-replace-chip"
+                                  classList={{ 'is-conflict': n.kind === 'conflict' }}
+                                >
+                                  <IconFileText size={11} />
+                                  <span>{n.title}</span>
+                                </span>
+                              )}
+                            </For>
+                            <Show
+                              when={
+                                replacedItemsSummary().remoteNotes.length +
+                                  replacedItemsSummary().remoteFolders.length >
+                                18
+                              }
+                            >
+                              <span class="cloud-replace-more">
+                                +
+                                {replacedItemsSummary().remoteNotes.length +
+                                  replacedItemsSummary().remoteFolders.length -
+                                  18}{' '}
+                                weitere
+                              </span>
+                            </Show>
+                          </div>
+                        </div>
+                      </Show>
+
+                      {/* Optional global settings control */}
+                      <Show
+                        when={activeTab() === 'sync'}
+                        fallback={
+                          <Show
+                            when={
+                              activeTab() === 'backup' ||
+                              Boolean(cmp().manifest?.settings)
+                            }
+                          >
+                            <label class="cloud-settings-opt">
+                              <input
+                                type="checkbox"
+                                class="cloud-checkbox"
+                                checked={includeSettings()}
+                                onChange={(e) => setIncludeSettings(e.currentTarget.checked)}
+                              />
+                              <span>
+                                {activeTab() === 'backup'
+                                  ? 'Globale App-Einstellungen mitsichern'
+                                  : 'Globale App-Einstellungen aus Online-Backup übernehmen'}
+                              </span>
+                            </label>
+                          </Show>
+                        }
+                      >
+                        <div class="cloud-sync-settings-row">
+                          <span>Globale App-Einstellungen:</span>
+                          <div class="segmented-control">
+                            <button
+                              type="button"
+                              class="seg-btn"
+                              classList={{ 'is-active': syncSettingsMode() === 'none' }}
+                              onClick={() => setSyncSettingsMode('none')}
+                            >
+                              Nicht ändern
+                            </button>
+                            <button
+                              type="button"
+                              class="seg-btn"
+                              classList={{ 'is-active': syncSettingsMode() === 'upload' }}
+                              onClick={() => setSyncSettingsMode('upload')}
+                            >
+                              ↑ Hochladen
+                            </button>
+                            <Show when={Boolean(cmp().manifest?.settings)}>
+                              <button
+                                type="button"
+                                class="seg-btn"
+                                classList={{ 'is-active': syncSettingsMode() === 'download' }}
+                                onClick={() => setSyncSettingsMode('download')}
+                              >
+                                ↓ Übernehmen
+                              </button>
+                            </Show>
+                          </div>
+                        </div>
                       </Show>
 
                       <div class="cloud-safety-note">
-                        {activeTab() === 'import'
-                          ? 'Sicherheitsgarantie: Beim Online-Import werden niemals lokale Notizen oder Ordner gelöscht.'
-                          : 'Sicherheitsgarantie: Nicht ausgewählte Notizen im Bucket bleiben vollständig erhalten.'}
+                        {activeTab() === 'sync'
+                          ? 'Sicherheitsgarantie: Beim Synchronisieren werden niemals Notizen oder Ordner gelöscht — neue und geänderte Einträge werden in beide Richtungen zusammengeführt.'
+                          : activeTab() === 'import'
+                            ? 'Sicherheitsgarantie: Beim Online-Import werden niemals lokale Notizen oder Ordner gelöscht.'
+                            : 'Sicherheitsgarantie: Nicht ausgewählte Notizen im Bucket bleiben vollständig erhalten.'}
                       </div>
                     </div>
                   </Show>
@@ -2156,8 +2804,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
             </Show>
           </div>
 
-          {/* Sticky Footer for Backup / Import */}
-          <Show when={activeTab() === 'backup' || activeTab() === 'import'}>
+          {/* Sticky Footer for Sync / Backup / Import */}
+          <Show when={isActionTab(activeTab())}>
             <div class="cloud-modal-foot">
               <button
                 type="button"
@@ -2168,22 +2816,21 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                 Schließen
               </button>
 
-              <Show
-                when={activeTab() === 'backup'}
-                fallback={
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    disabled={!canExecuteAction()}
-                    onClick={() => void handleRunImport()}
-                  >
-                    <IconCloudDownload size={15} />
-                    <span>
-                      {isRunning() ? 'Importiert…' : 'Online-Import starten'}
-                    </span>
-                  </button>
-                }
-              >
+              <Show when={activeTab() === 'sync'}>
+                <button
+                  type="button"
+                  class="btn-primary"
+                  disabled={!canExecuteAction()}
+                  onClick={() => void handleRunSync()}
+                >
+                  <IconRefreshCw size={15} class={isRunning() ? 'is-spinning' : ''} />
+                  <span>
+                    {isRunning() ? 'Synchronisiert…' : 'Jetzt synchronisieren'}
+                  </span>
+                </button>
+              </Show>
+
+              <Show when={activeTab() === 'backup'}>
                 <button
                   type="button"
                   class="btn-primary"
@@ -2193,6 +2840,20 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                   <IconCloudUpload size={15} />
                   <span>
                     {isRunning() ? 'Sichert…' : 'Online-Backup starten'}
+                  </span>
+                </button>
+              </Show>
+
+              <Show when={activeTab() === 'import'}>
+                <button
+                  type="button"
+                  class="btn-primary"
+                  disabled={!canExecuteAction()}
+                  onClick={() => void handleRunImport()}
+                >
+                  <IconCloudDownload size={15} />
+                  <span>
+                    {isRunning() ? 'Importiert…' : 'Online-Import starten'}
                   </span>
                 </button>
               </Show>

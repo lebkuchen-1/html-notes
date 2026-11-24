@@ -26,6 +26,7 @@ import {
   IconDownload,
   IconFileText,
   IconMoon,
+  IconRefreshCw,
   IconRotateCcw,
   IconSettings,
   IconSidebar,
@@ -231,6 +232,22 @@ export function SettingsPage(props: SettingsPageProps) {
     const cfg = loadCloudConfig();
     if (!cfg || !props.store.isCloudConfigured()) return null;
     const base = loadCloudBaseline(cfg);
+    const latestTs = Math.max(
+      base.lastSyncAt ?? 0,
+      base.lastBackupAt ?? 0,
+      base.lastImportAt ?? 0
+    );
+    const latestActivity = latestTs
+      ? {
+          ts: latestTs,
+          label:
+            base.lastSyncAt && base.lastSyncAt >= latestTs
+              ? 'Letzter Sync'
+              : base.lastBackupAt && base.lastBackupAt >= latestTs
+                ? 'Letztes Backup'
+                : 'Letzter Import',
+        }
+      : null;
     return {
       provider:
         cfg.provider === 'r2'
@@ -241,6 +258,8 @@ export function SettingsPage(props: SettingsPageProps) {
       bucket: cfg.bucket,
       lastBackupAt: base.lastBackupAt,
       lastImportAt: base.lastImportAt,
+      lastSyncAt: base.lastSyncAt,
+      latestActivity,
     };
   });
 
@@ -1202,7 +1221,7 @@ export function SettingsPage(props: SettingsPageProps) {
                 <div class="setting-row is-stacked">
                   <div class="setting-info">
                     <div class="setting-label-row">
-                      <span class="setting-label">Online-Backup &amp; Import (Cloud / S3)</span>
+                      <span class="setting-label">Online-Sync &amp; Backup (Cloud / S3)</span>
                       <span
                         class="setting-scope-tag"
                         classList={{
@@ -1220,21 +1239,21 @@ export function SettingsPage(props: SettingsPageProps) {
                       </span>
                     </div>
                     <span class="setting-desc">
-                      Inkrementelles Pro-Notiz-Backup mit ausgelagerten Medien-Blobs (Cloudflare R2,
-                      Backblaze B2 oder eigenes S3) — Gesamt- oder Einzelauswahl mit
-                      Konfliktlösung, ohne lokales Löschen.
-                      <Show when={cloudInfo()?.lastBackupAt}>
-                        {(ts) => (
+                      2-Wege-Synchronisierung und inkrementelles Pro-Notiz-Backup mit ausgelagerten
+                      Medien-Blobs (Cloudflare R2, Backblaze B2 oder eigenes S3) — Gesamt- oder
+                      Einzelauswahl mit Konfliktlösung, ohne lokales Löschen.
+                      <Show when={cloudInfo()?.latestActivity}>
+                        {(act) => (
                           <>
                             {' '}
-                            Letztes Backup:{' '}
+                            {act().label}:{' '}
                             {new Intl.DateTimeFormat('de-DE', {
                               day: '2-digit',
                               month: '2-digit',
                               year: 'numeric',
                               hour: '2-digit',
                               minute: '2-digit',
-                            }).format(new Date(ts()))}
+                            }).format(new Date(act().ts))}
                             .
                           </>
                         )}
@@ -1255,6 +1274,14 @@ export function SettingsPage(props: SettingsPageProps) {
                         </button>
                       }
                     >
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        onClick={() => props.store.openCloudSync('sync')}
+                      >
+                        <IconRefreshCw size={14} />
+                        <span>Synchronisieren</span>
+                      </button>
                       <button
                         type="button"
                         class="tool-pill"

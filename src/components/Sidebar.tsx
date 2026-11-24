@@ -503,7 +503,7 @@ export function Sidebar(props: SidebarProps) {
             if (window.innerWidth < 900) props.store.setSidebarOpen(false);
             props.store.openCloudSync();
           }}
-          title="Online-Backup & Import (S3 / Cloudflare R2 / Backblaze B2)"
+          title="Online-Sync, Backup & Import (S3 / Cloudflare R2 / Backblaze B2)"
         >
           <IconCloud size={15} />
           <span class="nav-item-label">Online-Backup</span>

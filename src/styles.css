@@ -7254,6 +7254,20 @@ button {
   color: var(--accent);
 }
 
+.cloud-badge.is-upload {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.cloud-badge.is-download {
+  background: rgba(14, 165, 233, 0.14);
+  color: #0284c7;
+}
+
+[data-theme='dark'] .cloud-badge.is-download {
+  color: #7dd3fc;
+}
+
 .cloud-badge.is-conflict {
   background: rgba(217, 119, 6, 0.16);
   color: var(--amber);
@@ -7407,6 +7421,20 @@ button {
   color: var(--accent);
 }
 
+.cloud-stat-chip.is-upload {
+  border-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+.cloud-stat-chip.is-download {
+  border-color: rgba(14, 165, 233, 0.35);
+  color: #0284c7;
+}
+
+[data-theme='dark'] .cloud-stat-chip.is-download {
+  color: #7dd3fc;
+}
+
 .cloud-stat-chip.is-warn {
   border-color: rgba(217, 119, 6, 0.5);
   background: rgba(217, 119, 6, 0.12);
@@ -7475,6 +7503,16 @@ button {
   font-size: 12.5px;
   color: var(--text-secondary);
   cursor: pointer;
+}
+
+.cloud-sync-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
 }
 
 .cloud-safety-note {

@@ -57,6 +57,7 @@ export interface CloudSyncBaseline {
   folders: Record<string, { folderHash: string; syncedAt: number }>;
   lastBackupAt?: number;
   lastImportAt?: number;
+  lastSyncAt?: number;
 }
 
 export interface LocalNoteFingerprint {
@@ -92,6 +93,9 @@ export type FolderDiffStatus =
 export type BackupConflictResolution = 'skip' | 'overwrite-remote';
 export type ImportConflictResolution = 'keep-local' | 'use-remote' | 'keep-both';
 export type FolderConflictResolution = 'keep-target' | 'overwrite-target';
+export type SyncConflictResolution = 'skip' | 'use-local' | 'use-remote' | 'keep-both';
+export type SyncFolderConflictResolution = 'skip' | 'use-local' | 'use-remote';
+export type SyncSettingsMode = 'none' | 'upload' | 'download';
 
 export interface NoteComparison {
   id: string;
@@ -143,6 +147,7 @@ export function loadCloudBaseline(config: CloudSyncConfig): CloudSyncBaseline {
       folders: parsed.folders && typeof parsed.folders === 'object' ? parsed.folders : {},
       lastBackupAt: typeof parsed.lastBackupAt === 'number' ? parsed.lastBackupAt : undefined,
       lastImportAt: typeof parsed.lastImportAt === 'number' ? parsed.lastImportAt : undefined,
+      lastSyncAt: typeof parsed.lastSyncAt === 'number' ? parsed.lastSyncAt : undefined,
     };
   } catch {
     return { notes: {}, folders: {} };
@@ -1400,6 +1405,478 @@ export async function executeCloudImport(
     copiedCount,
     downloadedBlobs,
     reusedLocalBlobs,
+    bytesDownloaded,
+    cancelled,
+  };
+}
+
+// ==================== 2-Way Sync (Lokal <-> Online) Plan & Execution ====================
+
+export interface SyncExecutionPlan {
+  // Download (Online -> Lokal)
+  downloadNewNoteIds: string[];
+  downloadUpdateNoteIds: string[];
+  downloadConflictRemoteNoteIds: string[];
+  downloadNewFolderIds: string[];
+  downloadUpdateFolderIds: string[];
+  downloadConflictRemoteFolderIds: string[];
+  estimatedDownloadBytes: number;
+  downloadNewBlobCount: number;
+  downloadReusedLocalBlobCount: number;
+
+  // Upload (Lokal -> Online)
+  uploadNewNoteIds: string[];
+  uploadUpdateNoteIds: string[];
+  uploadConflictLocalNoteIds: string[];
+  uploadNewFolderIds: string[];
+  uploadUpdateFolderIds: string[];
+  uploadConflictLocalFolderIds: string[];
+  estimatedUploadBytes: number;
+  uploadNewBlobCount: number;
+  uploadReusedRemoteBlobCount: number;
+
+  // Conflict keep-both (downloads remote as copy, uploads copy + local original)
+  keepBothConflictNoteIds: string[];
+
+  // Unchanged / skipped
+  skippedConflictNoteIds: string[];
+  skippedConflictFolderIds: string[];
+  unchangedNoteIds: string[];
+}
+
+export function buildSyncPlan(
+  comparison: CloudWorkspaceComparison,
+  selectedNoteIds: Set<string>,
+  selectedFolderIds: Set<string>,
+  noteConflictResolutions: Record<string, SyncConflictResolution>,
+  folderConflictResolutions: Record<string, SyncFolderConflictResolution>
+): SyncExecutionPlan {
+  const downloadNewNoteIds: string[] = [];
+  const downloadUpdateNoteIds: string[] = [];
+  const downloadConflictRemoteNoteIds: string[] = [];
+
+  const uploadNewNoteIds: string[] = [];
+  const uploadUpdateNoteIds: string[] = [];
+  const uploadConflictLocalNoteIds: string[] = [];
+
+  const keepBothConflictNoteIds: string[] = [];
+  const skippedConflictNoteIds: string[] = [];
+  const unchangedNoteIds: string[] = [];
+
+  const localAvailableBlobs = new Set<string>();
+  for (const cmp of comparison.notesById.values()) {
+    if (cmp.local) {
+      for (const h of cmp.local.blobHashes) localAvailableBlobs.add(h);
+    }
+  }
+
+  const downloadBlobHashes = new Set<string>();
+  const downloadReusedBlobs = new Set<string>();
+  const uploadBlobHashes = new Set<string>();
+  const uploadReusedBlobs = new Set<string>();
+  const localBlobSizes = new Map<string, number>();
+
+  let downloadJsonBytes = 0;
+  let uploadJsonBytes = 0;
+
+  const downloadNoteFolderIds: (string | null)[] = [];
+  const uploadNoteFolderIds: (string | null)[] = [];
+
+  const recordUploadCost = (local: LocalNoteFingerprint) => {
+    uploadNoteFolderIds.push(local.folderId);
+    uploadJsonBytes += local.estimatedNoteBytes;
+    for (const h of local.blobHashes) {
+      localBlobSizes.set(h, local.blobMeta[h]?.size ?? 0);
+      if (comparison.remoteBlobKeys.has(h)) {
+        uploadReusedBlobs.add(h);
+      } else {
+        uploadBlobHashes.add(h);
+      }
+    }
+  };
+
+  const recordDownloadCost = (remote: CloudManifestNoteEntry) => {
+    downloadNoteFolderIds.push(remote.folderId);
+    downloadJsonBytes += remote.noteBytes;
+    for (const h of remote.blobHashes) {
+      if (localAvailableBlobs.has(h)) {
+        downloadReusedBlobs.add(h);
+      } else {
+        downloadBlobHashes.add(h);
+      }
+    }
+  };
+
+  for (const id of selectedNoteIds) {
+    const cmp = comparison.notesById.get(id);
+    if (!cmp) continue;
+
+    if (cmp.status === 'synced') {
+      unchangedNoteIds.push(id);
+    } else if (cmp.status === 'local-only' && cmp.local) {
+      uploadNewNoteIds.push(id);
+      recordUploadCost(cmp.local);
+    } else if (cmp.status === 'local-ahead' && cmp.local) {
+      uploadUpdateNoteIds.push(id);
+      recordUploadCost(cmp.local);
+    } else if (cmp.status === 'remote-only' && cmp.remote) {
+      downloadNewNoteIds.push(id);
+      recordDownloadCost(cmp.remote);
+    } else if (cmp.status === 'remote-ahead' && cmp.remote) {
+      downloadUpdateNoteIds.push(id);
+      recordDownloadCost(cmp.remote);
+    } else if (cmp.status === 'conflict') {
+      const decision = noteConflictResolutions[id] ?? 'skip';
+      if (decision === 'use-local' && cmp.local) {
+        uploadConflictLocalNoteIds.push(id);
+        recordUploadCost(cmp.local);
+      } else if (decision === 'use-remote' && cmp.remote) {
+        downloadConflictRemoteNoteIds.push(id);
+        recordDownloadCost(cmp.remote);
+      } else if (decision === 'keep-both' && cmp.local && cmp.remote) {
+        keepBothConflictNoteIds.push(id);
+        recordDownloadCost(cmp.remote);
+        recordUploadCost(cmp.local);
+        // Copy JSON will also be uploaded (its blobs already exist remotely)
+        uploadJsonBytes += cmp.remote.noteBytes;
+      } else {
+        skippedConflictNoteIds.push(id);
+      }
+    }
+  }
+
+  // Ancestor folders for upload & download directions (plus explicitly selected folders)
+  const selectedLocalFolders: string[] = [];
+  const selectedRemoteFolders: string[] = [];
+  for (const fid of selectedFolderIds) {
+    const fCmp = comparison.foldersById.get(fid);
+    if (fCmp?.local) selectedLocalFolders.push(fid);
+    if (fCmp?.remote) selectedRemoteFolders.push(fid);
+  }
+
+  const requiredUploadFolders = collectAncestorFolderIds(
+    [...selectedLocalFolders, ...uploadNoteFolderIds],
+    (fid) => comparison.foldersById.get(fid)?.local?.parentId ?? null
+  );
+  const requiredDownloadFolders = collectAncestorFolderIds(
+    [...selectedRemoteFolders, ...downloadNoteFolderIds],
+    (fid) => comparison.foldersById.get(fid)?.remote?.parentId ?? null
+  );
+  const allRequiredFolders = new Set<string>([
+    ...requiredUploadFolders,
+    ...requiredDownloadFolders,
+  ]);
+
+  const downloadNewFolderIds: string[] = [];
+  const downloadUpdateFolderIds: string[] = [];
+  const downloadConflictRemoteFolderIds: string[] = [];
+  const uploadNewFolderIds: string[] = [];
+  const uploadUpdateFolderIds: string[] = [];
+  const uploadConflictLocalFolderIds: string[] = [];
+  const skippedConflictFolderIds: string[] = [];
+
+  for (const fid of allRequiredFolders) {
+    const cmp = comparison.foldersById.get(fid);
+    if (!cmp || cmp.status === 'synced') continue;
+
+    if (cmp.status === 'local-only' && cmp.local) {
+      uploadNewFolderIds.push(fid);
+    } else if (cmp.status === 'local-ahead' && cmp.local) {
+      uploadUpdateFolderIds.push(fid);
+    } else if (cmp.status === 'remote-only' && cmp.remote) {
+      downloadNewFolderIds.push(fid);
+    } else if (cmp.status === 'remote-ahead' && cmp.remote) {
+      downloadUpdateFolderIds.push(fid);
+    } else if (cmp.status === 'conflict') {
+      const decision = folderConflictResolutions[fid] ?? 'skip';
+      if (decision === 'use-local' && cmp.local) {
+        uploadConflictLocalFolderIds.push(fid);
+      } else if (decision === 'use-remote' && cmp.remote) {
+        downloadConflictRemoteFolderIds.push(fid);
+      } else {
+        skippedConflictFolderIds.push(fid);
+      }
+    }
+  }
+
+  let downloadBlobBytes = 0;
+  for (const h of downloadBlobHashes) {
+    downloadBlobBytes += comparison.manifest?.blobs[h]?.size ?? 0;
+  }
+
+  let uploadBlobBytes = 0;
+  for (const h of uploadBlobHashes) {
+    uploadBlobBytes += localBlobSizes.get(h) ?? 0;
+  }
+
+  return {
+    downloadNewNoteIds,
+    downloadUpdateNoteIds,
+    downloadConflictRemoteNoteIds,
+    downloadNewFolderIds,
+    downloadUpdateFolderIds,
+    downloadConflictRemoteFolderIds,
+    estimatedDownloadBytes: downloadJsonBytes + downloadBlobBytes,
+    downloadNewBlobCount: downloadBlobHashes.size,
+    downloadReusedLocalBlobCount: downloadReusedBlobs.size,
+
+    uploadNewNoteIds,
+    uploadUpdateNoteIds,
+    uploadConflictLocalNoteIds,
+    uploadNewFolderIds,
+    uploadUpdateFolderIds,
+    uploadConflictLocalFolderIds,
+    estimatedUploadBytes: uploadJsonBytes + uploadBlobBytes,
+    uploadNewBlobCount: uploadBlobHashes.size,
+    uploadReusedRemoteBlobCount: uploadReusedBlobs.size,
+
+    keepBothConflictNoteIds,
+    skippedConflictNoteIds,
+    skippedConflictFolderIds,
+    unchangedNoteIds,
+  };
+}
+
+export interface SyncExecutionResult {
+  uploadedNotes: number;
+  uploadedBlobs: number;
+  reusedRemoteBlobs: number;
+  uploadedFolders: number;
+  bytesUploaded: number;
+  downloadedNotes: number;
+  copiedConflictNotes: number;
+  downloadedBlobs: number;
+  reusedLocalBlobs: number;
+  downloadedFolders: number;
+  bytesDownloaded: number;
+  cancelled: boolean;
+}
+
+export async function executeCloudSync(
+  config: CloudSyncConfig,
+  comparison: CloudWorkspaceComparison,
+  plan: SyncExecutionPlan,
+  localNotes: Note[],
+  localFolders: Folder[],
+  options: {
+    settingsMode?: SyncSettingsMode;
+    localSettings?: AppSettings;
+    onApplyLocalImport: (payload: {
+      upsertNotes: Note[];
+      upsertFolders: Folder[];
+      settings?: AppSettings | null;
+    }) => void;
+    onProgress?: (p: CloudTransferProgress) => void;
+    signal?: AbortSignal;
+  }
+): Promise<SyncExecutionResult> {
+  const settingsMode = options.settingsMode ?? 'none';
+
+  const downloadNoteCount =
+    plan.downloadNewNoteIds.length +
+    plan.downloadUpdateNoteIds.length +
+    plan.downloadConflictRemoteNoteIds.length +
+    plan.keepBothConflictNoteIds.length;
+  const downloadFolderCount =
+    plan.downloadNewFolderIds.length +
+    plan.downloadUpdateFolderIds.length +
+    plan.downloadConflictRemoteFolderIds.length;
+  const shouldDownload =
+    downloadNoteCount > 0 ||
+    downloadFolderCount > 0 ||
+    Boolean(settingsMode === 'download' && comparison.manifest?.settings);
+
+  const baseUploadNoteCount =
+    plan.uploadNewNoteIds.length +
+    plan.uploadUpdateNoteIds.length +
+    plan.uploadConflictLocalNoteIds.length +
+    plan.keepBothConflictNoteIds.length * 2;
+  const uploadFolderCount =
+    plan.uploadNewFolderIds.length +
+    plan.uploadUpdateFolderIds.length +
+    plan.uploadConflictLocalFolderIds.length;
+  const shouldUpload =
+    baseUploadNoteCount > 0 || uploadFolderCount > 0 || settingsMode === 'upload';
+
+  const totalSteps = Math.max(
+    1,
+    downloadNoteCount + baseUploadNoteCount + (shouldUpload ? 1 : 0)
+  );
+
+  let downloadedNotes = 0;
+  let copiedConflictNotes = 0;
+  let downloadedBlobs = 0;
+  let reusedLocalBlobs = 0;
+  let downloadedFolders = 0;
+  let bytesDownloaded = 0;
+
+  let uploadedNotes = 0;
+  let uploadedBlobs = 0;
+  let reusedRemoteBlobs = 0;
+  let uploadedFolders = 0;
+  let bytesUploaded = 0;
+  let cancelled = false;
+
+  // Working copies of local workspace so Phase 2 sees copies & folder updates from Phase 1
+  const workingNoteMap = new Map(localNotes.map((n) => [n.id, n]));
+  const workingFolderMap = new Map(localFolders.map((f) => [f.id, f]));
+  const createdCopyNoteIds: string[] = [];
+
+  // ==================== PHASE 1: DOWNLOAD (Online -> Lokal) ====================
+  if (shouldDownload) {
+    const importSubPlan: ImportExecutionPlan = {
+      newNoteIds: plan.downloadNewNoteIds,
+      updateNoteIds: plan.downloadUpdateNoteIds,
+      replaceLocalNoteIds: plan.downloadConflictRemoteNoteIds,
+      copyNoteIds: plan.keepBothConflictNoteIds,
+      skippedConflictNoteIds: [],
+      unchangedNoteIds: plan.unchangedNoteIds,
+      newFolderIds: plan.downloadNewFolderIds,
+      updateFolderIds: plan.downloadUpdateFolderIds,
+      replaceLocalFolderIds: plan.downloadConflictRemoteFolderIds,
+      skippedConflictFolderIds: [],
+      estimatedDownloadBytes: plan.estimatedDownloadBytes,
+      downloadBlobCount: plan.downloadNewBlobCount,
+      reusedLocalBlobCount: plan.downloadReusedLocalBlobCount,
+    };
+
+    const directDownloadIds = new Set([
+      ...plan.downloadNewNoteIds,
+      ...plan.downloadUpdateNoteIds,
+      ...plan.downloadConflictRemoteNoteIds,
+    ]);
+
+    const importRes = await executeCloudImport(config, comparison, importSubPlan, localNotes, {
+      importSettings: settingsMode === 'download',
+      signal: options.signal,
+      onProgress: (p) => {
+        if (p.phase === 'finalizing' && shouldUpload) return;
+        options.onProgress?.({
+          ...p,
+          current: Math.min(downloadNoteCount, p.current),
+          total: totalSteps,
+          bytesTransferred: p.bytesTransferred,
+        });
+      },
+    });
+
+    downloadedNotes = importRes.importedCount;
+    copiedConflictNotes = importRes.copiedCount;
+    downloadedBlobs = importRes.downloadedBlobs;
+    reusedLocalBlobs = importRes.reusedLocalBlobs;
+    downloadedFolders = importRes.upsertFolders.length;
+    bytesDownloaded = importRes.bytesDownloaded;
+    cancelled = importRes.cancelled;
+
+    if (
+      importRes.upsertNotes.length > 0 ||
+      importRes.upsertFolders.length > 0 ||
+      importRes.settings
+    ) {
+      options.onApplyLocalImport({
+        upsertNotes: importRes.upsertNotes,
+        upsertFolders: importRes.upsertFolders,
+        settings: importRes.settings,
+      });
+
+      for (const f of importRes.upsertFolders) {
+        workingFolderMap.set(f.id, f);
+      }
+      for (const n of importRes.upsertNotes) {
+        workingNoteMap.set(n.id, n);
+        if (!directDownloadIds.has(n.id)) {
+          createdCopyNoteIds.push(n.id);
+        }
+      }
+    }
+  }
+
+  // ==================== PHASE 2: UPLOAD (Lokal -> Online) ====================
+  if (!cancelled && shouldUpload) {
+    // Upload keep-both copies FIRST (so remote versions are safely preserved under their new IDs)
+    // before updating the original IDs with local versions.
+    const backupSubPlan: BackupExecutionPlan = {
+      newNoteIds: [...createdCopyNoteIds, ...plan.uploadNewNoteIds],
+      updateNoteIds: plan.uploadUpdateNoteIds,
+      overwriteRemoteNoteIds: [
+        ...plan.uploadConflictLocalNoteIds,
+        ...(createdCopyNoteIds.length > 0 ? plan.keepBothConflictNoteIds : []),
+      ],
+      skippedConflictNoteIds: [],
+      unchangedNoteIds: plan.unchangedNoteIds,
+      newFolderIds: plan.uploadNewFolderIds,
+      updateFolderIds: plan.uploadUpdateFolderIds,
+      overwriteRemoteFolderIds: plan.uploadConflictLocalFolderIds,
+      skippedConflictFolderIds: [],
+      estimatedUploadBytes: plan.estimatedUploadBytes,
+      newBlobCount: plan.uploadNewBlobCount,
+      reusedBlobCount: plan.uploadReusedRemoteBlobCount,
+    };
+
+    const backupRes = await executeCloudBackup(
+      config,
+      comparison,
+      backupSubPlan,
+      [...workingNoteMap.values()],
+      [...workingFolderMap.values()],
+      {
+        includeSettings: settingsMode === 'upload',
+        settings: options.localSettings,
+        signal: options.signal,
+        onProgress: (p) => {
+          options.onProgress?.({
+            ...p,
+            current: Math.min(totalSteps, downloadNoteCount + p.current),
+            total: totalSteps,
+            bytesTransferred: bytesDownloaded + p.bytesTransferred,
+          });
+        },
+      }
+    );
+
+    uploadedNotes = backupRes.uploadedNotes;
+    uploadedBlobs = backupRes.uploadedBlobs;
+    reusedRemoteBlobs = backupRes.reusedBlobs;
+    uploadedFolders = backupRes.updatedFolders;
+    bytesUploaded = backupRes.bytesUploaded;
+    cancelled = backupRes.cancelled;
+  }
+
+  // Record unified lastSyncAt timestamp in baseline
+  if (
+    downloadedNotes > 0 ||
+    copiedConflictNotes > 0 ||
+    downloadedFolders > 0 ||
+    uploadedNotes > 0 ||
+    uploadedFolders > 0 ||
+    settingsMode !== 'none'
+  ) {
+    const baseline = loadCloudBaseline(config);
+    baseline.lastSyncAt = Date.now();
+    saveCloudBaseline(config, baseline);
+  }
+
+  options.onProgress?.({
+    phase: 'finalizing',
+    label: cancelled
+      ? 'Synchronisierung pausiert (Fortschritt gesichert)'
+      : 'Synchronisierung abgeschlossen',
+    current: totalSteps,
+    total: totalSteps,
+    bytesTransferred: bytesDownloaded + bytesUploaded,
+  });
+
+  return {
+    uploadedNotes,
+    uploadedBlobs,
+    reusedRemoteBlobs,
+    uploadedFolders,
+    bytesUploaded,
+    downloadedNotes,
+    copiedConflictNotes,
+    downloadedBlobs,
+    reusedLocalBlobs,
+    downloadedFolders,
     bytesDownloaded,
     cancelled,
   };

@@ -56,7 +56,7 @@ import {
 export type SidebarFilterMode = 'all' | 'pinned' | 'unfiled' | 'folder';
 export type ActiveScreen = 'home' | 'note' | 'settings';
 export type SettingsScopeTab = 'global' | 'local';
-export type CloudSyncModalTab = 'backup' | 'import' | 'setup';
+export type CloudSyncModalTab = 'sync' | 'backup' | 'import' | 'setup';
 
 const MAX_HISTORY = 50;
 
@@ -89,7 +89,7 @@ export function createNotesStore() {
     'new' | 'existing'
   >('new');
   const [cloudSyncOpen, setCloudSyncOpen] = createSignal<boolean>(false);
-  const [cloudSyncTab, setCloudSyncTab] = createSignal<CloudSyncModalTab>('backup');
+  const [cloudSyncTab, setCloudSyncTab] = createSignal<CloudSyncModalTab>('sync');
   const [cloudConfigVersion, setCloudConfigVersion] = createSignal<number>(0);
 
   const isCloudConfigured = createMemo(() => {
@@ -101,7 +101,7 @@ export function createNotesStore() {
 
   const openCloudSync = (tab?: CloudSyncModalTab) => {
     const configured = isCloudConfigComplete(loadCloudConfig());
-    setCloudSyncTab(tab ?? (configured ? 'backup' : 'setup'));
+    setCloudSyncTab(tab ?? (configured ? 'sync' : 'setup'));
     setCloudSyncOpen(true);
   };
 
