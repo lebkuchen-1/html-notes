@@ -1,6 +1,7 @@
 import type { AppSettings, Folder, Note } from '../types';
 import {
   getCloudBucketFingerprint,
+  s3DeleteObject,
   s3GetObject,
   s3ListRelativeKeys,
   s3PutObject,
@@ -12,6 +13,8 @@ import { generateId, normalizeAppSettings, normalizeFolder, normalizeNote } from
 export const CLOUD_MANIFEST_VERSION = 1;
 const BLOB_REF_PREFIX = 'blob://';
 const BASELINE_STORAGE_PREFIX = 'solid-notes:v1:cloudBaseline:';
+const LOCAL_DELETIONS_STORAGE_KEY = 'solid-notes:v1:localDeletions';
+const TOMBSTONE_RETENTION_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 
 export interface CloudBlobMeta {
   mime: string;
@@ -43,12 +46,19 @@ export interface CloudManifestFolderEntry {
   folderHash: string;
 }
 
+export interface CloudTombstone {
+  deletedAt: number;
+  label?: string;
+}
+
 export interface CloudManifest {
   version: number;
   updatedAt: number;
   folders: Record<string, CloudManifestFolderEntry>;
   notes: Record<string, CloudManifestNoteEntry>;
   blobs: Record<string, CloudBlobMeta>;
+  deletedNotes?: Record<string, CloudTombstone>;
+  deletedFolders?: Record<string, CloudTombstone>;
   settings?: AppSettings;
 }
 
@@ -80,15 +90,11 @@ export type NoteDiffStatus =
   | 'remote-only'
   | 'local-ahead'
   | 'remote-ahead'
+  | 'deleted-local'
+  | 'deleted-remote'
   | 'conflict';
 
-export type FolderDiffStatus =
-  | 'synced'
-  | 'local-only'
-  | 'remote-only'
-  | 'local-ahead'
-  | 'remote-ahead'
-  | 'conflict';
+export type FolderDiffStatus = NoteDiffStatus;
 
 export type BackupConflictResolution = 'skip' | 'overwrite-remote';
 export type ImportConflictResolution = 'keep-local' | 'use-remote' | 'keep-both';
@@ -160,6 +166,80 @@ export function saveCloudBaseline(config: CloudSyncConfig, baseline: CloudSyncBa
   } catch {
     // ignore quota issues
   }
+}
+
+// ==================== Local Deletion Tombstones ====================
+
+export interface LocalDeletionLog {
+  notes: Record<string, number>;
+  folders: Record<string, number>;
+}
+
+export function loadLocalDeletions(): LocalDeletionLog {
+  try {
+    const raw = localStorage.getItem(LOCAL_DELETIONS_STORAGE_KEY);
+    if (!raw) return { notes: {}, folders: {} };
+    const parsed = JSON.parse(raw) as Partial<LocalDeletionLog>;
+    return {
+      notes: parsed.notes && typeof parsed.notes === 'object' ? parsed.notes : {},
+      folders: parsed.folders && typeof parsed.folders === 'object' ? parsed.folders : {},
+    };
+  } catch {
+    return { notes: {}, folders: {} };
+  }
+}
+
+function saveLocalDeletions(log: LocalDeletionLog): void {
+  try {
+    localStorage.setItem(LOCAL_DELETIONS_STORAGE_KEY, JSON.stringify(log));
+  } catch {
+    // ignore quota issues
+  }
+}
+
+export function recordLocalNoteDeletion(noteId: string): void {
+  const log = loadLocalDeletions();
+  log.notes[noteId] = Date.now();
+  saveLocalDeletions(log);
+}
+
+export function recordLocalFolderDeletion(folderId: string): void {
+  const log = loadLocalDeletions();
+  log.folders[folderId] = Date.now();
+  saveLocalDeletions(log);
+}
+
+export function clearLocalDeletions(noteIds: Iterable<string>, folderIds: Iterable<string>): void {
+  const log = loadLocalDeletions();
+  let changed = false;
+  for (const id of noteIds) {
+    if (id in log.notes) {
+      delete log.notes[id];
+      changed = true;
+    }
+  }
+  for (const id of folderIds) {
+    if (id in log.folders) {
+      delete log.folders[id];
+      changed = true;
+    }
+  }
+  if (changed) saveLocalDeletions(log);
+}
+
+function pruneTombstones(
+  tombstones: Record<string, CloudTombstone> | undefined
+): Record<string, CloudTombstone> {
+  if (!tombstones) return {};
+  const cutoff = Date.now() - TOMBSTONE_RETENTION_MS;
+  const entries = Object.entries(tombstones).filter(
+    ([, v]) => v && typeof v.deletedAt === 'number' && v.deletedAt >= cutoff
+  );
+  if (entries.length > 500) {
+    entries.sort((a, b) => b[1].deletedAt - a[1].deletedAt);
+    entries.length = 500;
+  }
+  return Object.fromEntries(entries);
 }
 
 // ==================== Data URL <-> Binary Helpers ====================
@@ -440,6 +520,12 @@ export async function fetchRemoteManifest(
     folders: parsed.folders && typeof parsed.folders === 'object' ? parsed.folders : {},
     notes: parsed.notes && typeof parsed.notes === 'object' ? parsed.notes : {},
     blobs: parsed.blobs && typeof parsed.blobs === 'object' ? parsed.blobs : {},
+    deletedNotes:
+      parsed.deletedNotes && typeof parsed.deletedNotes === 'object' ? parsed.deletedNotes : {},
+    deletedFolders:
+      parsed.deletedFolders && typeof parsed.deletedFolders === 'object'
+        ? parsed.deletedFolders
+        : {},
     ...(parsed.settings ? { settings: normalizeAppSettings(parsed.settings) } : {}),
   };
 }
@@ -447,17 +533,53 @@ export async function fetchRemoteManifest(
 function classify3Way(
   localHash: string | undefined,
   remoteHash: string | undefined,
-  baseHash: string | undefined
-): NoteDiffStatus {
-  if (localHash && !remoteHash) return 'local-only';
-  if (!localHash && remoteHash) return 'remote-only';
-  if (!localHash && !remoteHash) return 'synced';
-  if (localHash === remoteHash) return 'synced';
-  if (baseHash) {
-    if (remoteHash === baseHash && localHash !== baseHash) return 'local-ahead';
-    if (localHash === baseHash && remoteHash !== baseHash) return 'remote-ahead';
+  baseHash: string | undefined,
+  options?: {
+    localDeletedAt?: number;
+    remoteDeletedAt?: number;
+    remoteUpdatedAt?: number;
   }
-  return 'conflict';
+): NoteDiffStatus {
+  if (!localHash && !remoteHash) return 'synced';
+
+  if (localHash && remoteHash) {
+    if (localHash === remoteHash) return 'synced';
+    if (baseHash) {
+      if (remoteHash === baseHash && localHash !== baseHash) return 'local-ahead';
+      if (localHash === baseHash && remoteHash !== baseHash) return 'remote-ahead';
+    }
+    return 'conflict';
+  }
+
+  // Only exists remotely (!localHash && remoteHash)
+  if (!localHash && remoteHash) {
+    if (baseHash) {
+      // Previously synced on this device, now gone locally
+      return remoteHash === baseHash ? 'deleted-local' : 'conflict';
+    }
+    if (options?.localDeletedAt !== undefined) {
+      // Explicitly deleted locally even without prior baseline
+      if (
+        options.remoteUpdatedAt !== undefined &&
+        options.remoteUpdatedAt > options.localDeletedAt
+      ) {
+        return 'conflict';
+      }
+      return 'deleted-local';
+    }
+    return 'remote-only';
+  }
+
+  // Only exists locally (localHash && !remoteHash)
+  if (baseHash) {
+    // Previously synced on this device, now gone from cloud
+    return localHash === baseHash ? 'deleted-remote' : 'conflict';
+  }
+  if (options?.remoteDeletedAt !== undefined) {
+    // Cloud recorded a tombstone, but this device has no baseline -> safe conflict
+    return 'conflict';
+  }
+  return 'local-only';
 }
 
 export async function compareWithCloud(
@@ -497,6 +619,7 @@ export async function compareWithCloud(
   }
 
   const baseline = loadCloudBaseline(config);
+  const localDeletions = loadLocalDeletions();
 
   // Fingerprint local notes incrementally (low RAM, responsive UI)
   const localNoteMap = new Map<string, LocalNoteFingerprint>();
@@ -537,7 +660,11 @@ export async function compareWithCloud(
       local,
       remote,
       baselineHash: baseHash,
-      status: classify3Way(local?.contentHash, remote?.contentHash, baseHash),
+      status: classify3Way(local?.contentHash, remote?.contentHash, baseHash, {
+        localDeletedAt: localDeletions.notes[id],
+        remoteDeletedAt: manifest?.deletedNotes?.[id]?.deletedAt,
+        remoteUpdatedAt: remote?.updatedAt,
+      }),
     });
   }
 
@@ -555,7 +682,10 @@ export async function compareWithCloud(
       local,
       remote,
       baselineHash: baseHash,
-      status: classify3Way(local?.folderHash, remote?.folderHash, baseHash),
+      status: classify3Way(local?.folderHash, remote?.folderHash, baseHash, {
+        localDeletedAt: localDeletions.folders[id],
+        remoteDeletedAt: manifest?.deletedFolders?.[id]?.deletedAt,
+      }),
     });
   }
 
@@ -728,6 +858,8 @@ export interface BackupExecutionResult {
   uploadedBlobs: number;
   reusedBlobs: number;
   updatedFolders: number;
+  deletedNotes: number;
+  deletedFolders: number;
   bytesUploaded: number;
   cancelled: boolean;
 }
@@ -741,6 +873,8 @@ export async function executeCloudBackup(
   options: {
     includeSettings?: boolean;
     settings?: AppSettings;
+    deleteRemoteNoteIds?: string[];
+    deleteRemoteFolderIds?: string[];
     onProgress?: (p: CloudTransferProgress) => void;
     signal?: AbortSignal;
   }
@@ -758,8 +892,10 @@ export async function executeCloudBackup(
     ...plan.updateFolderIds,
     ...plan.overwriteRemoteFolderIds,
   ];
+  const noteIdsToDelete = options.deleteRemoteNoteIds ?? [];
+  const folderIdsToDelete = options.deleteRemoteFolderIds ?? [];
 
-  const totalSteps = Math.max(1, noteIdsToUpload.length + 1);
+  const totalSteps = Math.max(1, noteIdsToUpload.length + noteIdsToDelete.length + 1);
 
   options.onProgress?.({
     phase: 'uploading',
@@ -778,6 +914,8 @@ export async function executeCloudBackup(
     folders: { ...(latestRemote?.folders ?? {}) },
     notes: { ...(latestRemote?.notes ?? {}) },
     blobs: { ...(latestRemote?.blobs ?? {}) },
+    deletedNotes: pruneTombstones(latestRemote?.deletedNotes),
+    deletedFolders: pruneTombstones(latestRemote?.deletedFolders),
     ...(latestRemote?.settings ? { settings: latestRemote.settings } : {}),
   };
 
@@ -787,6 +925,8 @@ export async function executeCloudBackup(
   let uploadedNotes = 0;
   let uploadedBlobs = 0;
   let reusedBlobs = 0;
+  let deletedNotes = 0;
+  let deletedFolders = 0;
   let bytesUploaded = 0;
   let cancelled = false;
   let notesSinceCheckpoint = 0;
@@ -805,8 +945,23 @@ export async function executeCloudBackup(
       createdAt: f.createdAt,
       folderHash,
     };
+    if (mergedManifest.deletedFolders) delete mergedManifest.deletedFolders[fid];
     baseline.folders[fid] = { folderHash, syncedAt: Date.now() };
     updatedFolders++;
+  }
+
+  // Apply remote folder deletions into manifest (with tombstones)
+  for (const fid of folderIdsToDelete) {
+    const existing = mergedManifest.folders[fid];
+    if (mergedManifest.deletedFolders) {
+      mergedManifest.deletedFolders[fid] = {
+        deletedAt: Date.now(),
+        label: existing?.name,
+      };
+    }
+    delete mergedManifest.folders[fid];
+    delete baseline.folders[fid];
+    deletedFolders++;
   }
 
   // Also ensure synced folders have their baseline recorded
@@ -931,6 +1086,7 @@ export async function executeCloudBackup(
       blobHashes,
       totalBlobBytes,
     };
+    if (mergedManifest.deletedNotes) delete mergedManifest.deletedNotes[note.id];
 
     baseline.notes[note.id] = { contentHash, syncedAt: Date.now() };
     uploadedNotes++;
@@ -944,6 +1100,50 @@ export async function executeCloudBackup(
     await yieldToMain();
   }
 
+  // Apply remote note deletions (tombstone + best-effort S3 DELETE of notes/<id>.json.gz)
+  if (!cancelled && noteIdsToDelete.length > 0) {
+    for (let i = 0; i < noteIdsToDelete.length; i++) {
+      if (options.signal?.aborted) {
+        cancelled = true;
+        break;
+      }
+      const id = noteIdsToDelete[i];
+      const existing = mergedManifest.notes[id];
+      const noteLabel = existing?.title?.trim() || 'Notiz';
+      options.onProgress?.({
+        phase: 'uploading',
+        label: `Entferne Online-Notiz ${i + 1} von ${noteIdsToDelete.length}`,
+        detail: noteLabel,
+        current: noteIdsToUpload.length + i,
+        total: totalSteps,
+        bytesTransferred: bytesUploaded,
+      });
+
+      if (mergedManifest.deletedNotes) {
+        mergedManifest.deletedNotes[id] = {
+          deletedAt: Date.now(),
+          label: existing?.title,
+        };
+      }
+      delete mergedManifest.notes[id];
+      delete baseline.notes[id];
+      deletedNotes++;
+
+      try {
+        await s3DeleteObject(config, `notes/${id}.json.gz`, options.signal);
+      } catch {
+        // Manifest removal + tombstone is authoritative even if bucket key disallows DELETE
+      }
+      await yieldToMain();
+    }
+  }
+
+  // Clear local deletion tombstones for items now processed
+  clearLocalDeletions(
+    [...noteIdsToUpload, ...noteIdsToDelete],
+    [...folderIdsToUpload, ...folderIdsToDelete]
+  );
+
   // Record baseline for already-synced selected notes too
   for (const id of plan.unchangedNoteIds) {
     const cmp = comparison.notesById.get(id);
@@ -956,7 +1156,13 @@ export async function executeCloudBackup(
     mergedManifest.settings = options.settings;
   }
 
-  if (uploadedNotes > 0 || updatedFolders > 0 || (!cancelled && options.includeSettings)) {
+  if (
+    uploadedNotes > 0 ||
+    updatedFolders > 0 ||
+    deletedNotes > 0 ||
+    deletedFolders > 0 ||
+    (!cancelled && options.includeSettings)
+  ) {
     options.onProgress?.({
       phase: 'finalizing',
       label: 'Aktualisiere Online-Index (manifest.json)…',
@@ -980,6 +1186,8 @@ export async function executeCloudBackup(
     uploadedBlobs,
     reusedBlobs,
     updatedFolders,
+    deletedNotes,
+    deletedFolders,
     bytesUploaded,
     cancelled,
   };
@@ -1037,7 +1245,7 @@ export function buildImportPlan(
     let willImport = false;
     if (cmp.status === 'synced') {
       unchangedNoteIds.push(id);
-    } else if (cmp.status === 'remote-only') {
+    } else if (cmp.status === 'remote-only' || cmp.status === 'deleted-local') {
       newNoteIds.push(id);
       willImport = true;
     } else if (cmp.status === 'remote-ahead') {
@@ -1085,7 +1293,7 @@ export function buildImportPlan(
     const cmp = comparison.foldersById.get(fid);
     if (!cmp?.remote) continue;
     if (cmp.status === 'synced') continue;
-    if (cmp.status === 'remote-only') {
+    if (cmp.status === 'remote-only' || cmp.status === 'deleted-local') {
       newFolderIds.push(fid);
     } else if (cmp.status === 'remote-ahead') {
       updateFolderIds.push(fid);
@@ -1435,6 +1643,16 @@ export interface SyncExecutionPlan {
   uploadNewBlobCount: number;
   uploadReusedRemoteBlobCount: number;
 
+  // Deletions (propagated in 2-way Sync)
+  deleteLocalNoteIds: string[];
+  deleteLocalConflictNoteIds: string[];
+  deleteLocalFolderIds: string[];
+  deleteLocalConflictFolderIds: string[];
+  deleteRemoteNoteIds: string[];
+  deleteRemoteConflictNoteIds: string[];
+  deleteRemoteFolderIds: string[];
+  deleteRemoteConflictFolderIds: string[];
+
   // Conflict keep-both (downloads remote as copy, uploads copy + local original)
   keepBothConflictNoteIds: string[];
 
@@ -1458,6 +1676,11 @@ export function buildSyncPlan(
   const uploadNewNoteIds: string[] = [];
   const uploadUpdateNoteIds: string[] = [];
   const uploadConflictLocalNoteIds: string[] = [];
+
+  const deleteLocalNoteIds: string[] = [];
+  const deleteLocalConflictNoteIds: string[] = [];
+  const deleteRemoteNoteIds: string[] = [];
+  const deleteRemoteConflictNoteIds: string[] = [];
 
   const keepBothConflictNoteIds: string[] = [];
   const skippedConflictNoteIds: string[] = [];
@@ -1525,14 +1748,28 @@ export function buildSyncPlan(
     } else if (cmp.status === 'remote-ahead' && cmp.remote) {
       downloadUpdateNoteIds.push(id);
       recordDownloadCost(cmp.remote);
+    } else if (cmp.status === 'deleted-local' && cmp.remote) {
+      deleteRemoteNoteIds.push(id);
+    } else if (cmp.status === 'deleted-remote' && cmp.local) {
+      deleteLocalNoteIds.push(id);
     } else if (cmp.status === 'conflict') {
       const decision = noteConflictResolutions[id] ?? 'skip';
-      if (decision === 'use-local' && cmp.local) {
-        uploadConflictLocalNoteIds.push(id);
-        recordUploadCost(cmp.local);
-      } else if (decision === 'use-remote' && cmp.remote) {
-        downloadConflictRemoteNoteIds.push(id);
-        recordDownloadCost(cmp.remote);
+      if (decision === 'use-local') {
+        if (cmp.local) {
+          uploadConflictLocalNoteIds.push(id);
+          recordUploadCost(cmp.local);
+        } else if (cmp.remote) {
+          // Local was deleted, user chose local -> delete remote
+          deleteRemoteConflictNoteIds.push(id);
+        }
+      } else if (decision === 'use-remote') {
+        if (cmp.remote) {
+          downloadConflictRemoteNoteIds.push(id);
+          recordDownloadCost(cmp.remote);
+        } else if (cmp.local) {
+          // Remote was deleted, user chose remote -> delete local
+          deleteLocalConflictNoteIds.push(id);
+        }
       } else if (decision === 'keep-both' && cmp.local && cmp.remote) {
         keepBothConflictNoteIds.push(id);
         recordDownloadCost(cmp.remote);
@@ -1573,6 +1810,10 @@ export function buildSyncPlan(
   const uploadNewFolderIds: string[] = [];
   const uploadUpdateFolderIds: string[] = [];
   const uploadConflictLocalFolderIds: string[] = [];
+  const deleteLocalFolderIds: string[] = [];
+  const deleteLocalConflictFolderIds: string[] = [];
+  const deleteRemoteFolderIds: string[] = [];
+  const deleteRemoteConflictFolderIds: string[] = [];
   const skippedConflictFolderIds: string[] = [];
 
   for (const fid of allRequiredFolders) {
@@ -1587,12 +1828,22 @@ export function buildSyncPlan(
       downloadNewFolderIds.push(fid);
     } else if (cmp.status === 'remote-ahead' && cmp.remote) {
       downloadUpdateFolderIds.push(fid);
+    } else if (cmp.status === 'deleted-local' && cmp.remote) {
+      if (selectedFolderIds.has(fid)) {
+        deleteRemoteFolderIds.push(fid);
+      }
+    } else if (cmp.status === 'deleted-remote' && cmp.local) {
+      if (selectedFolderIds.has(fid)) {
+        deleteLocalFolderIds.push(fid);
+      }
     } else if (cmp.status === 'conflict') {
       const decision = folderConflictResolutions[fid] ?? 'skip';
-      if (decision === 'use-local' && cmp.local) {
-        uploadConflictLocalFolderIds.push(fid);
-      } else if (decision === 'use-remote' && cmp.remote) {
-        downloadConflictRemoteFolderIds.push(fid);
+      if (decision === 'use-local') {
+        if (cmp.local) uploadConflictLocalFolderIds.push(fid);
+        else if (cmp.remote) deleteRemoteConflictFolderIds.push(fid);
+      } else if (decision === 'use-remote') {
+        if (cmp.remote) downloadConflictRemoteFolderIds.push(fid);
+        else if (cmp.local) deleteLocalConflictFolderIds.push(fid);
       } else {
         skippedConflictFolderIds.push(fid);
       }
@@ -1630,6 +1881,15 @@ export function buildSyncPlan(
     uploadNewBlobCount: uploadBlobHashes.size,
     uploadReusedRemoteBlobCount: uploadReusedBlobs.size,
 
+    deleteLocalNoteIds,
+    deleteLocalConflictNoteIds,
+    deleteLocalFolderIds,
+    deleteLocalConflictFolderIds,
+    deleteRemoteNoteIds,
+    deleteRemoteConflictNoteIds,
+    deleteRemoteFolderIds,
+    deleteRemoteConflictFolderIds,
+
     keepBothConflictNoteIds,
     skippedConflictNoteIds,
     skippedConflictFolderIds,
@@ -1649,6 +1909,10 @@ export interface SyncExecutionResult {
   reusedLocalBlobs: number;
   downloadedFolders: number;
   bytesDownloaded: number;
+  deletedLocalNotes: number;
+  deletedLocalFolders: number;
+  deletedRemoteNotes: number;
+  deletedRemoteFolders: number;
   cancelled: boolean;
 }
 
@@ -1664,6 +1928,8 @@ export async function executeCloudSync(
     onApplyLocalImport: (payload: {
       upsertNotes: Note[];
       upsertFolders: Folder[];
+      deleteNoteIds?: string[];
+      deleteFolderIds?: string[];
       settings?: AppSettings | null;
     }) => void;
     onProgress?: (p: CloudTransferProgress) => void;
@@ -1681,10 +1947,19 @@ export async function executeCloudSync(
     plan.downloadNewFolderIds.length +
     plan.downloadUpdateFolderIds.length +
     plan.downloadConflictRemoteFolderIds.length;
+  const deleteLocalNoteIds = [...plan.deleteLocalNoteIds, ...plan.deleteLocalConflictNoteIds];
+  const deleteLocalFolderIds = [...plan.deleteLocalFolderIds, ...plan.deleteLocalConflictFolderIds];
+
   const shouldDownload =
     downloadNoteCount > 0 ||
     downloadFolderCount > 0 ||
     Boolean(settingsMode === 'download' && comparison.manifest?.settings);
+
+  const deleteRemoteNoteIds = [...plan.deleteRemoteNoteIds, ...plan.deleteRemoteConflictNoteIds];
+  const deleteRemoteFolderIds = [
+    ...plan.deleteRemoteFolderIds,
+    ...plan.deleteRemoteConflictFolderIds,
+  ];
 
   const baseUploadNoteCount =
     plan.uploadNewNoteIds.length +
@@ -1696,11 +1971,15 @@ export async function executeCloudSync(
     plan.uploadUpdateFolderIds.length +
     plan.uploadConflictLocalFolderIds.length;
   const shouldUpload =
-    baseUploadNoteCount > 0 || uploadFolderCount > 0 || settingsMode === 'upload';
+    baseUploadNoteCount > 0 ||
+    uploadFolderCount > 0 ||
+    deleteRemoteNoteIds.length > 0 ||
+    deleteRemoteFolderIds.length > 0 ||
+    settingsMode === 'upload';
 
   const totalSteps = Math.max(
     1,
-    downloadNoteCount + baseUploadNoteCount + (shouldUpload ? 1 : 0)
+    downloadNoteCount + baseUploadNoteCount + deleteRemoteNoteIds.length + (shouldUpload ? 1 : 0)
   );
 
   let downloadedNotes = 0;
@@ -1709,11 +1988,15 @@ export async function executeCloudSync(
   let reusedLocalBlobs = 0;
   let downloadedFolders = 0;
   let bytesDownloaded = 0;
+  let deletedLocalNotes = 0;
+  let deletedLocalFolders = 0;
 
   let uploadedNotes = 0;
   let uploadedBlobs = 0;
   let reusedRemoteBlobs = 0;
   let uploadedFolders = 0;
+  let deletedRemoteNotes = 0;
+  let deletedRemoteFolders = 0;
   let bytesUploaded = 0;
   let cancelled = false;
 
@@ -1722,7 +2005,11 @@ export async function executeCloudSync(
   const workingFolderMap = new Map(localFolders.map((f) => [f.id, f]));
   const createdCopyNoteIds: string[] = [];
 
-  // ==================== PHASE 1: DOWNLOAD (Online -> Lokal) ====================
+  // ==================== PHASE 1: DOWNLOAD & LOCAL DELETIONS (Online -> Lokal) ====================
+  let pendingUpsertNotes: Note[] = [];
+  let pendingUpsertFolders: Folder[] = [];
+  let pendingSettings: AppSettings | null = null;
+
   if (shouldDownload) {
     const importSubPlan: ImportExecutionPlan = {
       newNoteIds: plan.downloadNewNoteIds,
@@ -1768,33 +2055,59 @@ export async function executeCloudSync(
     bytesDownloaded = importRes.bytesDownloaded;
     cancelled = importRes.cancelled;
 
-    if (
-      importRes.upsertNotes.length > 0 ||
-      importRes.upsertFolders.length > 0 ||
-      importRes.settings
-    ) {
-      options.onApplyLocalImport({
-        upsertNotes: importRes.upsertNotes,
-        upsertFolders: importRes.upsertFolders,
-        settings: importRes.settings,
-      });
+    pendingUpsertNotes = importRes.upsertNotes;
+    pendingUpsertFolders = importRes.upsertFolders;
+    pendingSettings = importRes.settings;
 
-      for (const f of importRes.upsertFolders) {
-        workingFolderMap.set(f.id, f);
-      }
-      for (const n of importRes.upsertNotes) {
-        workingNoteMap.set(n.id, n);
-        if (!directDownloadIds.has(n.id)) {
-          createdCopyNoteIds.push(n.id);
-        }
+    for (const f of importRes.upsertFolders) {
+      workingFolderMap.set(f.id, f);
+    }
+    for (const n of importRes.upsertNotes) {
+      workingNoteMap.set(n.id, n);
+      if (!directDownloadIds.has(n.id)) {
+        createdCopyNoteIds.push(n.id);
       }
     }
   }
 
-  // ==================== PHASE 2: UPLOAD (Lokal -> Online) ====================
+  const effectiveDeleteLocalNotes = cancelled ? [] : deleteLocalNoteIds;
+  const effectiveDeleteLocalFolders = cancelled ? [] : deleteLocalFolderIds;
+
+  if (
+    pendingUpsertNotes.length > 0 ||
+    pendingUpsertFolders.length > 0 ||
+    effectiveDeleteLocalNotes.length > 0 ||
+    effectiveDeleteLocalFolders.length > 0 ||
+    pendingSettings
+  ) {
+    options.onApplyLocalImport({
+      upsertNotes: pendingUpsertNotes,
+      upsertFolders: pendingUpsertFolders,
+      deleteNoteIds: effectiveDeleteLocalNotes,
+      deleteFolderIds: effectiveDeleteLocalFolders,
+      settings: pendingSettings,
+    });
+
+    deletedLocalNotes = effectiveDeleteLocalNotes.length;
+    deletedLocalFolders = effectiveDeleteLocalFolders.length;
+
+    if (effectiveDeleteLocalNotes.length > 0 || effectiveDeleteLocalFolders.length > 0) {
+      const baseline = loadCloudBaseline(config);
+      for (const id of effectiveDeleteLocalNotes) {
+        delete baseline.notes[id];
+        workingNoteMap.delete(id);
+      }
+      for (const fid of effectiveDeleteLocalFolders) {
+        delete baseline.folders[fid];
+        workingFolderMap.delete(fid);
+      }
+      saveCloudBaseline(config, baseline);
+      clearLocalDeletions(effectiveDeleteLocalNotes, effectiveDeleteLocalFolders);
+    }
+  }
+
+  // ==================== PHASE 2: UPLOAD & REMOTE DELETIONS (Lokal -> Online) ====================
   if (!cancelled && shouldUpload) {
-    // Upload keep-both copies FIRST (so remote versions are safely preserved under their new IDs)
-    // before updating the original IDs with local versions.
     const backupSubPlan: BackupExecutionPlan = {
       newNoteIds: [...createdCopyNoteIds, ...plan.uploadNewNoteIds],
       updateNoteIds: plan.uploadUpdateNoteIds,
@@ -1822,6 +2135,8 @@ export async function executeCloudSync(
       {
         includeSettings: settingsMode === 'upload',
         settings: options.localSettings,
+        deleteRemoteNoteIds,
+        deleteRemoteFolderIds,
         signal: options.signal,
         onProgress: (p) => {
           options.onProgress?.({
@@ -1838,6 +2153,8 @@ export async function executeCloudSync(
     uploadedBlobs = backupRes.uploadedBlobs;
     reusedRemoteBlobs = backupRes.reusedBlobs;
     uploadedFolders = backupRes.updatedFolders;
+    deletedRemoteNotes = backupRes.deletedNotes;
+    deletedRemoteFolders = backupRes.deletedFolders;
     bytesUploaded = backupRes.bytesUploaded;
     cancelled = backupRes.cancelled;
   }
@@ -1847,8 +2164,12 @@ export async function executeCloudSync(
     downloadedNotes > 0 ||
     copiedConflictNotes > 0 ||
     downloadedFolders > 0 ||
+    deletedLocalNotes > 0 ||
+    deletedLocalFolders > 0 ||
     uploadedNotes > 0 ||
     uploadedFolders > 0 ||
+    deletedRemoteNotes > 0 ||
+    deletedRemoteFolders > 0 ||
     settingsMode !== 'none'
   ) {
     const baseline = loadCloudBaseline(config);
@@ -1878,6 +2199,10 @@ export async function executeCloudSync(
     reusedLocalBlobs,
     downloadedFolders,
     bytesDownloaded,
+    deletedLocalNotes,
+    deletedLocalFolders,
+    deletedRemoteNotes,
+    deletedRemoteFolders,
     cancelled,
   };
 }

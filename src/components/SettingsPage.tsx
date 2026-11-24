@@ -1241,7 +1241,7 @@ export function SettingsPage(props: SettingsPageProps) {
                     <span class="setting-desc">
                       2-Wege-Synchronisierung und inkrementelles Pro-Notiz-Backup mit ausgelagerten
                       Medien-Blobs (Cloudflare R2, Backblaze B2 oder eigenes S3) — Gesamt- oder
-                      Einzelauswahl mit Konfliktlösung, ohne lokales Löschen.
+                      Einzelauswahl mit 3-Wege-Konfliktlösung und Lösch-Abgleich.
                       <Show when={cloudInfo()?.latestActivity}>
                         {(act) => (
                           <>

@@ -7171,6 +7171,10 @@ button {
   background: rgba(217, 119, 6, 0.06);
 }
 
+.cloud-tree-note.is-delete {
+  background: rgba(220, 38, 38, 0.05);
+}
+
 .cloud-tree-icon {
   color: var(--text-muted);
   display: inline-flex;
@@ -7271,6 +7275,11 @@ button {
 .cloud-badge.is-conflict {
   background: rgba(217, 119, 6, 0.16);
   color: var(--amber);
+}
+
+.cloud-badge.is-delete {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 /* Conflict Panel */
@@ -7441,6 +7450,12 @@ button {
   color: var(--amber);
 }
 
+.cloud-stat-chip.is-danger {
+  border-color: rgba(220, 38, 38, 0.45);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .cloud-replace-preview {
   display: flex;
   flex-direction: column;
@@ -7486,6 +7501,13 @@ button {
   border-color: rgba(217, 119, 6, 0.55);
   background: rgba(217, 119, 6, 0.1);
   color: var(--amber);
+  font-weight: 600;
+}
+
+.cloud-replace-chip.is-delete {
+  border-color: rgba(220, 38, 38, 0.45);
+  background: var(--danger-soft);
+  color: var(--danger);
   font-weight: 600;
 }
 

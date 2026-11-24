@@ -415,15 +415,20 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     const list: TreeNoteNode[] = [];
     for (const entry of cmp.notesById.values()) {
       if (tab === 'sync') {
+        const isDeleteStatus =
+          entry.status === 'deleted-local' || entry.status === 'deleted-remote';
         const useRemote =
+          (!entry.local && Boolean(entry.remote)) ||
           entry.status === 'remote-only' ||
           (entry.status === 'remote-ahead' && Boolean(entry.remote));
         if (useRemote && entry.remote) {
-          const missingBlobBytes = entry.remote.blobHashes.reduce(
-            (sum, h) =>
-              localBlobSet.has(h) ? sum : sum + (cmp.manifest?.blobs[h]?.size ?? 0),
-            0
-          );
+          const missingBlobBytes = isDeleteStatus
+            ? 0
+            : entry.remote.blobHashes.reduce(
+                (sum, h) =>
+                  localBlobSet.has(h) ? sum : sum + (cmp.manifest?.blobs[h]?.size ?? 0),
+                0
+              );
           list.push({
             id: entry.id,
             title: entry.remote.title.trim() || 'Unbenannte Notiz',
@@ -431,15 +436,17 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
             pageCount: entry.remote.pageCount,
             updatedAt: entry.remote.updatedAt,
             sizeBytes: entry.remote.noteBytes + entry.remote.totalBlobBytes,
-            transferHintBytes: entry.remote.noteBytes + missingBlobBytes,
+            transferHintBytes: isDeleteStatus ? 0 : entry.remote.noteBytes + missingBlobBytes,
             comparison: entry,
           });
         } else if (entry.local) {
-          const missingBlobBytes = entry.local.blobHashes.reduce(
-            (sum, h) =>
-              cmp.remoteBlobKeys.has(h) ? sum : sum + (entry.local!.blobMeta[h]?.size ?? 0),
-            0
-          );
+          const missingBlobBytes = isDeleteStatus
+            ? 0
+            : entry.local.blobHashes.reduce(
+                (sum, h) =>
+                  cmp.remoteBlobKeys.has(h) ? sum : sum + (entry.local!.blobMeta[h]?.size ?? 0),
+                0
+              );
           list.push({
             id: entry.id,
             title: entry.local.title.trim() || 'Unbenannte Notiz',
@@ -448,7 +455,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
             updatedAt: entry.local.updatedAt,
             sizeBytes: entry.local.estimatedNoteBytes + entry.local.totalBlobBytes,
             transferHintBytes:
-              entry.status === 'synced'
+              entry.status === 'synced' || isDeleteStatus
                 ? 0
                 : entry.local.estimatedNoteBytes + missingBlobBytes,
             comparison: entry,
@@ -658,7 +665,9 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
         out.push(entry);
       } else if (
         tab === 'backup' &&
-        (entry.status === 'conflict' || entry.status === 'remote-ahead')
+        (entry.status === 'conflict' ||
+          entry.status === 'remote-ahead' ||
+          entry.status === 'deleted-remote')
       ) {
         out.push(entry);
       } else if (
@@ -682,6 +691,8 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
       ids = [
         ...p.uploadConflictLocalFolderIds,
         ...p.downloadConflictRemoteFolderIds,
+        ...p.deleteLocalConflictFolderIds,
+        ...p.deleteRemoteConflictFolderIds,
         ...p.skippedConflictFolderIds,
       ];
     } else if (tab === 'backup') {
@@ -698,13 +709,17 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
   });
 
-  // Explicit lists of items that will be overwritten/replaced (split into local vs. remote targets)
+  // Explicit lists of items that will be overwritten/replaced or deleted (split into local vs. remote targets)
   const replacedItemsSummary = createMemo(() => {
     const empty = {
       localNotes: [] as { id: string; title: string; kind: 'update' | 'conflict' }[],
       localFolders: [] as { id: string; name: string; kind: 'update' | 'conflict' }[],
       remoteNotes: [] as { id: string; title: string; kind: 'update' | 'conflict' }[],
       remoteFolders: [] as { id: string; name: string; kind: 'update' | 'conflict' }[],
+      localDeletedNotes: [] as { id: string; title: string }[],
+      localDeletedFolders: [] as { id: string; name: string }[],
+      remoteDeletedNotes: [] as { id: string; title: string }[],
+      remoteDeletedFolders: [] as { id: string; name: string }[],
     };
     const cmp = comparison();
     const tab = activeTab();
@@ -762,6 +777,28 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
             kind: 'update' as const,
           })),
         ],
+        localDeletedNotes: [...p.deleteLocalNoteIds, ...p.deleteLocalConflictNoteIds].map((id) => ({
+          id,
+          title: cmp.notesById.get(id)?.local?.title.trim() || 'Unbenannte Notiz',
+        })),
+        localDeletedFolders: [...p.deleteLocalFolderIds, ...p.deleteLocalConflictFolderIds].map(
+          (id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.local?.name || 'Ordner',
+          })
+        ),
+        remoteDeletedNotes: [...p.deleteRemoteNoteIds, ...p.deleteRemoteConflictNoteIds].map(
+          (id) => ({
+            id,
+            title: cmp.notesById.get(id)?.remote?.title.trim() || 'Unbenannte Notiz',
+          })
+        ),
+        remoteDeletedFolders: [...p.deleteRemoteFolderIds, ...p.deleteRemoteConflictFolderIds].map(
+          (id) => ({
+            id,
+            name: cmp.foldersById.get(id)?.remote?.name || 'Ordner',
+          })
+        ),
       };
     }
 
@@ -846,6 +883,14 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
         p.uploadNewFolderIds.length +
         p.uploadUpdateFolderIds.length +
         p.uploadConflictLocalFolderIds.length +
+        p.deleteLocalNoteIds.length +
+        p.deleteLocalConflictNoteIds.length +
+        p.deleteLocalFolderIds.length +
+        p.deleteLocalConflictFolderIds.length +
+        p.deleteRemoteNoteIds.length +
+        p.deleteRemoteConflictNoteIds.length +
+        p.deleteRemoteFolderIds.length +
+        p.deleteRemoteConflictFolderIds.length +
         p.keepBothConflictNoteIds.length;
       const settingsActive =
         syncSettingsMode() === 'upload' ||
@@ -922,6 +967,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
       if (res.uploadedNotes > 0 || res.uploadedFolders > 0) {
         parts.push(
           `↑ ${res.uploadedNotes} Notiz(en)${res.uploadedFolders > 0 ? `, ${res.uploadedFolders} Ordner` : ''} hochgeladen`
+        );
+      }
+      if (res.deletedLocalNotes > 0 || res.deletedLocalFolders > 0) {
+        parts.push(
+          `↓ ${res.deletedLocalNotes + res.deletedLocalFolders} lokal entfernt`
+        );
+      }
+      if (res.deletedRemoteNotes > 0 || res.deletedRemoteFolders > 0) {
+        parts.push(
+          `↑ ${res.deletedRemoteNotes + res.deletedRemoteFolders} online entfernt`
         );
       }
       if (res.copiedConflictNotes > 0) {
@@ -1128,14 +1183,18 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
       if (status === 'local-ahead') return <span class="cloud-badge is-upload">↑ Hochladen</span>;
       if (status === 'remote-only') return <span class="cloud-badge is-download">↓ Neu laden</span>;
       if (status === 'remote-ahead') return <span class="cloud-badge is-download">↓ Laden</span>;
+      if (status === 'deleted-local') return <span class="cloud-badge is-delete">↑ Online löschen</span>;
+      if (status === 'deleted-remote') return <span class="cloud-badge is-delete">↓ Lokal löschen</span>;
       return <span class="cloud-badge is-conflict">Konflikt</span>;
     }
     if (tab === 'backup') {
       if (status === 'local-only') return <span class="cloud-badge is-new">Neu</span>;
       if (status === 'local-ahead') return <span class="cloud-badge is-update">Geändert</span>;
+      if (status === 'deleted-remote') return <span class="cloud-badge is-conflict">Online gelöscht</span>;
       return <span class="cloud-badge is-conflict">Konflikt</span>;
     }
     if (status === 'remote-only') return <span class="cloud-badge is-new">Neu</span>;
+    if (status === 'deleted-local') return <span class="cloud-badge is-new">Wiederherstellen</span>;
     if (status === 'remote-ahead') return <span class="cloud-badge is-update">Aktueller</span>;
     return <span class="cloud-badge is-conflict">Konflikt</span>;
   };
@@ -1173,11 +1232,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
         class="cloud-tree-note"
         classList={{
           'is-selected': isChecked(),
+          'is-delete':
+            tab() === 'sync' &&
+            (note.comparison.status === 'deleted-local' ||
+              note.comparison.status === 'deleted-remote'),
           'is-conflict':
             (tab() === 'sync' && note.comparison.status === 'conflict') ||
             (tab() === 'backup' &&
               (note.comparison.status === 'conflict' ||
-                note.comparison.status === 'remote-ahead')) ||
+                note.comparison.status === 'remote-ahead' ||
+                note.comparison.status === 'deleted-remote')) ||
             (tab() === 'import' &&
               (note.comparison.status === 'conflict' ||
                 note.comparison.status === 'local-ahead')),
@@ -1198,7 +1262,14 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
           <span class="cloud-tree-note-sub">
             {note.pageCount} {note.pageCount === 1 ? 'Seite' : 'Seiten'} ·{' '}
             {formatBytes(note.sizeBytes)}
-            <Show when={note.comparison.status !== 'synced' && note.transferHintBytes < note.sizeBytes * 0.7}>
+            <Show
+              when={
+                note.comparison.status !== 'synced' &&
+                note.comparison.status !== 'deleted-local' &&
+                note.comparison.status !== 'deleted-remote' &&
+                note.transferHintBytes < note.sizeBytes * 0.7
+              }
+            >
               {' '}
               · <strong>nur ~{formatBytes(note.transferHintBytes)} Transfer</strong>
             </Show>
@@ -1987,7 +2058,9 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                     ...syncNoteConflicts(),
                                   };
                                   for (const n of conflictingSelectedNotes()) {
-                                    next[n.id] = 'keep-both';
+                                    if (n.local && n.remote) {
+                                      next[n.id] = 'keep-both';
+                                    }
                                   }
                                   setSyncNoteConflicts(next);
                                 }}
@@ -2116,7 +2189,9 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                     ...importConflicts(),
                                   };
                                   for (const n of conflictingSelectedNotes()) {
-                                    next[n.id] = 'keep-both';
+                                    if (n.local && n.remote) {
+                                      next[n.id] = 'keep-both';
+                                    }
                                   }
                                   setImportConflicts(next);
                                 }}
@@ -2175,13 +2250,15 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                     </div>
                                     <div class="cloud-conflict-times">
                                       <span>
-                                        Lokal: {formatShortDate(entry.local?.updatedAt)} (
-                                        {entry.local?.pageCount ?? 0} S.)
+                                        {entry.local
+                                          ? `Lokal: ${formatShortDate(entry.local.updatedAt)} (${entry.local.pageCount} S.)`
+                                          : 'Lokal: Gelöscht'}
                                       </span>
                                       <span>·</span>
                                       <span>
-                                        Online: {formatShortDate(entry.remote?.updatedAt)} (
-                                        {entry.remote?.pageCount ?? 0} S.)
+                                        {entry.remote
+                                          ? `Online: ${formatShortDate(entry.remote.updatedAt)} (${entry.remote.pageCount} S.)`
+                                          : 'Online: Gelöscht'}
                                       </span>
                                     </div>
                                   </div>
@@ -2202,20 +2279,24 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                         >
                                           Überspringen
                                         </button>
-                                        <button
-                                          type="button"
-                                          class="seg-btn"
-                                          classList={{ 'is-active': syncChoice() === 'keep-both' }}
-                                          onClick={() =>
-                                            setSyncNoteConflicts((p) => ({
-                                              ...p,
-                                              [entry.id]: 'keep-both',
-                                            }))
-                                          }
-                                          title="Beide Versionen auf beiden Geräten behalten (Online-Stand als Kopie)"
-                                        >
-                                          Beide
-                                        </button>
+                                        <Show when={Boolean(entry.local && entry.remote)}>
+                                          <button
+                                            type="button"
+                                            class="seg-btn"
+                                            classList={{
+                                              'is-active': syncChoice() === 'keep-both',
+                                            }}
+                                            onClick={() =>
+                                              setSyncNoteConflicts((p) => ({
+                                                ...p,
+                                                [entry.id]: 'keep-both',
+                                              }))
+                                            }
+                                            title="Beide Versionen auf beiden Geräten behalten (Online-Stand als Kopie)"
+                                          >
+                                            Beide
+                                          </button>
+                                        </Show>
                                         <button
                                           type="button"
                                           class="seg-btn is-warn-seg"
@@ -2226,9 +2307,17 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                               [entry.id]: 'use-local',
                                             }))
                                           }
-                                          title="Lokale Version hochladen (ersetzt Online-Version)"
+                                          title={
+                                            !entry.local
+                                              ? 'Notiz auch online löschen'
+                                              : 'Lokale Version hochladen'
+                                          }
                                         >
-                                          ↑ Lokal
+                                          {!entry.local
+                                            ? '↑ Online löschen'
+                                            : !entry.remote
+                                              ? '↑ Hochladen'
+                                              : '↑ Lokal'}
                                         </button>
                                         <button
                                           type="button"
@@ -2240,9 +2329,17 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                               [entry.id]: 'use-remote',
                                             }))
                                           }
-                                          title="Online-Version herunterladen (ersetzt lokale Version)"
+                                          title={
+                                            !entry.remote
+                                              ? 'Notiz auch lokal löschen'
+                                              : 'Online-Version herunterladen'
+                                          }
                                         >
-                                          ↓ Online
+                                          {!entry.remote
+                                            ? '↓ Lokal löschen'
+                                            : !entry.local
+                                              ? '↓ Wiederherstellen'
+                                              : '↓ Online'}
                                         </button>
                                       </div>
                                     </Show>
@@ -2346,8 +2443,10 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                     <div class="cloud-conflict-name">
                                       <IconFolder size={13} />
                                       <span>
-                                        Ordner: Lokal „{fEntry.local?.name ?? '–'}“ vs. Online „
-                                        {fEntry.remote?.name ?? '–'}“
+                                        Ordner: Lokal{' '}
+                                        {fEntry.local ? `„${fEntry.local.name}“` : '(gelöscht)'} vs.
+                                        Online{' '}
+                                        {fEntry.remote ? `„${fEntry.remote.name}“` : '(gelöscht)'}
                                       </span>
                                     </div>
                                   </div>
@@ -2418,7 +2517,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                             }))
                                           }
                                         >
-                                          ↑ Lokal
+                                          {!fEntry.local ? '↑ Online löschen' : '↑ Lokal'}
                                         </button>
                                         <button
                                           type="button"
@@ -2433,7 +2532,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                             }))
                                           }
                                         >
-                                          ↓ Online
+                                          {!fEntry.remote ? '↓ Lokal löschen' : '↓ Online'}
                                         </button>
                                       </div>
                                     </Show>
@@ -2509,6 +2608,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                               p().uploadNewFolderIds.length +
                               p().uploadUpdateFolderIds.length +
                               p().uploadConflictLocalFolderIds.length;
+                            const delLocal = () =>
+                              p().deleteLocalNoteIds.length +
+                              p().deleteLocalConflictNoteIds.length +
+                              p().deleteLocalFolderIds.length +
+                              p().deleteLocalConflictFolderIds.length;
+                            const delRemote = () =>
+                              p().deleteRemoteNoteIds.length +
+                              p().deleteRemoteConflictNoteIds.length +
+                              p().deleteRemoteFolderIds.length +
+                              p().deleteRemoteConflictFolderIds.length;
                             return (
                               <>
                                 <span class="cloud-stat-chip is-download">
@@ -2519,6 +2628,16 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                                   ↑ Hochladen: {ulNotes()} Notizen
                                   <Show when={ulFolders() > 0}>, {ulFolders()} Ordner</Show>
                                 </span>
+                                <Show when={delLocal() > 0}>
+                                  <span class="cloud-stat-chip is-danger">
+                                    ↓ Lokal löschen: {delLocal()}
+                                  </span>
+                                </Show>
+                                <Show when={delRemote() > 0}>
+                                  <span class="cloud-stat-chip is-danger">
+                                    ↑ Online löschen: {delRemote()}
+                                  </span>
+                                </Show>
                                 <Show when={p().keepBothConflictNoteIds.length > 0}>
                                   <span class="cloud-stat-chip is-new">
                                     Beide (Kopie): {p().keepBothConflictNoteIds.length}
@@ -2731,6 +2850,100 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
                         </div>
                       </Show>
 
+                      {/* Explicit list of LOCAL entries that will be deleted */}
+                      <Show
+                        when={
+                          replacedItemsSummary().localDeletedNotes.length > 0 ||
+                          replacedItemsSummary().localDeletedFolders.length > 0
+                        }
+                      >
+                        <div class="cloud-replace-preview">
+                          <div class="cloud-replace-title">
+                            Folgende lokale Einträge werden gelöscht (online entfernt):
+                          </div>
+                          <div class="cloud-replace-chips">
+                            <For each={replacedItemsSummary().localDeletedFolders.slice(0, 8)}>
+                              {(f) => (
+                                <span class="cloud-replace-chip is-delete">
+                                  <IconFolder size={11} />
+                                  <span>{f.name}</span>
+                                </span>
+                              )}
+                            </For>
+                            <For each={replacedItemsSummary().localDeletedNotes.slice(0, 10)}>
+                              {(n) => (
+                                <span class="cloud-replace-chip is-delete">
+                                  <IconFileText size={11} />
+                                  <span>{n.title}</span>
+                                </span>
+                              )}
+                            </For>
+                            <Show
+                              when={
+                                replacedItemsSummary().localDeletedNotes.length +
+                                  replacedItemsSummary().localDeletedFolders.length >
+                                18
+                              }
+                            >
+                              <span class="cloud-replace-more">
+                                +
+                                {replacedItemsSummary().localDeletedNotes.length +
+                                  replacedItemsSummary().localDeletedFolders.length -
+                                  18}{' '}
+                                weitere
+                              </span>
+                            </Show>
+                          </div>
+                        </div>
+                      </Show>
+
+                      {/* Explicit list of REMOTE entries that will be deleted */}
+                      <Show
+                        when={
+                          replacedItemsSummary().remoteDeletedNotes.length > 0 ||
+                          replacedItemsSummary().remoteDeletedFolders.length > 0
+                        }
+                      >
+                        <div class="cloud-replace-preview">
+                          <div class="cloud-replace-title">
+                            Folgende Online-Einträge werden gelöscht (lokal entfernt):
+                          </div>
+                          <div class="cloud-replace-chips">
+                            <For each={replacedItemsSummary().remoteDeletedFolders.slice(0, 8)}>
+                              {(f) => (
+                                <span class="cloud-replace-chip is-delete">
+                                  <IconFolder size={11} />
+                                  <span>{f.name}</span>
+                                </span>
+                              )}
+                            </For>
+                            <For each={replacedItemsSummary().remoteDeletedNotes.slice(0, 10)}>
+                              {(n) => (
+                                <span class="cloud-replace-chip is-delete">
+                                  <IconFileText size={11} />
+                                  <span>{n.title}</span>
+                                </span>
+                              )}
+                            </For>
+                            <Show
+                              when={
+                                replacedItemsSummary().remoteDeletedNotes.length +
+                                  replacedItemsSummary().remoteDeletedFolders.length >
+                                18
+                              }
+                            >
+                              <span class="cloud-replace-more">
+                                +
+                                {replacedItemsSummary().remoteDeletedNotes.length +
+                                  replacedItemsSummary().remoteDeletedFolders.length -
+                                  18}{' '}
+                                weitere
+                              </span>
+                            </Show>
+                          </div>
+                        </div>
+                      </Show>
+
                       {/* Optional global settings control */}
                       <Show
                         when={activeTab() === 'sync'}
@@ -2792,7 +3005,7 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
 
                       <div class="cloud-safety-note">
                         {activeTab() === 'sync'
-                          ? 'Sicherheitsgarantie: Beim Synchronisieren werden niemals Notizen oder Ordner gelöscht — neue und geänderte Einträge werden in beide Richtungen zusammengeführt.'
+                          ? 'Hinweis: Gelöschte Notizen & Ordner werden beim Synchronisieren in beide Richtungen abgeglichen (oben rot markiert). Im Tab „Importieren“ wird lokal niemals gelöscht.'
                           : activeTab() === 'import'
                             ? 'Sicherheitsgarantie: Beim Online-Import werden niemals lokale Notizen oder Ordner gelöscht.'
                             : 'Sicherheitsgarantie: Nicht ausgewählte Notizen im Bucket bleiben vollständig erhalten.'}

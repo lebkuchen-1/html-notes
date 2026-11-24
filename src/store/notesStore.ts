@@ -24,6 +24,11 @@ import {
   readQuickImportFromClipboard,
   type QuickImportPayload,
 } from '../utils/clipboardImport';
+import {
+  clearLocalDeletions,
+  recordLocalFolderDeletion,
+  recordLocalNoteDeletion,
+} from '../utils/cloudSync';
 import { requestPersistentStorage } from '../utils/db';
 import { isCloudConfigComplete, loadCloudConfig } from '../utils/s3Client';
 import {
@@ -826,6 +831,9 @@ export function createNotesStore() {
     if (!target) return;
     const toRemove = getDescendantFolderIds(id);
     const fallbackParent = target.parentId;
+    for (const fid of toRemove) {
+      recordLocalFolderDeletion(fid);
+    }
 
     setFolders((prev) => prev.filter((f) => !toRemove.has(f.id)));
     // Move notes from deleted folder(s) safely to parent folder (or root), never deleting notes
@@ -1207,6 +1215,7 @@ export function createNotesStore() {
   };
 
   const deleteNote = (id: string) => {
+    recordLocalNoteDeletion(id);
     const prevTabs = openTabIds();
     const tabIdx = prevTabs.indexOf(id);
     const remainingTabs = prevTabs.filter((t) => t !== id);
@@ -1870,17 +1879,32 @@ export function createNotesStore() {
   const applyCloudImport = (payload: {
     upsertNotes: Note[];
     upsertFolders: Folder[];
+    deleteNoteIds?: string[];
+    deleteFolderIds?: string[];
     settings?: AppSettings | null;
   }) => {
     const incomingFolders = payload.upsertFolders;
     const incomingNotes = payload.upsertNotes;
+    const deleteNoteIdSet = new Set(payload.deleteNoteIds ?? []);
+    const deleteFolderIdSet = new Set(payload.deleteFolderIds ?? []);
+
+    if (incomingNotes.length > 0 || incomingFolders.length > 0) {
+      clearLocalDeletions(
+        incomingNotes.map((n) => n.id),
+        incomingFolders.map((f) => f.id)
+      );
+    }
 
     batch(() => {
-      if (incomingFolders.length > 0) {
+      // 1. Upsert & delete folders
+      if (incomingFolders.length > 0 || deleteFolderIdSet.size > 0) {
         setFolders((prev) => {
           const map = new Map(prev.map((f) => [f.id, f]));
           for (const f of incomingFolders) {
             map.set(f.id, f);
+          }
+          for (const fid of deleteFolderIdSet) {
+            map.delete(fid);
           }
           const merged = [...map.values()];
           const validIds = new Set(merged.map((f) => f.id));
@@ -1894,12 +1918,26 @@ export function createNotesStore() {
             }))
             .sort((a, b) => a.createdAt - b.createdAt);
         });
+
+        if (selectedFolderId() && deleteFolderIdSet.has(selectedFolderId()!)) {
+          setSelectedFolderId(null);
+          setFilterMode('all');
+        }
       }
 
-      if (incomingNotes.length > 0) {
-        const replacedIds = new Set(incomingNotes.map((n) => n.id));
+      // 2. Upsert & delete notes (and rescue any surviving notes whose folder was deleted)
+      if (
+        incomingNotes.length > 0 ||
+        deleteNoteIdSet.size > 0 ||
+        deleteFolderIdSet.size > 0
+      ) {
+        const affectedHistoryIds = new Set<string>([
+          ...incomingNotes.map((n) => n.id),
+          ...deleteNoteIdSet,
+        ]);
         const validFolderIds = new Set(folders().map((f) => f.id));
         for (const f of incomingFolders) validFolderIds.add(f.id);
+        for (const fid of deleteFolderIdSet) validFolderIds.delete(fid);
 
         setNotes((prev) => {
           const map = new Map(prev.map((n) => [n.id, n]));
@@ -1909,18 +1947,47 @@ export function createNotesStore() {
               folderId: n.folderId && validFolderIds.has(n.folderId) ? n.folderId : null,
             });
           }
-          return [...map.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+          for (const nid of deleteNoteIdSet) {
+            map.delete(nid);
+          }
+          const remaining = [...map.values()]
+            .map((n) =>
+              n.folderId && !validFolderIds.has(n.folderId)
+                ? { ...n, folderId: null }
+                : n
+            )
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+
+          if (deleteNoteIdSet.size > 0) {
+            const remainingTabs = openTabIds().filter((t) => !deleteNoteIdSet.has(t));
+            setOpenTabIds(remainingTabs);
+            if (activeNoteId() && deleteNoteIdSet.has(activeNoteId()!)) {
+              if (remainingTabs[0]) {
+                setActiveNoteId(remainingTabs[0]);
+              } else if (remaining[0]) {
+                setOpenTabIds([remaining[0].id]);
+                setActiveNoteId(remaining[0].id);
+              } else {
+                setActiveNoteId(null);
+                setActiveScreen('home');
+              }
+            }
+          }
+
+          return remaining;
         });
 
-        // Clear stale undo history only for notes whose contents were replaced
-        setHistories((prev) => {
-          const next: Record<string, HistoryState> = {};
-          for (const [k, v] of Object.entries(prev)) {
-            const noteId = k.split(':')[0];
-            if (!replacedIds.has(noteId)) next[k] = v;
-          }
-          return next;
-        });
+        // Clear stale undo history for replaced or deleted notes
+        if (affectedHistoryIds.size > 0) {
+          setHistories((prev) => {
+            const next: Record<string, HistoryState> = {};
+            for (const [k, v] of Object.entries(prev)) {
+              const noteId = k.split(':')[0];
+              if (!affectedHistoryIds.has(noteId)) next[k] = v;
+            }
+            return next;
+          });
+        }
       }
 
       if (payload.settings) {
