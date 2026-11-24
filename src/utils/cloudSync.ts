@@ -207,6 +207,44 @@ export function uint8ArrayToDataUrl(bytes: Uint8Array, mime: string): string {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+const STREAM_CHUNK_SIZE = 64 * 1024;
+
+/**
+ * Pipes bytes through a Web TransformStream (CompressionStream / DecompressionStream)
+ * while CONCURRENTLY draining its readable side.
+ * IMPORTANT: Awaiting `writer.write()` before reading `stream.readable` deadlocks on any
+ * payload larger than the stream's internal highWaterMark (~16–64 KB) in Safari & Chromium!
+ */
+async function runTransformStream(
+  transform: CompressionStream | DecompressionStream,
+  input: Uint8Array
+): Promise<Uint8Array> {
+  const readPromise = new Response(transform.readable).arrayBuffer();
+  const writer = transform.writable.getWriter();
+
+  const writePromise = (async () => {
+    try {
+      for (let offset = 0; offset < input.byteLength; offset += STREAM_CHUNK_SIZE) {
+        const end = Math.min(offset + STREAM_CHUNK_SIZE, input.byteLength);
+        const chunk = new Uint8Array(end - offset);
+        chunk.set(input.subarray(offset, end));
+        await writer.write(chunk);
+      }
+      await writer.close();
+    } catch (err) {
+      try {
+        await writer.abort(err);
+      } catch {
+        // ignore secondary abort errors
+      }
+      throw err;
+    }
+  })();
+
+  const [outBuf] = await Promise.all([readPromise, writePromise]);
+  return new Uint8Array(outBuf);
+}
+
 export async function compressJsonPayload(obj: unknown): Promise<{
   bytes: Uint8Array;
   compressed: boolean;
@@ -216,14 +254,8 @@ export async function compressJsonPayload(obj: unknown): Promise<{
     return { bytes: rawBytes, compressed: false };
   }
   try {
-    const cs = new CompressionStream('gzip');
-    const writer = cs.writable.getWriter();
-    const copy = new Uint8Array(rawBytes.byteLength);
-    copy.set(rawBytes);
-    await writer.write(copy);
-    await writer.close();
-    const compressedBuf = await new Response(cs.readable).arrayBuffer();
-    return { bytes: new Uint8Array(compressedBuf), compressed: true };
+    const compressedBytes = await runTransformStream(new CompressionStream('gzip'), rawBytes);
+    return { bytes: compressedBytes, compressed: true };
   } catch {
     return { bytes: rawBytes, compressed: false };
   }
@@ -232,14 +264,8 @@ export async function compressJsonPayload(obj: unknown): Promise<{
 export async function decompressJsonPayload<T>(bytes: Uint8Array): Promise<T> {
   const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
   if (isGzip && typeof DecompressionStream !== 'undefined') {
-    const ds = new DecompressionStream('gzip');
-    const writer = ds.writable.getWriter();
-    const copy = new Uint8Array(bytes.byteLength);
-    copy.set(bytes);
-    await writer.write(copy);
-    await writer.close();
-    const plainBuf = await new Response(ds.readable).arrayBuffer();
-    return JSON.parse(textDecoder.decode(plainBuf)) as T;
+    const plainBytes = await runTransformStream(new DecompressionStream('gzip'), bytes);
+    return JSON.parse(textDecoder.decode(plainBytes)) as T;
   }
   return JSON.parse(textDecoder.decode(bytes)) as T;
 }
@@ -728,6 +754,17 @@ export async function executeCloudBackup(
     ...plan.overwriteRemoteFolderIds,
   ];
 
+  const totalSteps = Math.max(1, noteIdsToUpload.length + 1);
+
+  options.onProgress?.({
+    phase: 'uploading',
+    label: 'Bereite Online-Backup vor…',
+    detail: 'Prüfe aktuellen Online-Index',
+    current: 0,
+    total: totalSteps,
+    bytesTransferred: 0,
+  });
+
   // Fetch freshest remote manifest right before writing so concurrent devices don't lose entries
   const latestRemote = (await fetchRemoteManifest(config, options.signal)) ?? comparison.manifest;
   const mergedManifest: CloudManifest = {
@@ -781,8 +818,6 @@ export async function executeCloudBackup(
     baseline.lastBackupAt = Date.now();
     saveCloudBaseline(config, baseline);
   };
-
-  const totalSteps = Math.max(1, noteIdsToUpload.length + 1);
 
   for (let i = 0; i < noteIdsToUpload.length; i++) {
     if (options.signal?.aborted) {
@@ -842,6 +877,14 @@ export async function executeCloudBackup(
         knownRemoteBlobs.add(hash);
         uploadedBlobs++;
         bytesUploaded += blobData.bytes.byteLength;
+        options.onProgress?.({
+          phase: 'uploading',
+          label: `Medium ${bIdx + 1}/${entries.length} für „${noteLabel}“ hochgeladen`,
+          detail: `${(blobData.bytes.byteLength / 1024).toFixed(0)} KB`,
+          current: i,
+          total: totalSteps,
+          bytesTransferred: bytesUploaded,
+        });
       }
     }
 
@@ -860,6 +903,14 @@ export async function executeCloudBackup(
       options.signal
     );
     bytesUploaded += notePayload.byteLength;
+    options.onProgress?.({
+      phase: 'uploading',
+      label: `Notiz ${i + 1} von ${noteIdsToUpload.length} gesichert`,
+      detail: noteLabel,
+      current: i + 1,
+      total: totalSteps,
+      bytesTransferred: bytesUploaded,
+    });
 
     const blobHashes = Object.keys(blobMeta).sort();
     const totalBlobBytes = blobHashes.reduce((s, h) => s + (blobMeta[h]?.size ?? 0), 0);

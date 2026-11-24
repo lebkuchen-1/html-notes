@@ -833,10 +833,10 @@ export function CloudBackupDialog(props: CloudBackupDialogProps) {
     }
     saveCloudConfig(normalized);
     setConfigDraft(normalized);
+    setComparison(null);
     props.store.bumpCloudConfigVersion();
     props.store.showToast('Cloud-Verbindung lokal gespeichert');
     props.store.setCloudSyncTab('backup');
-    void runComparison();
   };
 
   const handleDeleteConfig = () => {

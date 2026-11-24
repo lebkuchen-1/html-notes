@@ -2,16 +2,15 @@
 
 > Kurzfristige Übergabe für die nächste Session. Wird nach jeder abgeschlossenen Session überschrieben bzw. bereinigt. Langfristige Architektur- & Plattform-Regeln stehen in `AGENTS.md`.
 
-**Stand:** 2026-11-22 · Branch `main` (alle Änderungen gebaut & auf GitHub Pages deployed)
+**Stand:** 2026-11-24 · Branch `main` (alle Änderungen gebaut & auf GitHub Pages deployed)
 
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **Speicher-Architektur v2 gegen 8+ GB WebKit-IndexedDB-Bloat & Binär-Strichformat (`src/utils/strokeCodec.ts`, `src/utils/db.ts`, `src/utils/storage.ts`, `src/store/notesStore.ts`, `src/components/CanvasPageSheet.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/utils/lasso.ts`, `src/components/SettingsPage.tsx`, `src/styles.css`):**
-   - **Normalisierte IndexedDB v2 (`notizblock-db-v2a` / `v2b`):** Trennung in `notes` (Metadaten), `pages` (Metadaten), `strokeChunks` (binäre `Uint8Array`-Chunks à max. 64 Striche — beim Zeichnen wird nur der letzte geänderte Chunk ~1–10 KB geschrieben) und `blobs` (deduplizierte rohe `Uint8Array`-Medien statt Base64-Strings). Inaktive DB-Verbindungen schließen nach 25 s für sauberes SQLite-WAL-Checkpointing.
-   - **Binärer Strich-Codec + Subpixel-Optimierung (`strokeCodec.ts`):** Druck-/geschwindigkeitsbewusstes RDP (`0,22 px` Toleranz), 0,1-px-Quantisierung, Weglassen ungenutzter `t`-Zeitstempel bei Kuli/Marker/Formen sowie Delta-ZigZag-Varint-Binärkodierung (`~80–220 B` pro Strich).
-   - **Transparente Speicher-Aufschlüsselung & „Speicher komprimieren“ in den Einstellungen:** Zeigt Browser-Speicher vs. tatsächliche Nutzdaten (`Striche binär`, `PDFs & Bilder`, `Browser-DB-Altlast`) inkl. 1-Klick-Slot-Swap-Komprimierung (`v2a ↔ v2b`) zur sofortigen Speicherfreigabe auf iPadOS.
-   - **V1→V2-Migrationscode nach erfolgreicher Migration wieder entfernt** (clean codebase ohne Altlasten).
+1. **Cloud-Backup / Backblaze-B2-Hänger bei 0 B behoben (`src/utils/cloudSync.ts`, `src/utils/s3Client.ts`, `src/components/CloudBackupDialog.tsx`):**
+   - **Ursache (`CompressionStream` / `DecompressionStream` Backpressure-Deadlock):** In `compressJsonPayload` und `decompressJsonPayload` wurde bisher `await writer.write(copy); await writer.close();` ausgeführt, *bevor* `new Response(cs.readable).arrayBuffer()` an der Readable-Seite zog. Sobald eine Notiz > ~16–64 KB groß war, lief der interne TransformStream-Puffer voll und das Backup hing still und ohne Konsolenfehler bei `0 B` fest.
+   - **Fix (`runTransformStream`):** `cs.readable` wird jetzt zwingend parallel über `Promise.all` geleert, während `cs.writable` in 64-KB-Chunks beschrieben wird (für Gzip-Kompression **und** -Dekompression).
+   - **Zusätzliche Absicherung:** 60-Sekunden-Request-Timeout in `signedS3Fetch` (`s3Client.ts`), sofortige Live-Fortschritts- & Byte-Updates nach jedem hochgeladenen Medium/Notiz sowie Vermeidung doppelter `runComparison()`-Aufrufe nach dem Speichern der Verbindung.
 
 ## Offene Punkte
-- Keine offenen Punkte.
+- Praxistest von Cloud-Backup & -Import mit Backblaze B2 nach dem Deploy.

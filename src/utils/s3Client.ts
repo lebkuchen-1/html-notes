@@ -368,6 +368,21 @@ async function signedS3Fetch(
     bodyInit = copy.buffer;
   }
 
+  const REQUEST_TIMEOUT_MS = 60_000;
+  const timeoutCtrl = new AbortController();
+  let timedOut = false;
+  const onOuterAbort = () => timeoutCtrl.abort();
+  if (options.signal) {
+    if (options.signal.aborted) {
+      throw new S3RequestError('Vorgang abgebrochen.', 0, 'aborted');
+    }
+    options.signal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    timeoutCtrl.abort();
+  }, REQUEST_TIMEOUT_MS);
+
   try {
     return await fetch(requestUrl, {
       method: options.method,
@@ -375,9 +390,19 @@ async function signedS3Fetch(
       body: bodyInit,
       mode: 'cors',
       cache: 'no-store',
-      signal: options.signal,
+      signal: timeoutCtrl.signal,
     });
   } catch (err) {
+    if (options.signal?.aborted) {
+      throw new S3RequestError('Vorgang abgebrochen.', 0, 'aborted');
+    }
+    if (timedOut) {
+      throw new S3RequestError(
+        'Zeitüberschreitung bei der Übertragung (60 s). Bitte Netzwerkverbindung prüfen.',
+        0,
+        'cors_or_network'
+      );
+    }
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new S3RequestError('Vorgang abgebrochen.', 0, 'aborted');
     }
@@ -386,6 +411,9 @@ async function signedS3Fetch(
       0,
       'cors_or_network'
     );
+  } finally {
+    clearTimeout(timeoutId);
+    options.signal?.removeEventListener('abort', onOuterAbort);
   }
 }
 
