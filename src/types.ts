@@ -230,6 +230,8 @@ export interface Folder {
   name: string;
   color: string;
   parentId: string | null;
+  /** Optional explicit sibling display order (set via drag & drop) */
+  sortOrder?: number;
   createdAt: number;
 }
 
@@ -240,6 +242,8 @@ export interface Note {
   tags: string[];
   pinned: boolean;
   folderId: string | null;
+  /** Optional explicit sibling display order within its folder (set via drag & drop) */
+  sortOrder?: number;
   attachments: NoteImageAttachment[];
   pages: CanvasPage[];
   activePageId: string;

@@ -730,6 +730,10 @@ export function createEmptyNote(title = '', folderId: string | null = null): Not
 }
 
 export function normalizeFolder(raw: Record<string, unknown>): Folder {
+  const sortOrder =
+    typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder)
+      ? raw.sortOrder
+      : undefined;
   return {
     id: typeof raw.id === 'string' ? raw.id : generateId(),
     name:
@@ -741,6 +745,7 @@ export function normalizeFolder(raw: Record<string, unknown>): Folder {
         ? raw.color
         : FOLDER_COLORS[0],
     parentId: typeof raw.parentId === 'string' ? raw.parentId : null,
+    ...(sortOrder !== undefined ? { sortOrder } : {}),
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
   };
 }
@@ -768,6 +773,10 @@ export function normalizeNote(raw: Record<string, unknown>): Note {
 
   const normalizedSettings = normalizeNoteSettings(raw.settings);
   const normalizedFlashcards = normalizeManualFlashcards(raw);
+  const sortOrder =
+    typeof raw.sortOrder === 'number' && Number.isFinite(raw.sortOrder)
+      ? raw.sortOrder
+      : undefined;
 
   return {
     id: typeof raw.id === 'string' ? raw.id : generateId(),
@@ -778,6 +787,7 @@ export function normalizeNote(raw: Record<string, unknown>): Note {
       : [],
     pinned: Boolean(raw.pinned),
     folderId: typeof raw.folderId === 'string' ? raw.folderId : null,
+    ...(sortOrder !== undefined ? { sortOrder } : {}),
     attachments: normalizeAttachments(raw),
     pages,
     activePageId,
@@ -1074,15 +1084,36 @@ function sanitizeNormalizedWorkspace(
     .map(normalizeFolder);
 
   const folderIds = new Set(folders.map((f) => f.id));
+  const folderParentMap = new Map<string, string | null>();
+  for (const f of folders) {
+    const validParent =
+      f.parentId && folderIds.has(f.parentId) && f.parentId !== f.id ? f.parentId : null;
+    folderParentMap.set(f.id, validParent);
+  }
+  // Break any accidental ancestor cycles defensively
+  for (const f of folders) {
+    const visited = new Set<string>([f.id]);
+    let curr = folderParentMap.get(f.id) ?? null;
+    while (curr) {
+      if (visited.has(curr)) {
+        folderParentMap.set(f.id, null);
+        break;
+      }
+      visited.add(curr);
+      curr = folderParentMap.get(curr) ?? null;
+    }
+  }
   folders = folders
     .map((f) => ({
       ...f,
-      parentId:
-        f.parentId && folderIds.has(f.parentId) && f.parentId !== f.id
-          ? f.parentId
-          : null,
+      parentId: folderParentMap.get(f.id) ?? null,
     }))
-    .sort((a, b) => a.createdAt - b.createdAt);
+    .sort((a, b) => {
+      const ao = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const bo = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (ao !== bo) return ao - bo;
+      return a.createdAt - b.createdAt;
+    });
 
   const notes = (normalizedNotes.length > 0 ? normalizedNotes : [createWelcomeNote()])
     .map((n) => ({

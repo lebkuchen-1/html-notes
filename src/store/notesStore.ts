@@ -1002,6 +1002,24 @@ export function createNotesStore() {
     setFilterMode(mode);
   };
 
+  const compareFolders = (a: Folder, b: Folder): number => {
+    const ao = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    const bo = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    if (ao !== bo) return ao - bo;
+    return a.createdAt - b.createdAt;
+  };
+
+  const compareNotesInFolder = (a: Note, b: Note): number => {
+    const aHas = a.sortOrder !== undefined;
+    const bHas = b.sortOrder !== undefined;
+    if (aHas !== bHas) return aHas ? 1 : -1;
+    if (aHas && bHas && a.sortOrder !== b.sortOrder) {
+      return a.sortOrder! - b.sortOrder!;
+    }
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return b.updatedAt - a.updatedAt;
+  };
+
   const createFolder = (
     name: string,
     color?: string,
@@ -1010,11 +1028,17 @@ export function createNotesStore() {
   ) => {
     const trimmed = name.trim();
     if (!trimmed) return null;
+    const siblings = folders().filter((f) => f.parentId === parentId);
+    const hasExplicitOrder = siblings.some((f) => f.sortOrder !== undefined);
+    const maxOrder = hasExplicitOrder
+      ? siblings.reduce((m, f) => Math.max(m, f.sortOrder ?? -1), -1)
+      : undefined;
     const folder: Folder = {
       id: generateId(),
       name: trimmed,
       color: color || FOLDER_COLORS[folders().length % FOLDER_COLORS.length],
       parentId,
+      ...(maxOrder !== undefined ? { sortOrder: maxOrder + 1 } : {}),
       createdAt: Date.now(),
     };
     setFolders((prev) => [...prev, folder]);
@@ -1067,20 +1091,179 @@ export function createNotesStore() {
     showToast(`Ordner „${target.name}“ gelöscht (Notizen bleiben erhalten)`);
   };
 
+  const moveFolder = (
+    folderId: string,
+    targetParentId: string | null,
+    anchor?: { siblingId: string; position: 'before' | 'after' }
+  ): boolean => {
+    const list = folders();
+    const folder = list.find((f) => f.id === folderId);
+    if (!folder) return false;
+
+    // Prevent cycles: a folder cannot be moved into itself or any of its descendants
+    const descendants = getDescendantFolderIds(folderId);
+    if (targetParentId !== null) {
+      if (descendants.has(targetParentId)) return false;
+      if (!list.some((f) => f.id === targetParentId)) return false;
+    }
+    if (anchor && anchor.siblingId === folderId) return false;
+
+    const prevSiblings = list
+      .filter((f) => f.parentId === targetParentId)
+      .sort(compareFolders);
+
+    const siblingsWithoutSelf = prevSiblings.filter((f) => f.id !== folderId);
+    let insertIdx = siblingsWithoutSelf.length;
+    if (anchor) {
+      const anchorIdx = siblingsWithoutSelf.findIndex((f) => f.id === anchor.siblingId);
+      if (anchorIdx >= 0) {
+        insertIdx = anchor.position === 'before' ? anchorIdx : anchorIdx + 1;
+      }
+    } else if (folder.parentId === targetParentId) {
+      // Dropped directly onto current parent with no position change -> no-op
+      return false;
+    }
+
+    const nextSiblings = [...siblingsWithoutSelf];
+    nextSiblings.splice(insertIdx, 0, { ...folder, parentId: targetParentId });
+
+    const parentChanged = folder.parentId !== targetParentId;
+    const orderChanged =
+      prevSiblings.length !== nextSiblings.length ||
+      prevSiblings.some((f, i) => f.id !== nextSiblings[i]?.id);
+
+    if (!parentChanged && !orderChanged) return false;
+
+    const orderMap = new Map<string, number>();
+    nextSiblings.forEach((f, idx) => orderMap.set(f.id, idx));
+
+    setFolders((prev) =>
+      prev
+        .map((f) => {
+          if (f.id === folderId) {
+            return {
+              ...f,
+              parentId: targetParentId,
+              sortOrder: orderMap.get(f.id),
+            };
+          }
+          if (orderMap.has(f.id)) {
+            const nextOrder = orderMap.get(f.id)!;
+            if (f.sortOrder !== nextOrder) {
+              return { ...f, sortOrder: nextOrder };
+            }
+          }
+          return f;
+        })
+        .sort(compareFolders)
+    );
+
+    if (parentChanged) {
+      if (targetParentId) {
+        const targetName = list.find((f) => f.id === targetParentId)?.name ?? 'Ordner';
+        showToast(`Ordner „${folder.name}“ in „${targetName}“ verschoben`);
+      } else {
+        showToast(`Ordner „${folder.name}“ auf oberste Ebene verschoben`);
+      }
+    }
+    return true;
+  };
+
   const moveNoteToFolder = (noteId: string, folderId: string | null) => {
     const note = notes().find((n) => n.id === noteId);
     if (!note || note.folderId === folderId) return;
-    updateNoteById(noteId, (n) => ({
-      ...n,
-      folderId,
-      updatedAt: Date.now(),
-    }));
+    updateNoteById(noteId, (n) => {
+      const next: Note = {
+        ...n,
+        folderId,
+        updatedAt: Date.now(),
+      };
+      delete next.sortOrder;
+      return next;
+    });
     if (folderId) {
       const folderName = folders().find((f) => f.id === folderId)?.name ?? 'Ordner';
       showToast(`In Ordner „${folderName}“ verschoben`);
     } else {
       showToast('Aus Ordner entfernt');
     }
+  };
+
+  const moveAndReorderNote = (
+    noteId: string,
+    targetFolderId: string | null,
+    anchor?: { siblingId: string; position: 'before' | 'after' }
+  ): boolean => {
+    const list = notes();
+    const note = list.find((n) => n.id === noteId);
+    if (!note) return false;
+    if (targetFolderId !== null && !folders().some((f) => f.id === targetFolderId)) {
+      return false;
+    }
+
+    if (!anchor) {
+      if (note.folderId === targetFolderId) return false;
+      moveNoteToFolder(noteId, targetFolderId);
+      return true;
+    }
+
+    if (anchor.siblingId === noteId) return false;
+
+    const prevSiblings = list
+      .filter((n) => n.folderId === targetFolderId)
+      .sort(compareNotesInFolder);
+    const siblingsWithoutSelf = prevSiblings.filter((n) => n.id !== noteId);
+    const anchorIdx = siblingsWithoutSelf.findIndex((n) => n.id === anchor.siblingId);
+    const insertIdx =
+      anchorIdx >= 0
+        ? anchor.position === 'before'
+          ? anchorIdx
+          : anchorIdx + 1
+        : 0;
+
+    const nextSiblings = [...siblingsWithoutSelf];
+    nextSiblings.splice(insertIdx, 0, { ...note, folderId: targetFolderId });
+
+    const folderChanged = note.folderId !== targetFolderId;
+    const orderChanged =
+      prevSiblings.length !== nextSiblings.length ||
+      prevSiblings.some((n, i) => n.id !== nextSiblings[i]?.id);
+
+    if (!folderChanged && !orderChanged) return false;
+
+    const orderMap = new Map<string, number>();
+    nextSiblings.forEach((n, idx) => orderMap.set(n.id, idx));
+    const now = Date.now();
+
+    setNotes((prev) =>
+      prev.map((n) => {
+        if (n.id === noteId) {
+          return {
+            ...n,
+            folderId: targetFolderId,
+            sortOrder: orderMap.get(n.id),
+            ...(folderChanged ? { updatedAt: now } : {}),
+          };
+        }
+        if (orderMap.has(n.id)) {
+          const nextOrder = orderMap.get(n.id)!;
+          if (n.sortOrder !== nextOrder) {
+            return { ...n, sortOrder: nextOrder };
+          }
+        }
+        return n;
+      })
+    );
+
+    if (folderChanged) {
+      if (targetFolderId) {
+        const folderName = folders().find((f) => f.id === targetFolderId)?.name ?? 'Ordner';
+        showToast(`In Ordner „${folderName}“ verschoben`);
+      } else {
+        showToast('Aus Ordner entfernt');
+      }
+    }
+    return true;
   };
 
   const createNote = (explicitFolderId?: string | null) => {
@@ -2550,12 +2733,15 @@ export function createNotesStore() {
     selectedFolderId,
     selectFolder,
     selectFilterMode,
+    getDescendantFolderIds,
     getFolderNoteCount,
     createFolder,
     renameFolder,
     updateFolderColor,
     deleteFolder,
+    moveFolder,
     moveNoteToFolder,
+    moveAndReorderNote,
     viewMode,
     setViewMode,
     theme,

@@ -42,6 +42,7 @@ export interface CloudManifestFolderEntry {
   name: string;
   color: string;
   parentId: string | null;
+  sortOrder?: number;
   createdAt: number;
   folderHash: string;
 }
@@ -448,6 +449,7 @@ async function computeDehydratedNoteHash(dehydrated: Note): Promise<string> {
     tags: dehydrated.tags,
     pinned: dehydrated.pinned,
     folderId: dehydrated.folderId,
+    ...(dehydrated.sortOrder !== undefined ? { sortOrder: dehydrated.sortOrder } : {}),
     attachments: dehydrated.attachments,
     pages: dehydrated.pages,
     activePageId: dehydrated.activePageId,
@@ -457,12 +459,15 @@ async function computeDehydratedNoteHash(dehydrated: Note): Promise<string> {
   return sha256Hex(JSON.stringify(canonical));
 }
 
-export async function computeFolderHash(folder: Pick<Folder, 'name' | 'color' | 'parentId'>): Promise<string> {
+export async function computeFolderHash(
+  folder: Pick<Folder, 'name' | 'color' | 'parentId' | 'sortOrder'>
+): Promise<string> {
   return sha256Hex(
     JSON.stringify({
       name: folder.name,
       color: folder.color,
       parentId: folder.parentId,
+      ...(folder.sortOrder !== undefined ? { sortOrder: folder.sortOrder } : {}),
     })
   );
 }
@@ -471,7 +476,7 @@ export async function computeFolderHash(folder: Pick<Folder, 'name' | 'color' | 
 const noteFingerprintCache = new Map<string, LocalNoteFingerprint>();
 
 export async function fingerprintLocalNote(note: Note): Promise<LocalNoteFingerprint> {
-  const cacheKey = `${note.id}:${note.updatedAt}:${note.folderId ?? ''}:${note.pages.length}`;
+  const cacheKey = `${note.id}:${note.updatedAt}:${note.folderId ?? ''}:${note.sortOrder ?? ''}:${note.pages.length}`;
   const cached = noteFingerprintCache.get(cacheKey);
   if (cached) return cached;
 
@@ -943,6 +948,7 @@ export async function executeCloudBackup(
       name: f.name,
       color: f.color,
       parentId: f.parentId,
+      ...(f.sortOrder !== undefined ? { sortOrder: f.sortOrder } : {}),
       createdAt: f.createdAt,
       folderHash,
     };
@@ -1471,6 +1477,7 @@ export async function executeCloudImport(
         name: remoteF.name,
         color: remoteF.color,
         parentId: remoteF.parentId,
+        ...(remoteF.sortOrder !== undefined ? { sortOrder: remoteF.sortOrder } : {}),
         createdAt: remoteF.createdAt,
       })
     );

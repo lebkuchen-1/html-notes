@@ -66,6 +66,7 @@ interface DbNoteRecord {
   tags: string[];
   pinned: boolean;
   folderId: string | null;
+  sortOrder?: number;
   attachments: NoteImageAttachment[];
   pageIds: string[];
   activePageId: string;
@@ -659,6 +660,9 @@ async function readWorkspaceFromV2Db(db: IDBDatabase): Promise<{
       tags: Array.isArray(rawNote.tags) ? rawNote.tags : [],
       pinned: Boolean(rawNote.pinned),
       folderId: rawNote.folderId ?? null,
+      ...(typeof rawNote.sortOrder === 'number' && Number.isFinite(rawNote.sortOrder)
+        ? { sortOrder: rawNote.sortOrder }
+        : {}),
       attachments,
       pages,
       activePageId: rawNote.activePageId,
@@ -826,6 +830,7 @@ async function writeFullWorkspaceIntoDb(
         tags: note.tags,
         pinned: note.pinned,
         folderId: note.folderId,
+        ...(note.sortOrder !== undefined ? { sortOrder: note.sortOrder } : {}),
         attachments: dehydratedAttachments,
         pageIds: note.pages.map((p) => p.id),
         activePageId: note.activePageId,
@@ -1094,6 +1099,7 @@ export function syncNotesDeltaToIndexedDb(
           tags: note.tags,
           pinned: note.pinned,
           folderId: note.folderId,
+          ...(note.sortOrder !== undefined ? { sortOrder: note.sortOrder } : {}),
           attachments: dehydratedAttachments,
           pageIds: currPageIds,
           activePageId: note.activePageId,
