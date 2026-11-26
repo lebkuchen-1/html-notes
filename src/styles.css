@@ -188,7 +188,7 @@ button {
   box-shadow: 0 0 0 1.5px var(--bg-sidebar);
 }
 
-.sidebar-quickmenu-popover {
+.quick-menu-popover.sidebar-quickmenu-popover {
   left: 8px;
   right: 8px;
   width: auto;
