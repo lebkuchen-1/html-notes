@@ -122,7 +122,6 @@ import {
   IconEyeOff,
   IconFileUp,
   IconFountainPen,
-  IconGrid,
   IconHighlighter,
   IconImage,
   IconLasso,
@@ -136,7 +135,6 @@ import {
   IconRotateCcw,
   IconRuler,
   IconScribble,
-  IconStylus,
   IconSwap,
   IconText,
   IconTrash,
@@ -2574,6 +2572,15 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         setOcclusionDisplayMode(mode);
       },
       selectOcclusionTool: () => selectTool('occlusion'),
+      toggleStylusOnly: () => {
+        const next = !stylusOnly();
+        setStylusOnlyPersisted(next);
+        props.store.showToast(
+          next
+            ? 'Nur-Stift-Modus aktiv (Stift schreibt · 1 Finger scrollt · 2 Finger zoomen)'
+            : 'Touch-Zeichnen aktiv (1 Finger zeichnet · 2 Finger zoomen)'
+        );
+      },
     });
     onCleanup(unregister);
   });
@@ -3419,339 +3426,292 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             />
           </div>
         </Show>
+      </div>
 
-        <div class="toolbar-spacer" />
-
-        {/* Right Side: Compact Paper & Stylus-Only Toggles */}
-        <div class="toolbar-group toolbar-right-group paper-menu-anchor" ref={paperMenuRef}>
-          <button
-            type="button"
-            class="tool-pill paper-trigger-btn is-compact-pill"
-            classList={{ 'is-active': paperMenuOpen() }}
-            onClick={() => {
-              setPenMenuOpen(false);
-              setShapeMenuOpen(false);
-              setMoreToolsMenuOpen(false);
-              setSizeMenuOpen(false);
-              setPaperMenuOpen((v) => !v);
-            }}
-            title="Papier & Hintergrund der aktiven Seite (Farbe, Zeilen, Kästchen)"
-            aria-label="Papier & Hintergrund konfigurieren"
+      {/* Floating Paper / Background Popover (triggered from Quick Menu) */}
+      <Show when={paperMenuOpen()}>
+        <div class="floating-size-popover-anchor" ref={paperMenuRef}>
+          <div
+            class="paper-popover is-floating"
+            role="dialog"
+            aria-label="Hintergrund konfigurieren"
           >
-            <span
-              class="paper-trigger-swatch"
-              style={{ background: resolvedPaperBg() }}
-            />
-            <IconGrid size={14} />
-          </button>
+            <div class="paper-popover-header">
+              <span>Hintergrund ({page()?.title})</span>
+              <button
+                type="button"
+                class="icon-btn-xs"
+                onClick={() => setPaperMenuOpen(false)}
+                aria-label="Schließen"
+              >
+                <IconX size={14} />
+              </button>
+            </div>
 
-          <Show when={paperMenuOpen()}>
-            <div
-              class="paper-popover is-align-right"
-              role="dialog"
-              aria-label="Hintergrund konfigurieren"
-            >
-              <div class="paper-popover-header">
-                <span>Hintergrund ({page()?.title})</span>
-                <button
-                  type="button"
-                  class="icon-btn-xs"
-                  onClick={() => setPaperMenuOpen(false)}
-                  aria-label="Schließen"
-                >
-                  <IconX size={14} />
-                </button>
-              </div>
-
-              <div class="paper-section">
-                <div class="paper-section-label">Muster</div>
-                <div class="pattern-pills">
-                  <For each={PATTERN_OPTIONS}>
-                    {(opt) => (
-                      <button
-                        type="button"
-                        class="pattern-pill"
-                        classList={{ 'is-active': paperConfig().pattern === opt.value }}
-                        onClick={() =>
-                          props.store.updatePaperConfig({ pattern: opt.value })
-                        }
-                      >
-                        {opt.label}
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </div>
-
-              <div class="paper-section">
-                <div class="paper-section-label">Papier-Vorlagen</div>
-                <div class="preset-grid">
-                  <For each={PAPER_PRESETS}>
-                    {(preset) => {
-                      const isSelected = () =>
-                        paperConfig().backgroundColor.toLowerCase() ===
-                        preset.previewBg.toLowerCase();
-                      return (
-                        <button
-                          type="button"
-                          class="preset-card"
-                          classList={{ 'is-active': isSelected() }}
-                          onClick={() => props.store.updatePaperConfig(preset.config)}
-                          title={preset.label}
-                        >
-                          <span
-                            class="preset-thumb"
-                            style={{
-                              '--preset-bg': preset.previewBg,
-                              '--preset-line': preset.previewLine,
-                            }}
-                          />
-                          <span class="preset-label">{preset.label}</span>
-                        </button>
-                      );
-                    }}
-                  </For>
-                </div>
-              </div>
-
-              <div class="paper-section paper-color-row">
-                <div class="paper-color-col">
-                  <div class="paper-section-label">Papierfarbe</div>
-                  <div class="paper-color-controls">
-                    <ColorPickerPopover
-                      variant="pill"
-                      palette="paper"
-                      title="Papierfarbe wählen"
-                      value={resolvedPaperBg()}
-                      onChange={(hex) =>
-                        props.store.updatePaperConfig({
-                          backgroundColor: hex,
-                        })
-                      }
-                    />
+            <div class="paper-section">
+              <div class="paper-section-label">Muster</div>
+              <div class="pattern-pills">
+                <For each={PATTERN_OPTIONS}>
+                  {(opt) => (
                     <button
                       type="button"
-                      class="mini-reset-btn"
+                      class="pattern-pill"
+                      classList={{ 'is-active': paperConfig().pattern === opt.value }}
                       onClick={() =>
-                        props.store.updatePaperConfig({ backgroundColor: 'theme' })
+                        props.store.updatePaperConfig({ pattern: opt.value })
                       }
-                      title="An App-Theme anpassen"
                     >
-                      Theme
+                      {opt.label}
                     </button>
-                  </div>
-                </div>
+                  )}
+                </For>
+              </div>
+            </div>
 
-                <Show when={paperConfig().pattern !== 'blank'}>
-                  <div class="paper-color-col">
-                    <div class="paper-section-label">Linienfarbe</div>
-                    <div class="line-swatches">
-                      <For each={LINE_COLOR_SWATCHES}>
-                        {(sw) => (
-                          <button
-                            type="button"
-                            class="mini-swatch"
-                            classList={{
-                              'is-active': paperConfig().lineColor === sw.value,
-                              'is-auto-swatch': sw.value === 'auto',
-                            }}
-                            style={{
-                              background:
-                                sw.value === 'auto'
-                                  ? 'linear-gradient(135deg, #64748b 50%, #e2e8f0 50%)'
-                                  : sw.value,
-                            }}
-                            onClick={() =>
-                              props.store.updatePaperConfig({ lineColor: sw.value })
-                            }
-                            title={sw.label}
-                          />
-                        )}
-                      </For>
-                      <ColorPickerPopover
-                        size="sm"
-                        palette="ink"
-                        title="Eigene Linienfarbe"
-                        value={
-                          paperConfig().lineColor === 'auto'
-                            ? '#64748b'
-                            : paperConfig().lineColor
-                        }
-                        isCustomActive={
-                          !LINE_COLOR_SWATCHES.some(
-                            (sw) =>
-                              sw.value.toLowerCase() ===
-                              paperConfig().lineColor.toLowerCase()
-                          )
-                        }
-                        onChange={(hex) =>
-                          props.store.updatePaperConfig({
-                            lineColor: hex,
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-                </Show>
+            <div class="paper-section">
+              <div class="paper-section-label">Papier-Vorlagen</div>
+              <div class="preset-grid">
+                <For each={PAPER_PRESETS}>
+                  {(preset) => {
+                    const isSelected = () =>
+                      paperConfig().backgroundColor.toLowerCase() ===
+                      preset.previewBg.toLowerCase();
+                    return (
+                      <button
+                        type="button"
+                        class="preset-card"
+                        classList={{ 'is-active': isSelected() }}
+                        onClick={() => props.store.updatePaperConfig(preset.config)}
+                        title={preset.label}
+                      >
+                        <span
+                          class="preset-thumb"
+                          style={{
+                            '--preset-bg': preset.previewBg,
+                            '--preset-line': preset.previewLine,
+                          }}
+                        />
+                        <span class="preset-label">{preset.label}</span>
+                      </button>
+                    );
+                  }}
+                </For>
+              </div>
+            </div>
+
+            <div class="paper-section paper-color-row">
+              <div class="paper-color-col">
+                <div class="paper-section-label">Papierfarbe</div>
+                <div class="paper-color-controls">
+                  <ColorPickerPopover
+                    variant="pill"
+                    palette="paper"
+                    title="Papierfarbe wählen"
+                    value={resolvedPaperBg()}
+                    onChange={(hex) =>
+                      props.store.updatePaperConfig({
+                        backgroundColor: hex,
+                      })
+                    }
+                  />
+                  <button
+                    type="button"
+                    class="mini-reset-btn"
+                    onClick={() =>
+                      props.store.updatePaperConfig({ backgroundColor: 'theme' })
+                    }
+                    title="An App-Theme anpassen"
+                  >
+                    Theme
+                  </button>
+                </div>
               </div>
 
               <Show when={paperConfig().pattern !== 'blank'}>
-                <div class="paper-section">
-                  <div class="paper-slider-head">
-                    <span class="paper-section-label">
-                      {paperConfig().pattern === 'lined'
-                        ? 'Zeilenabstand'
-                        : paperConfig().pattern === 'grid'
-                          ? 'Kästchengröße'
-                          : 'Punktabstand'}
-                    </span>
-                    <span class="paper-slider-val">{paperConfig().spacing} px</span>
+                <div class="paper-color-col">
+                  <div class="paper-section-label">Linienfarbe</div>
+                  <div class="line-swatches">
+                    <For each={LINE_COLOR_SWATCHES}>
+                      {(sw) => (
+                        <button
+                          type="button"
+                          class="mini-swatch"
+                          classList={{
+                            'is-active': paperConfig().lineColor === sw.value,
+                            'is-auto-swatch': sw.value === 'auto',
+                          }}
+                          style={{
+                            background:
+                              sw.value === 'auto'
+                                ? 'linear-gradient(135deg, #64748b 50%, #e2e8f0 50%)'
+                                : sw.value,
+                          }}
+                          onClick={() =>
+                            props.store.updatePaperConfig({ lineColor: sw.value })
+                          }
+                          title={sw.label}
+                        />
+                      )}
+                    </For>
+                    <ColorPickerPopover
+                      size="sm"
+                      palette="ink"
+                      title="Eigene Linienfarbe"
+                      value={
+                        paperConfig().lineColor === 'auto'
+                          ? '#64748b'
+                          : paperConfig().lineColor
+                      }
+                      isCustomActive={
+                        !LINE_COLOR_SWATCHES.some(
+                          (sw) =>
+                            sw.value.toLowerCase() ===
+                            paperConfig().lineColor.toLowerCase()
+                        )
+                      }
+                      onChange={(hex) =>
+                        props.store.updatePaperConfig({
+                          lineColor: hex,
+                        })
+                      }
+                    />
                   </div>
-                  <input
-                    type="range"
-                    class="paper-range"
-                    min={18}
-                    max={64}
-                    step={2}
-                    value={paperConfig().spacing}
-                    onInput={(e) =>
-                      props.store.updatePaperConfig({
-                        spacing: Number(e.currentTarget.value),
-                      })
-                    }
-                  />
-                  <div class="spacing-presets">
-                    <button
-                      type="button"
-                      class="mini-reset-btn"
-                      onClick={() => props.store.updatePaperConfig({ spacing: 24 })}
-                    >
-                      Eng (24)
-                    </button>
-                    <button
-                      type="button"
-                      class="mini-reset-btn"
-                      onClick={() => props.store.updatePaperConfig({ spacing: 34 })}
-                    >
-                      Standard (34)
-                    </button>
-                    <button
-                      type="button"
-                      class="mini-reset-btn"
-                      onClick={() => props.store.updatePaperConfig({ spacing: 48 })}
-                    >
-                      Groß (48)
-                    </button>
-                  </div>
-                </div>
-
-                <div class="paper-section">
-                  <div class="paper-slider-head">
-                    <span class="paper-section-label">Linien-Intensität</span>
-                    <span class="paper-slider-val">
-                      {Math.round(paperConfig().lineOpacity * 100)}%
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    class="paper-range"
-                    min={0.08}
-                    max={0.75}
-                    step={0.02}
-                    value={paperConfig().lineOpacity}
-                    onInput={(e) =>
-                      props.store.updatePaperConfig({
-                        lineOpacity: Number(e.currentTarget.value),
-                      })
-                    }
-                  />
                 </div>
               </Show>
+            </div>
 
-              <label class="paper-toggle-row">
-                <span>Seitenrand (Randlinie) anzeigen</span>
+            <Show when={paperConfig().pattern !== 'blank'}>
+              <div class="paper-section">
+                <div class="paper-slider-head">
+                  <span class="paper-section-label">
+                    {paperConfig().pattern === 'lined'
+                      ? 'Zeilenabstand'
+                      : paperConfig().pattern === 'grid'
+                        ? 'Kästchengröße'
+                        : 'Punktabstand'}
+                  </span>
+                  <span class="paper-slider-val">{paperConfig().spacing} px</span>
+                </div>
                 <input
-                  type="checkbox"
-                  checked={paperConfig().showMargin}
-                  onChange={(e) =>
+                  type="range"
+                  class="paper-range"
+                  min={18}
+                  max={64}
+                  step={2}
+                  value={paperConfig().spacing}
+                  onInput={(e) =>
                     props.store.updatePaperConfig({
-                      showMargin: e.currentTarget.checked,
+                      spacing: Number(e.currentTarget.value),
                     })
                   }
                 />
-              </label>
+                <div class="spacing-presets">
+                  <button
+                    type="button"
+                    class="mini-reset-btn"
+                    onClick={() => props.store.updatePaperConfig({ spacing: 24 })}
+                  >
+                    Eng (24)
+                  </button>
+                  <button
+                    type="button"
+                    class="mini-reset-btn"
+                    onClick={() => props.store.updatePaperConfig({ spacing: 34 })}
+                  >
+                    Standard (34)
+                  </button>
+                  <button
+                    type="button"
+                    class="mini-reset-btn"
+                    onClick={() => props.store.updatePaperConfig({ spacing: 48 })}
+                  >
+                    Groß (48)
+                  </button>
+                </div>
+              </div>
 
-              <Show when={page()?.backgroundImage}>
-                {(bg) => (
-                  <div class="paper-section paper-bg-img-section">
-                    <div class="paper-slider-head">
-                      <span class="paper-section-label">
-                        {bg().sourceType === 'pdf' ? 'PDF-Hintergrund' : 'Bild-Hintergrund'}
-                      </span>
-                      <span class="paper-slider-val">
-                        {Math.round((bg().opacity ?? 1) * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      class="paper-range"
-                      min={0.1}
-                      max={1}
-                      step={0.05}
-                      value={bg().opacity ?? 1}
-                      onInput={(e) => {
-                        const currId = page()?.id;
-                        if (currId) {
-                          props.store.updatePageBackgroundImage(currId, {
-                            opacity: Number(e.currentTarget.value),
-                          });
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      class="mini-reset-btn is-danger-outline"
-                      onClick={() => {
-                        const currId = page()?.id;
-                        if (currId) {
-                          props.store.updatePageBackgroundImage(currId, null);
-                          props.store.showToast('Seiten-Hintergrundbild entfernt');
-                        }
-                      }}
-                    >
-                      Hintergrundbild entfernen
-                    </button>
+              <div class="paper-section">
+                <div class="paper-slider-head">
+                  <span class="paper-section-label">Linien-Intensität</span>
+                  <span class="paper-slider-val">
+                    {Math.round(paperConfig().lineOpacity * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  class="paper-range"
+                  min={0.08}
+                  max={0.75}
+                  step={0.02}
+                  value={paperConfig().lineOpacity}
+                  onInput={(e) =>
+                    props.store.updatePaperConfig({
+                      lineOpacity: Number(e.currentTarget.value),
+                    })
+                  }
+                />
+              </div>
+            </Show>
+
+            <label class="paper-toggle-row">
+              <span>Seitenrand (Randlinie) anzeigen</span>
+              <input
+                type="checkbox"
+                checked={paperConfig().showMargin}
+                onChange={(e) =>
+                  props.store.updatePaperConfig({
+                    showMargin: e.currentTarget.checked,
+                  })
+                }
+              />
+            </label>
+
+            <Show when={page()?.backgroundImage}>
+              {(bg) => (
+                <div class="paper-section paper-bg-img-section">
+                  <div class="paper-slider-head">
+                    <span class="paper-section-label">
+                      {bg().sourceType === 'pdf' ? 'PDF-Hintergrund' : 'Bild-Hintergrund'}
+                    </span>
+                    <span class="paper-slider-val">
+                      {Math.round((bg().opacity ?? 1) * 100)}%
+                    </span>
                   </div>
-                )}
-              </Show>
-            </div>
-          </Show>
-
-          <button
-            type="button"
-            class="tool-btn stylus-only-btn"
-            classList={{ 'is-stylus-active': stylusOnly() }}
-            onClick={() => {
-              const next = !stylusOnly();
-              setStylusOnlyPersisted(next);
-              props.store.showToast(
-                next
-                  ? 'Nur-Stift-Modus aktiv (Stift schreibt · 1 Finger scrollt · 2 Finger zoomen)'
-                  : 'Touch-Zeichnen aktiv (1 Finger zeichnet · 2 Finger zoomen)'
-              );
-            }}
-            title={
-              stylusOnly()
-                ? 'Nur-Stift-Modus aktiv (Stift schreibt, 1 Finger scrollt)'
-                : 'Touch-Zeichnen aktiv (tippen für Nur-Stift-Modus)'
-            }
-            aria-label="Nur-Stift-Modus umschalten"
-            aria-pressed={stylusOnly()}
-          >
-            <IconStylus size={15} />
-          </button>
+                  <input
+                    type="range"
+                    class="paper-range"
+                    min={0.1}
+                    max={1}
+                    step={0.05}
+                    value={bg().opacity ?? 1}
+                    onInput={(e) => {
+                      const currId = page()?.id;
+                      if (currId) {
+                        props.store.updatePageBackgroundImage(currId, {
+                          opacity: Number(e.currentTarget.value),
+                        });
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    class="mini-reset-btn is-danger-outline"
+                    onClick={() => {
+                      const currId = page()?.id;
+                      if (currId) {
+                        props.store.updatePageBackgroundImage(currId, null);
+                        props.store.showToast('Seiten-Hintergrundbild entfernt');
+                      }
+                    }}
+                  >
+                    Hintergrundbild entfernen
+                  </button>
+                </div>
+              )}
+            </Show>
+          </div>
         </div>
-      </div>
+      </Show>
 
       {/* Floating Page Format Popover (triggered from Quick Menu or Sheet Header dimension pill) */}
       <Show when={!isInfiniteMode() && sizeMenuOpen() && page()}>

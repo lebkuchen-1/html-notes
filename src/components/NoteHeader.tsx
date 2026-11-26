@@ -30,12 +30,14 @@ import {
   IconSettings,
   IconSidebar,
   IconSplit,
+  IconStylus,
   IconSun,
   IconText,
   IconTrash,
   IconUndo,
   IconX,
 } from './Icons';
+import { NoteTabs } from './NoteTabs';
 
 interface NoteHeaderProps {
   store: NotesStore;
@@ -51,12 +53,11 @@ const VIEW_MODES: { id: ViewMode; label: string }[] = [
 export function NoteHeader(props: NoteHeaderProps) {
   const [tagDraft, setTagDraft] = createSignal('');
   const [addingTag, setAddingTag] = createSignal(false);
-  const [editingTitle, setEditingTitle] = createSignal(false);
+  const [editingMenuTitle, setEditingMenuTitle] = createSignal(false);
   const [quickMenuOpen, setQuickMenuOpen] = createSignal(false);
   const [fcMenuOpen, setFcMenuOpen] = createSignal(false);
 
-  let titleInputRef: HTMLInputElement | undefined;
-  let titleRowRef: HTMLDivElement | undefined;
+  let menuTitleInputRef: HTMLInputElement | undefined;
   let tagInputRef: HTMLInputElement | undefined;
   let quickMenuRef: HTMLDivElement | undefined;
   let fcMenuRef: HTMLDivElement | undefined;
@@ -67,32 +68,37 @@ export function NoteHeader(props: NoteHeaderProps) {
   const pageCount = () => note()?.pages.length ?? 1;
   const isCanvasVisible = () => props.store.viewMode() !== 'text';
   const isInfiniteMode = () => props.store.effectiveSettings().canvasMode === 'infinite';
+  const stylusOnly = () => props.store.effectiveSettings().stylusOnly;
 
-  // Exit title editing & close popovers whenever switching notes
+  // Close popovers whenever switching notes
   createEffect(() => {
     void props.store.activeNoteId();
-    setEditingTitle(false);
     setQuickMenuOpen(false);
     setFcMenuOpen(false);
     setAddingTag(false);
+    setEditingMenuTitle(false);
+  });
+
+  createEffect(() => {
+    if (!quickMenuOpen()) {
+      setEditingMenuTitle(false);
+      setAddingTag(false);
+    }
   });
 
   onMount(() => {
-    // Capture-phase dismissal so tapping/drawing on the canvas (which calls preventDefault()
-    // and therefore suppresses native input blur) or tapping any UI area immediately closes
-    // the active title/tag input and popovers cleanly.
     const handleCaptureOutside = (e: Event) => {
       const target = e.target as Node | null;
-      if (editingTitle()) {
-        if (!target || !titleRowRef?.contains(target)) {
-          titleInputRef?.blur();
-          setEditingTitle(false);
-        }
-      }
       if (addingTag()) {
         if (!target || !tagInputRef?.contains(target)) {
           tagInputRef?.blur();
           submitTag();
+        }
+      }
+      if (editingMenuTitle()) {
+        if (!target || !menuTitleInputRef?.contains(target)) {
+          menuTitleInputRef?.blur();
+          setEditingMenuTitle(false);
         }
       }
       if (quickMenuOpen()) {
@@ -139,8 +145,8 @@ export function NoteHeader(props: NoteHeaderProps) {
 
   createEffect(() => {
     const title = note()?.title ?? '';
-    if (titleInputRef && titleInputRef.value !== title) {
-      titleInputRef.value = title;
+    if (menuTitleInputRef && menuTitleInputRef.value !== title) {
+      menuTitleInputRef.value = title;
     }
   });
 
@@ -178,9 +184,9 @@ export function NoteHeader(props: NoteHeaderProps) {
   };
 
   return (
-    <header class="note-header">
-      {/* LEFT: Sidebar + Compact Content-Sized Title */}
-      <div class="header-left">
+    <header class="note-header has-embedded-tabs">
+      {/* LEFT / MAIN: Sidebar Toggle + Integrated Note Tabs (always visible, even in Fullscreen!) */}
+      <div class="header-tabs-zone">
         <button
           type="button"
           class="icon-btn"
@@ -191,75 +197,12 @@ export function NoteHeader(props: NoteHeaderProps) {
           <IconSidebar size={17} />
         </button>
 
-        <Show when={note()}>
-          {(current) => (
-            <div class="title-area" ref={titleRowRef}>
-              <Show
-                when={editingTitle()}
-                fallback={
-                  <button
-                    type="button"
-                    class="note-title-display"
-                    classList={{ 'is-placeholder': !current().title.trim() }}
-                    onClick={() => setEditingTitle(true)}
-                    title={
-                      current().title.trim()
-                        ? `${current().title} — tippen zum Umbenennen`
-                        : 'Tippen zum Umbenennen der Notiz'
-                    }
-                    aria-label={`Notiztitel: ${current().title.trim() || 'Ohne Titel'} (zum Bearbeiten tippen)`}
-                  >
-                    <Show when={activeFolderColor()}>
-                      {(color) => (
-                        <span
-                          class="title-folder-dot"
-                          style={{ background: color() }}
-                          aria-hidden="true"
-                        />
-                      )}
-                    </Show>
-                    <span class="note-title-text">
-                      {current().title || 'Ohne Titel'}
-                    </span>
-                    <Show when={current().pinned}>
-                      <span class="title-pin-indicator" aria-hidden="true">
-                        <IconPin size={11} filled />
-                      </span>
-                    </Show>
-                  </button>
-                }
-              >
-                <input
-                  ref={(el) => {
-                    titleInputRef = el;
-                    el.value = current().title;
-                    requestAnimationFrame(() => {
-                      el.focus();
-                    });
-                  }}
-                  type="text"
-                  class="note-title-input"
-                  onInput={(e) => props.store.updateTitle(e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === 'Escape') {
-                      e.preventDefault();
-                      e.currentTarget.blur();
-                      setEditingTitle(false);
-                    }
-                  }}
-                  onBlur={() => setEditingTitle(false)}
-                  placeholder="Titel der Notiz…"
-                  aria-label="Notiztitel"
-                />
-              </Show>
-            </div>
-          )}
-        </Show>
+        <NoteTabs store={props.store} embedded />
       </div>
 
-      {/* CENTER: Compact Page / Infinite Navigation Pill (replaces the entire 4th page-strip row) */}
-      <Show when={isCanvasVisible() && note()}>
-        <div class="header-center">
+      {/* RIGHT: Compact Page Pill + Undo/Redo + Flashcards/Study + Fullscreen + Quick Menu (⋯) */}
+      <div class="header-actions-zone">
+        <Show when={isCanvasVisible() && note()}>
           <Show
             when={!isInfiniteMode()}
             fallback={
@@ -324,7 +267,7 @@ export function NoteHeader(props: NoteHeaderProps) {
               >
                 <IconPages size={13} />
                 <span class="hpp-count">
-                  {activePageIndex() + 1} / {pageCount()}
+                  {activePageIndex() + 1}/{pageCount()}
                 </span>
               </button>
 
@@ -364,12 +307,7 @@ export function NoteHeader(props: NoteHeaderProps) {
               </button>
             </div>
           </Show>
-        </div>
-      </Show>
 
-      {/* RIGHT: Undo/Redo + Flashcards/Study + Fullscreen + Quick Menu (⋯) */}
-      <div class="header-right">
-        <Show when={isCanvasVisible()}>
           <div class="header-history-group" role="group" aria-label="Verlauf">
             <button
               type="button"
@@ -575,7 +513,7 @@ export function NoteHeader(props: NoteHeaderProps) {
           </Show>
         </button>
 
-        {/* Quick Menu (⋯) — consolidates View Mode, Canvas Mode, Folder/Tags, Page Format, Import, Export, Clear, Theme & Settings */}
+        {/* Quick Menu (⋯) — View Mode, Canvas Mode, Title/Folder/Tags, Stylus-Only, Paper, Page Format, Import, Export, Clear, Theme & Settings */}
         <Show when={note()}>
           {(current) => (
             <div class="header-popover-anchor" ref={quickMenuRef}>
@@ -590,7 +528,7 @@ export function NoteHeader(props: NoteHeaderProps) {
                   setFcMenuOpen(false);
                   setQuickMenuOpen((v) => !v);
                 }}
-                title="Schnellmenü: Ansicht, Modus, Ordner, Seite, Export & Einstellungen"
+                title="Schnellmenü: Ansicht, Nur Stift, Hintergrund, Ordner, Seite, Export & Einstellungen"
                 aria-label="Schnellmenü öffnen"
                 aria-expanded={quickMenuOpen()}
               >
@@ -667,8 +605,47 @@ export function NoteHeader(props: NoteHeaderProps) {
 
                   <div class="qm-divider" />
 
-                  {/* Section 3: Note Organization (Folder, Pin, Tags) */}
+                  {/* Section 3: Note Organization (Title, Folder, Pin, Tags) */}
                   <div class="qm-section">
+                    <Show
+                      when={editingMenuTitle()}
+                      fallback={
+                        <button
+                          type="button"
+                          class="qm-title-display"
+                          classList={{ 'is-placeholder': !current().title.trim() }}
+                          onClick={() => setEditingMenuTitle(true)}
+                          title="Tippen zum Umbenennen"
+                        >
+                          <span class="qm-title-text">
+                            {current().title || 'Titel der Notiz…'}
+                          </span>
+                          <span class="qm-item-meta">Umbenennen</span>
+                        </button>
+                      }
+                    >
+                      <input
+                        ref={(el) => {
+                          menuTitleInputRef = el;
+                          el.value = current().title;
+                          requestAnimationFrame(() => el.focus());
+                        }}
+                        type="text"
+                        class="qm-title-input"
+                        onInput={(e) => props.store.updateTitle(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === 'Escape') {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                            setEditingMenuTitle(false);
+                          }
+                        }}
+                        onBlur={() => setEditingMenuTitle(false)}
+                        placeholder="Titel der Notiz…"
+                        aria-label="Notiztitel"
+                      />
+                    </Show>
+
                     <div class="qm-note-meta-row">
                       <Show when={folderOptions().length > 0}>
                         <label class="qm-folder-select" title="Ordner zuweisen">
@@ -761,9 +738,25 @@ export function NoteHeader(props: NoteHeaderProps) {
 
                   <div class="qm-divider" />
 
-                  {/* Section 4: Page, Import & Export Actions */}
+                  {/* Section 4: Input, Paper, Page, Import & Export Actions */}
                   <div class="qm-list">
                     <Show when={isCanvasVisible()}>
+                      <button
+                        type="button"
+                        class="qm-item"
+                        onClick={() => props.canvasBridge.getHandlers()?.toggleStylusOnly()}
+                        aria-pressed={stylusOnly()}
+                      >
+                        <IconStylus size={15} />
+                        <span class="qm-item-label">Nur Stift</span>
+                        <span
+                          class="qm-toggle-pill"
+                          classList={{ 'is-on': stylusOnly() }}
+                        >
+                          {stylusOnly() ? 'An' : 'Aus'}
+                        </span>
+                      </button>
+
                       <button
                         type="button"
                         class="qm-item"
@@ -773,7 +766,7 @@ export function NoteHeader(props: NoteHeaderProps) {
                         }}
                       >
                         <IconGrid size={15} />
-                        <span class="qm-item-label">Papier &amp; Hintergrund</span>
+                        <span class="qm-item-label">Hintergrund &amp; Papier</span>
                         <span
                           class="qm-paper-swatch"
                           style={{ background: props.canvasBridge.resolvedPaperBg() }}

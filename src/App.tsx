@@ -155,7 +155,7 @@ export function App() {
       </Show>
 
       <main class="main-column">
-        <Show when={!store.isFullscreen()}>
+        <Show when={store.activeScreen() !== 'note' || !store.activeNote()}>
           <NoteTabs store={store} />
         </Show>
 

@@ -18,6 +18,7 @@ export interface CanvasBridgeHandlers {
   startCanvasStudy: () => void;
   setOcclusionDisplayMode: (mode: OcclusionDisplayMode) => void;
   selectOcclusionTool: () => void;
+  toggleStylusOnly: () => void;
 }
 
 export interface CanvasQuickBridge {
