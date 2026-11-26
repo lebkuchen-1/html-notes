@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
 import { FOLDER_COLORS, type Folder, type Note } from '../types';
 import { exportNotesAsJson } from '../utils/storage';
@@ -15,6 +15,7 @@ import {
   IconFolder,
   IconFolderPlus,
   IconHome,
+  IconMoreHorizontal,
   IconPen,
   IconPin,
   IconPlus,
@@ -33,6 +34,7 @@ const NOTE_DRAG_MIME = 'application/x-solid-note-id';
 
 export function Sidebar(props: SidebarProps) {
   let fileInputRef: HTMLInputElement | undefined;
+  let quickMenuRef: HTMLDivElement | undefined;
 
   const [creatingParentId, setCreatingParentId] = createSignal<string | null | undefined>(
     undefined
@@ -43,9 +45,41 @@ export function Sidebar(props: SidebarProps) {
   const [renamingFolderId, setRenamingFolderId] = createSignal<string | null>(null);
   const [renameDraft, setRenameDraft] = createSignal('');
   const [collapsedIds, setCollapsedIds] = createSignal<Set<string>>(new Set());
-  const [favoritesCollapsed, setFavoritesCollapsed] = createSignal<boolean>(false);
+  const [favoritesCollapsed, setFavoritesCollapsed] = createSignal<boolean>(true);
   const [dragOverTarget, setDragOverTarget] = createSignal<string | null>(null);
   const [treeFilter, setTreeFilter] = createSignal('');
+  const [quickMenuOpen, setQuickMenuOpen] = createSignal(false);
+
+  // Close Quick Menu whenever sidebar closes
+  createEffect(() => {
+    if (!props.store.sidebarOpen()) {
+      setQuickMenuOpen(false);
+    }
+  });
+
+  onMount(() => {
+    const handleOutside = (e: Event) => {
+      if (!quickMenuOpen()) return;
+      const target = e.target as Node | null;
+      if (!target || !quickMenuRef?.contains(target)) {
+        setQuickMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && quickMenuOpen()) {
+        e.preventDefault();
+        setQuickMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleOutside, { capture: true });
+    document.addEventListener('touchstart', handleOutside, { capture: true, passive: true });
+    window.addEventListener('keydown', handleKeyDown);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', handleOutside, { capture: true });
+      document.removeEventListener('touchstart', handleOutside, { capture: true });
+      window.removeEventListener('keydown', handleKeyDown);
+    });
+  });
 
   const query = () => treeFilter().trim().toLowerCase();
 
@@ -108,6 +142,34 @@ export function Sidebar(props: SidebarProps) {
   );
 
   const rootNotes = createMemo(() => getDirectNotes(null));
+
+  const expandableFolderIds = createMemo(() =>
+    props.store
+      .folders()
+      .filter(
+        (f) =>
+          props.store.folders().some((c) => c.parentId === f.id) ||
+          props.store.notes().some((n) => n.folderId === f.id)
+      )
+      .map((f) => f.id)
+  );
+
+  const allFoldersCollapsed = createMemo(() => {
+    const ids = expandableFolderIds();
+    if (ids.length === 0) return false;
+    const collapsed = collapsedIds();
+    return ids.every((id) => collapsed.has(id));
+  });
+
+  const toggleAllFoldersCollapsed = () => {
+    const ids = expandableFolderIds();
+    if (ids.length === 0) return;
+    if (allFoldersCollapsed()) {
+      setCollapsedIds(new Set<string>());
+    } else {
+      setCollapsedIds(new Set<string>(ids));
+    }
+  };
 
   const folderById = (id: string | null): Folder | undefined => {
     if (!id) return undefined;
@@ -415,8 +477,8 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside class="sidebar" classList={{ 'is-open': props.store.sidebarOpen() }}>
-      {/* Compact Brand Header */}
-      <div class="sidebar-top">
+      {/* Slim Header: Brand/Home + Quick Actions (+ Note, + Folder, ⋯ Quick Menu) */}
+      <div class="sidebar-top" ref={quickMenuRef}>
         <button
           type="button"
           class="brand brand-btn"
@@ -427,138 +489,220 @@ export function Sidebar(props: SidebarProps) {
           title="Zur Startseite / Übersicht"
         >
           <div class="brand-logo" aria-hidden="true">
-            <IconPen size={15} />
+            <IconPen size={14} />
           </div>
           <div class="brand-text">
             <div class="brand-title">Notizblock</div>
           </div>
         </button>
-        <button
-          type="button"
-          class="icon-btn sidebar-new-icon"
-          onClick={() => props.store.createNote()}
-          title="Neue Notiz (Strg+Alt+N)"
-          aria-label="Neue Notiz"
-        >
-          <IconPlus size={17} />
-        </button>
-      </div>
 
-      {/* Primary Workspace Navigation */}
-      <nav class="sidebar-nav" aria-label="Hauptnavigation">
-        <button
-          type="button"
-          class="nav-item"
-          classList={{
-            'is-active':
-              props.store.activeScreen() === 'home' &&
-              props.store.filterMode() === 'all',
-          }}
-          onClick={() => {
-            props.store.openHome('all');
-            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
-          }}
-        >
-          <IconHome size={15} />
-          <span class="nav-item-label">Startseite</span>
-          <span class="nav-item-count">{props.store.notes().length}</span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-item"
-          classList={{
-            'is-active':
-              props.store.activeScreen() === 'home' &&
-              props.store.filterMode() === 'pinned',
-          }}
-          onClick={() => {
-            props.store.openHome('pinned');
-            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
-          }}
-        >
-          <IconPin size={14} filled={props.store.filterMode() === 'pinned'} />
-          <span class="nav-item-label">Angepinnt</span>
-          <span class="nav-item-count">
-            {props.store.notes().filter((n) => n.pinned).length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          class="nav-item"
-          classList={{
-            'is-active': props.store.activeScreen() === 'flashcards',
-          }}
-          onClick={() => {
-            props.store.openFlashcards({ type: 'all' }, false);
-            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
-          }}
-          title="Karteikarten & Spaced Repetition (Stellen verbergen & Beidseitig)"
-        >
-          <IconFlashcards size={15} />
-          <span class="nav-item-label">Karteikarten</span>
-          <Show
-            when={props.store.flashcardDeckStats().due > 0}
-            fallback={
-              <Show when={props.store.flashcardDeckStats().total > 0}>
-                <span class="nav-item-count">
-                  {props.store.flashcardDeckStats().total}
-                </span>
-              </Show>
+        <div class="sidebar-top-actions">
+          <button
+            type="button"
+            class="icon-btn sidebar-top-btn"
+            onClick={() =>
+              creatingParentId() === null
+                ? setCreatingParentId(undefined)
+                : openNewFolderForm(null)
             }
+            title="Neuen Ordner erstellen"
+            aria-label="Neuen Ordner erstellen"
           >
-            <span class="nav-item-count is-due-badge" title="Fällige Karteikarten">
-              {props.store.flashcardDeckStats().due}
-            </span>
-          </Show>
-        </button>
+            <IconFolderPlus size={16} />
+          </button>
 
-        <button
-          type="button"
-          class="nav-item"
-          onClick={() => {
-            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
-            void props.store.quickImportFromClipboard();
-          }}
-          title="Aus Zwischenablage importieren (Teilen → Kopieren · Strg+Umschalt+V)"
-        >
-          <IconClipboardPaste size={15} />
-          <span class="nav-item-label">Schnellimport</span>
-        </button>
+          <button
+            type="button"
+            class="icon-btn sidebar-top-btn sidebar-new-icon"
+            onClick={() => props.store.createNote()}
+            title="Neue Notiz (Strg+Alt+N)"
+            aria-label="Neue Notiz"
+          >
+            <IconPlus size={16} />
+          </button>
 
-        <button
-          type="button"
-          class="nav-item"
-          onClick={() => {
-            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
-            props.store.openCloudSync();
-          }}
-          title="Online-Sync, Backup & Import (S3 / Cloudflare R2 / Backblaze B2)"
-        >
-          <IconCloud size={15} />
-          <span class="nav-item-label">Online-Backup</span>
-          <Show when={props.store.isCloudConfigured()}>
-            <span class="cloud-nav-dot" title="Cloud-Bucket verbunden" />
-          </Show>
-        </button>
+          <button
+            type="button"
+            class="icon-btn sidebar-top-btn sidebar-quickmenu-btn"
+            classList={{ 'is-open': quickMenuOpen() }}
+            onClick={() => setQuickMenuOpen((v) => !v)}
+            title="Menü: Startseite, Karteikarten, Import, Backup & Einstellungen"
+            aria-label="Seitenleisten-Schnellmenü"
+            aria-expanded={quickMenuOpen()}
+          >
+            <IconMoreHorizontal size={16} />
+            <Show when={props.store.isCloudConfigured()}>
+              <span class="sidebar-qm-cloud-dot" aria-hidden="true" />
+            </Show>
+          </button>
+        </div>
 
-        <button
-          type="button"
-          class="nav-item"
-          classList={{
-            'is-active': props.store.activeScreen() === 'settings',
-          }}
-          onClick={() => {
-            props.store.openSettings('global');
-            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
-          }}
-          title="Globale & lokale Einstellungen (Strg+,)"
-        >
-          <IconSettings size={15} />
-          <span class="nav-item-label">Einstellungen</span>
-        </button>
-      </nav>
+        {/* Sidebar Quick Menu Popover (Navigation, Import, Sync, Backup, Settings) */}
+        <Show when={quickMenuOpen()}>
+          <div
+            class="quick-menu-popover sidebar-quickmenu-popover"
+            role="dialog"
+            aria-label="Seitenleisten-Schnellmenü"
+          >
+            <div class="qm-section-label">Ansichten</div>
+            <div class="qm-list">
+              <button
+                type="button"
+                class="qm-item"
+                classList={{
+                  'is-active-row':
+                    props.store.activeScreen() === 'home' &&
+                    props.store.filterMode() === 'all',
+                }}
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  props.store.openHome('all');
+                  if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+                }}
+              >
+                <IconHome size={15} />
+                <span class="qm-item-label">Startseite</span>
+                <span class="qm-item-meta">{props.store.notes().length}</span>
+              </button>
+
+              <button
+                type="button"
+                class="qm-item"
+                classList={{
+                  'is-active-row':
+                    props.store.activeScreen() === 'home' &&
+                    props.store.filterMode() === 'pinned',
+                }}
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  props.store.openHome('pinned');
+                  if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+                }}
+              >
+                <IconPin size={14} filled={props.store.filterMode() === 'pinned'} />
+                <span class="qm-item-label">Angepinnt</span>
+                <span class="qm-item-meta">
+                  {props.store.notes().filter((n) => n.pinned).length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                class="qm-item"
+                classList={{
+                  'is-active-row': props.store.activeScreen() === 'flashcards',
+                }}
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  props.store.openFlashcards({ type: 'all' }, false);
+                  if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+                }}
+              >
+                <IconFlashcards size={15} />
+                <span class="qm-item-label">Karteikarten</span>
+                <Show
+                  when={props.store.flashcardDeckStats().due > 0}
+                  fallback={
+                    <Show when={props.store.flashcardDeckStats().total > 0}>
+                      <span class="qm-item-meta">
+                        {props.store.flashcardDeckStats().total}
+                      </span>
+                    </Show>
+                  }
+                >
+                  <span class="qm-count-pill">
+                    {props.store.flashcardDeckStats().due}
+                  </span>
+                </Show>
+              </button>
+            </div>
+
+            <div class="qm-divider" />
+
+            <div class="qm-section-label">Import &amp; Datensicherung</div>
+            <div class="qm-list">
+              <button
+                type="button"
+                class="qm-item"
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+                  void props.store.quickImportFromClipboard();
+                }}
+              >
+                <IconClipboardPaste size={15} />
+                <span class="qm-item-label">Schnellimport</span>
+              </button>
+
+              <button
+                type="button"
+                class="qm-item"
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+                  props.store.openCloudSync();
+                }}
+              >
+                <IconCloud size={15} />
+                <span class="qm-item-label">Online-Sync &amp; Backup</span>
+                <Show when={props.store.isCloudConfigured()}>
+                  <span class="cloud-nav-dot" title="Cloud-Bucket verbunden" />
+                </Show>
+              </button>
+
+              <button
+                type="button"
+                class="qm-item"
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  exportNotesAsJson(
+                    props.store.notes(),
+                    props.store.folders(),
+                    props.store.settings(),
+                    props.store.flashcardProgress()
+                  );
+                  props.store.showToast('JSON-Backup exportiert');
+                }}
+              >
+                <IconDownload size={15} />
+                <span class="qm-item-label">JSON-Backup sichern</span>
+              </button>
+
+              <button
+                type="button"
+                class="qm-item"
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  fileInputRef?.click();
+                }}
+              >
+                <IconUpload size={15} />
+                <span class="qm-item-label">JSON-Backup importieren</span>
+              </button>
+            </div>
+
+            <div class="qm-divider" />
+
+            <div class="qm-list">
+              <button
+                type="button"
+                class="qm-item"
+                classList={{
+                  'is-active-row': props.store.activeScreen() === 'settings',
+                }}
+                onClick={() => {
+                  setQuickMenuOpen(false);
+                  props.store.openSettings('global');
+                  if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+                }}
+              >
+                <IconSettings size={15} />
+                <span class="qm-item-label">Einstellungen</span>
+              </button>
+            </div>
+          </div>
+        </Show>
+      </div>
 
       {/* Slim Tree Filter */}
       <div class="sidebar-search is-slim">
@@ -568,7 +712,7 @@ export function Sidebar(props: SidebarProps) {
           value={treeFilter()}
           disabled={!props.store.sidebarOpen()}
           onInput={(e) => setTreeFilter(e.currentTarget.value)}
-          placeholder="Schnellfilter…"
+          placeholder="Ordner & Notizen filtern…"
           aria-label="Seitenleiste filtern"
         />
         <Show when={treeFilter().length > 0}>
@@ -583,51 +727,46 @@ export function Sidebar(props: SidebarProps) {
         </Show>
       </div>
 
-      {/* Scrollable Unified Workspace Explorer */}
+      {/* Scrollable Folder-First Workspace Explorer (uses ~90% of sidebar height!) */}
       <div class="sidebar-explorer" role="tree">
-        {/* Pinned Quick-Access Section */}
-        <Show when={pinnedNotes().length > 0}>
-          <div class="explorer-group">
-            <button
-              type="button"
-              class="explorer-section-toggle"
-              onClick={() => setFavoritesCollapsed((v) => !v)}
-            >
-              <Show
-                when={!favoritesCollapsed()}
-                fallback={<IconChevronRight size={11} />}
-              >
-                <IconChevronDown size={11} />
-              </Show>
-              <span>Favoriten</span>
-            </button>
-            <Show when={!favoritesCollapsed()}>
-              <div class="explorer-list">
-                <For each={pinnedNotes()}>
-                  {(note) => renderNoteTreeItem(note, 0, false)}
-                </For>
-              </div>
-            </Show>
-          </div>
-        </Show>
-
-        {/* Folders & Contained Notes Tree */}
+        {/* Folders & Contained Notes Tree — Primary Section right at the top! */}
         <div class="explorer-group">
           <div class="explorer-section-header">
-            <span class="folders-heading">Ordner</span>
-            <button
-              type="button"
-              class="icon-btn-xs"
-              onClick={() =>
-                creatingParentId() === null
-                  ? setCreatingParentId(undefined)
-                  : openNewFolderForm(null)
-              }
-              title="Neuen Ordner erstellen"
-              aria-label="Neuen Ordner erstellen"
-            >
-              <IconFolderPlus size={14} />
-            </button>
+            <span class="folders-heading">
+              Ordner
+              <Show when={props.store.folders().length > 0}>
+                <span class="folders-heading-count">{props.store.folders().length}</span>
+              </Show>
+            </span>
+            <div class="explorer-section-tools">
+              <Show when={expandableFolderIds().length > 0 && !query()}>
+                <button
+                  type="button"
+                  class="explorer-collapse-btn"
+                  onClick={toggleAllFoldersCollapsed}
+                  title={
+                    allFoldersCollapsed()
+                      ? 'Alle Ordner ausklappen'
+                      : 'Alle Ordner einklappen'
+                  }
+                >
+                  {allFoldersCollapsed() ? 'Aufklappen' : 'Einklappen'}
+                </button>
+              </Show>
+              <button
+                type="button"
+                class="icon-btn-xs"
+                onClick={() =>
+                  creatingParentId() === null
+                    ? setCreatingParentId(undefined)
+                    : openNewFolderForm(null)
+                }
+                title="Neuen Ordner erstellen"
+                aria-label="Neuen Ordner erstellen"
+              >
+                <IconFolderPlus size={14} />
+              </button>
+            </div>
           </div>
 
           <Show when={creatingParentId() !== undefined}>
@@ -736,6 +875,9 @@ export function Sidebar(props: SidebarProps) {
               title="Alle Notizen ohne Ordner auf der Startseite anzeigen"
             >
               Weitere Notizen
+              <Show when={rootNotes().length > 0}>
+                <span class="folders-heading-count">{rootNotes().length}</span>
+              </Show>
             </button>
             <button
               type="button"
@@ -765,44 +907,43 @@ export function Sidebar(props: SidebarProps) {
             </div>
           </Show>
         </div>
+
+        {/* Collapsible Favorites Section (collapsed by default so Folders stay dominant) */}
+        <Show when={pinnedNotes().length > 0}>
+          <div class="explorer-group">
+            <button
+              type="button"
+              class="explorer-section-toggle"
+              onClick={() => setFavoritesCollapsed((v) => !v)}
+            >
+              <Show
+                when={!favoritesCollapsed() || Boolean(query())}
+                fallback={<IconChevronRight size={11} />}
+              >
+                <IconChevronDown size={11} />
+              </Show>
+              <span>Favoriten</span>
+              <span class="folders-heading-count">{pinnedNotes().length}</span>
+            </button>
+            <Show when={!favoritesCollapsed() || Boolean(query())}>
+              <div class="explorer-list">
+                <For each={pinnedNotes()}>
+                  {(note) => renderNoteTreeItem(note, 0, false)}
+                </For>
+              </div>
+            </Show>
+          </div>
+        </Show>
       </div>
 
-      {/* Slim Footer */}
-      <div class="sidebar-footer">
-        <button
-          type="button"
-          class="footer-action"
-          onClick={() => {
-            exportNotesAsJson(
-              props.store.notes(),
-              props.store.folders(),
-              props.store.settings(),
-              props.store.flashcardProgress()
-            );
-            props.store.showToast('JSON-Backup exportiert');
-          }}
-          title="Alle Notizen & Ordner als JSON sichern"
-        >
-          <IconDownload size={14} />
-          <span>Backup</span>
-        </button>
-        <button
-          type="button"
-          class="footer-action"
-          onClick={() => fileInputRef?.click()}
-          title="JSON-Backup importieren"
-        >
-          <IconUpload size={14} />
-          <span>Import</span>
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/json,.json"
-          class="sr-only"
-          onChange={handleImportFile}
-        />
-      </div>
+      {/* Hidden JSON Backup Import Input (triggered from Sidebar Quick Menu) */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        class="sr-only"
+        onChange={handleImportFile}
+      />
     </aside>
   );
 }
