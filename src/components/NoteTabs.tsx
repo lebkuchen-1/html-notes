@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
-import { IconHome, IconPen, IconPin, IconPlus, IconX } from './Icons';
+import { IconFlashcards, IconHome, IconPen, IconPin, IconPlus, IconX } from './Icons';
 
 interface NoteTabsProps {
   store: NotesStore;
@@ -49,6 +49,27 @@ export function NoteTabs(props: NoteTabsProps) {
             <IconHome size={13} />
           </span>
           <span class="note-tab-title">Übersicht</span>
+        </button>
+
+        {/* Pinned Flashcards Tab */}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={props.store.activeScreen() === 'flashcards'}
+          class="note-tab is-home-tab is-flashcards-tab"
+          classList={{ 'is-active': props.store.activeScreen() === 'flashcards' }}
+          onClick={() => props.store.openFlashcards({ type: 'all' }, false)}
+          title="Karteikarten lernen & verwalten"
+        >
+          <span class="note-tab-icon" aria-hidden="true">
+            <IconFlashcards size={13} />
+          </span>
+          <span class="note-tab-title">Karten</span>
+          <Show when={props.store.flashcardDeckStats().due > 0}>
+            <span class="note-tab-due-badge">
+              {props.store.flashcardDeckStats().due}
+            </span>
+          </Show>
         </button>
 
         <For each={props.store.openTabIds()}>

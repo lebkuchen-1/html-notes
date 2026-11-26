@@ -541,6 +541,21 @@ export function HomePage(props: HomePageProps) {
                 <span class="stat-value">{props.store.folders().length}</span>
                 <span class="stat-label">Ordner</span>
               </div>
+              <button
+                type="button"
+                class="stat-card is-flashcard-stat"
+                onClick={() => props.store.openFlashcards({ type: 'all' }, false)}
+                title="Karteikarten öffnen und lernen"
+              >
+                <span class="stat-value">
+                  {props.store.flashcardDeckStats().due > 0
+                    ? props.store.flashcardDeckStats().due
+                    : props.store.flashcardDeckStats().total}
+                </span>
+                <span class="stat-label">
+                  {props.store.flashcardDeckStats().due > 0 ? 'Karten fällig' : 'Karteikarten'}
+                </span>
+              </button>
             </div>
           </section>
 

@@ -451,6 +451,7 @@ async function computeDehydratedNoteHash(dehydrated: Note): Promise<string> {
     attachments: dehydrated.attachments,
     pages: dehydrated.pages,
     activePageId: dehydrated.activePageId,
+    flashcards: dehydrated.flashcards ?? [],
     settings: dehydrated.settings ?? null,
   };
   return sha256Hex(JSON.stringify(canonical));

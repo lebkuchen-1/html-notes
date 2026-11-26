@@ -1,6 +1,7 @@
 import { createSignal, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { CloudBackupDialog } from './components/CloudBackupDialog';
 import { DrawingCanvas } from './components/DrawingCanvas';
+import { FlashcardsPage } from './components/FlashcardsPage';
 import { HomePage } from './components/HomePage';
 import { ImportDialog } from './components/ImportDialog';
 import { NoteHeader } from './components/NoteHeader';
@@ -159,6 +160,10 @@ export function App() {
         <Switch fallback={<HomePage store={store} />}>
           <Match when={store.activeScreen() === 'settings'}>
             <SettingsPage store={store} />
+          </Match>
+
+          <Match when={store.activeScreen() === 'flashcards'}>
+            <FlashcardsPage store={store} />
           </Match>
 
           <Match when={store.activeScreen() === 'note' && store.activeNote()}>

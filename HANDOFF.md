@@ -2,17 +2,23 @@
 
 > Kurzfristige Übergabe für die nächste Session. Wird nach jeder abgeschlossenen Session überschrieben bzw. bereinigt. Langfristige Architektur- & Plattform-Regeln stehen in `AGENTS.md`.
 
-**Stand:** 2026-11-24 · Branch `main` (alle Änderungen gebaut & auf GitHub Pages deployed)
+**Stand:** 2026-11-26 · Branch `main` (alle Änderungen gebaut & auf GitHub Pages deployed)
 
 ---
 
 ## Zuletzt umgesetzt (abgeschlossen)
-1. **2-Wege-Synchronisieren im Online-Backup inkl. 3-Wege-Lösch-Abgleich (`src/utils/cloudSync.ts`, `src/components/CloudBackupDialog.tsx`, `src/store/notesStore.ts`, `src/components/SettingsPage.tsx`, `src/styles.css`):**
-   - **Standard-Tab `Synchronisieren`:** Ein-Klick-Abgleich in beide Richtungen (`buildSyncPlan` / `executeCloudSync`), der neue, geänderte und gelöschte Notizen & Ordner automatisch erkennt.
-   - **Lösch-Synchronisierung (Behebung „gelöschte Notizen kommen immer wieder zurück“):**
-     - `classify3Way` wertet jetzt `baseline` + lokale Lösch-Tombstones (`recordLocalNoteDeletion`/`recordLocalFolderDeletion` in `deleteNote`/`deleteFolder`) + Cloud-Tombstones (`manifest.deletedNotes`/`manifest.deletedFolders`) aus und unterscheidet sauber zwischen `remote-only`, `deleted-local` (`↑ Online löschen`), `deleted-remote` (`↓ Lokal löschen`) und Lösch-vs.-Bearbeitungs-Konflikten (`conflict`).
-     - Beim Synchronisieren werden lokal gelöschte Notizen aus `manifest.json` entfernt (mit Tombstone) und per `s3DeleteObject` best-effort im Bucket gelöscht; online gelöschte Notizen werden auf anderen Geräten sauber lokal entfernt (`applyCloudImport` mit `deleteNoteIds`/`deleteFolderIds`, inkl. Tab-/ActiveNote-Aufräumen).
-     - Alle Löschungen werden vorab rot im Baum und in der Zusammenfassung aufgelistet; über den Tab `Importieren` lassen sich noch vorhandene Online-Notizen weiterhin ohne lokales Löschen wiederherstellen.
+1. **RemNote-inspiriertes Karteikartensystem mit Stellen-Verbergen & optionalen beidseitigen Karteikarten (`src/utils/flashcards.ts`, `src/components/CanvasOcclusionOverlay.tsx`, `src/components/FlashcardsPage.tsx`, `src/components/DrawingCanvas.tsx`, `src/components/CanvasPageSheet.tsx`, `src/components/InfiniteCanvasView.tsx`, `src/components/TextEditor.tsx`, `src/utils/markdown.ts`, `src/store/notesStore.ts`, `src/utils/db.ts`, `src/utils/storage.ts`, `src/utils/cloudSync.ts`, `src/styles.css`):**
+   - **Canvas-Verdeckungen („Stellen verbergen“ + Beidseitige Paare `A ↔ B`):**
+     - Neues Verdecken-Werkzeug (`occlusion`) im Seiten- und Unendlich-Modus zum Aufziehen/Tippen von Verdeckungsfeldern direkt über Handschrift, PDFs, Bilder oder Canvas-Text (mit vollständigem Undo/Redo).
+     - Schwebende Aktionsleiste pro Feld: **Beidseitig ↔** (erstellt direkt ein verknüpftes Gegenstück **B** mit Verbindungslinie `A ↔ B` für 2 Abfragerichtungen `A→B` & `B→A`, umschaltbar auf einseitig `A→B` oder trennbar), **Gruppen (`G1`–`G3`)** zum gemeinsamen Verbergen, optionaler **Hinweis**, 6 Farben und Löschen.
+     - **Abdeckband-Selbsttest direkt auf der Seite** (`Bearbeiten` / `Abdecken` / `Aus`): tippe verdeckte Stellen direkt auf dem Canvas zum Auf- & Zudecken an (inkl. „Alle aufdecken/zudecken“).
+   - **Text-/Markdown-Karteikarten (RemNote-Syntax):**
+     - Lückentext / Stellen verbergen: `{{Antwort}}`, `{{Antwort::Hinweis}}`, `{{1::Gruppe}}` (`Strg+Umschalt+C` + Toolbar-Button `{{…}}`, klickbare Aufdeck-Pills in der Markdown-Vorschau).
+     - Einseitig (`Frage >> Antwort`), Rückwärts (`Antwort << Frage`) und **Beidseitig** (`Begriff <> Definition` oder `Begriff :: Definition`, erzeugt automatisch beide Richtungen).
+   - **Manuelle Karteikarten & Einheitlicher Lernmodus (`FlashcardsPage`):**
+     - Erreichbar über Sidebar (`Karteikarten` mit Fälligkeits-Badge), Tab-Leiste (`Karten`), Startseite und Notiz-Header.
+     - Deck-Filter (Alle / Ordner inkl. Unterordner / Einzelnotiz), Quellenfilter (`Canvas-Stellen` / `Text` / `Manuell`), Modal für neue Karten (Standard mit **Beidseitig ↔**-Schalter oder Lückentext), **SM-2 Spaced Repetition** (`Nochmal`/`Schwer`/`Gut`/`Leicht` mit Intervall-Vorschau) und **Übungsmodus** (Alle üben), HiDPI-Canvas-Ausschnitt/Ganze-Seite-Ansicht & „Andere Stellen verbergen“-Schalter.
+   - **Persistenz & Sync:** `page.occlusions` und `note.flashcards` werden normalisiert in IndexedDB v2, JSON-Backups (inkl. Lernfortschritt) und Cloud-Sync gespeichert.
 
 ## Offene Punkte
-- Praxistest von 2-Wege-Synchronisieren inkl. Löschen zwischen zwei Geräten nach dem Deploy.
+- Praxistest der Canvas-Verdeckungen (inkl. beidseitiger `A ↔ B`-Paare & Abdeckband) sowie des Karteikarten-Lernmodus auf dem iPad nach dem Deploy.

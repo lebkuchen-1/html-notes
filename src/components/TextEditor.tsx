@@ -7,11 +7,13 @@ import {
 import { renderMarkdown, toggleCheckboxAtLine } from '../utils/markdown';
 import { exportNoteAsMarkdown, generateId } from '../utils/storage';
 import {
+  IconBidirectional,
   IconCheckSquare,
   IconCode,
   IconDownload,
   IconEdit,
   IconEye,
+  IconFlashcards,
   IconImage,
   IconList,
   IconQuote,
@@ -35,6 +37,11 @@ export function TextEditor(props: TextEditorProps) {
     if (family === 'serif') return "Georgia, 'Times New Roman', serif";
     if (family === 'mono') return "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace";
     return 'inherit';
+  });
+
+  const noteCardCount = createMemo(() => {
+    const id = note()?.id;
+    return id ? props.store.getNoteStudyCardCount(id) : 0;
   });
 
   const stats = createMemo(() => {
@@ -158,6 +165,9 @@ export function TextEditor(props: TextEditorProps) {
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'i') {
       e.preventDefault();
       applyWrap('*', '*', 'kursiv');
+    } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
+      e.preventDefault();
+      applyWrap('{{', '}}', 'verdeckter Begriff');
     }
   };
 
@@ -171,6 +181,12 @@ export function TextEditor(props: TextEditorProps) {
 
   const handlePreviewClick = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
+    const clozeBtn = target.closest('.md-cloze-pill');
+    if (clozeBtn) {
+      e.preventDefault();
+      clozeBtn.classList.toggle('is-revealed');
+      return;
+    }
     if (target instanceof HTMLInputElement && target.type === 'checkbox') {
       const idxAttr = target.getAttribute('data-line-index');
       if (idxAttr !== null) {
@@ -283,6 +299,31 @@ export function TextEditor(props: TextEditorProps) {
           >
             <IconImage size={15} />
           </button>
+          <div class="toolbar-divider" />
+          <button
+            type="button"
+            class="tool-btn tool-btn-text md-fc-tool-btn"
+            onClick={() => applyWrap('{{', '}}', 'verdeckter Begriff')}
+            title="Stelle verbergen / Lückentext: {{Antwort}} oder {{Antwort::Hinweis}} (Strg+Umschalt+C)"
+          >
+            {'{{…}}'}
+          </button>
+          <button
+            type="button"
+            class="tool-btn tool-btn-text md-fc-tool-btn"
+            onClick={() => insertAtCursor(' >> ')}
+            title="Einseitige Karteikarte: Frage >> Antwort"
+          >
+            {'>>'}
+          </button>
+          <button
+            type="button"
+            class="tool-btn tool-btn-text md-fc-tool-btn"
+            onClick={() => insertAtCursor(' <> ')}
+            title="Beidseitige Karteikarte (wie RemNote): Begriff <> Definition (oder ::)"
+          >
+            <IconBidirectional size={14} />
+          </button>
           <input
             ref={imageInputRef}
             type="file"
@@ -377,8 +418,25 @@ export function TextEditor(props: TextEditorProps) {
         <span>{stats().words} Wörter</span>
         <span class="status-dot">·</span>
         <span>{stats().chars} Zeichen</span>
+        <Show when={noteCardCount() > 0}>
+          <span class="status-dot">·</span>
+          <button
+            type="button"
+            class="statusbar-fc-btn"
+            onClick={() => {
+              const id = note()?.id;
+              if (id) props.store.openFlashcards({ type: 'note', noteId: id }, true);
+            }}
+            title="Karteikarten dieser Notiz lernen"
+          >
+            <IconFlashcards size={12} />
+            <span>
+              {noteCardCount()} {noteCardCount() === 1 ? 'Karteikarte' : 'Karteikarten'}
+            </span>
+          </button>
+        </Show>
         <span class="status-spacer" />
-        <span class="status-hint">Markdown aktiv</span>
+        <span class="status-hint">RemNote: {'{{Lücke}}'} · {'>>'} · {'<>'}</span>
       </div>
     </section>
   );

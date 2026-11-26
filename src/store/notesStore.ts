@@ -6,11 +6,15 @@ import {
   type AppSettings,
   type CanvasImageItem,
   type CanvasMode,
+  type CanvasOcclusionItem,
   type CanvasPage,
   type CanvasSnapshot,
   type CanvasTextItem,
+  type FlashcardProgress,
+  type FlashcardRating,
   type Folder,
   type HistoryState,
+  type ManualFlashcard,
   type Note,
   type NoteImageAttachment,
   type NoteLocalSettings,
@@ -30,6 +34,17 @@ import {
   recordLocalNoteDeletion,
 } from '../utils/cloudSync';
 import { requestPersistentStorage } from '../utils/db';
+import {
+  collectAllStudyCards,
+  computeDeckStats,
+  createDefaultProgress,
+  loadFlashcardProgress,
+  normalizeFlashcardProgressMap,
+  saveFlashcardProgress,
+  scheduleFlashcardReview,
+  type DeckStats,
+  type StudyCard,
+} from '../utils/flashcards';
 import { isCloudConfigComplete, loadCloudConfig } from '../utils/s3Client';
 import {
   clampPageHeight,
@@ -59,9 +74,13 @@ import {
 } from '../utils/storage';
 
 export type SidebarFilterMode = 'all' | 'pinned' | 'unfiled' | 'folder';
-export type ActiveScreen = 'home' | 'note' | 'settings';
+export type ActiveScreen = 'home' | 'note' | 'settings' | 'flashcards';
 export type SettingsScopeTab = 'global' | 'local';
 export type CloudSyncModalTab = 'sync' | 'backup' | 'import' | 'setup';
+export type FlashcardScope =
+  | { type: 'all' }
+  | { type: 'folder'; folderId: string }
+  | { type: 'note'; noteId: string };
 
 const MAX_HISTORY = 50;
 
@@ -96,6 +115,14 @@ export function createNotesStore() {
   const [cloudSyncOpen, setCloudSyncOpen] = createSignal<boolean>(false);
   const [cloudSyncTab, setCloudSyncTab] = createSignal<CloudSyncModalTab>('sync');
   const [cloudConfigVersion, setCloudConfigVersion] = createSignal<number>(0);
+
+  // Flashcards & Spaced Repetition state
+  const [flashcardProgress, setFlashcardProgress] = createSignal<
+    Record<string, FlashcardProgress>
+  >(loadFlashcardProgress());
+  const [flashcardScope, setFlashcardScope] = createSignal<FlashcardScope>({ type: 'all' });
+  const [flashcardAutoStart, setFlashcardAutoStart] = createSignal<boolean>(false);
+  const [flashcardClockTick, setFlashcardClockTick] = createSignal<number>(Date.now());
 
   const isCloudConfigured = createMemo(() => {
     cloudConfigVersion();
@@ -275,6 +302,11 @@ export function createNotesStore() {
       '.canvas-text-input',
       '.canvas-image-selection',
       '.canvas-lasso-selection',
+      '.canvas-occlusion-overlay',
+      '.canvas-occlusion-box',
+      '.flashcards-scroll',
+      '.fc-study-stage',
+      '.fc-modal-body',
     ].join(', ');
 
     const fullscreenTouchStarts = new Map<number, { x: number; y: number }>();
@@ -559,6 +591,181 @@ export function createNotesStore() {
     if (!local) return 0;
     return Object.values(local).filter((v) => v !== undefined).length;
   });
+
+  createEffect(() => {
+    const progress = flashcardProgress();
+    saveFlashcardProgress(progress);
+  });
+
+  const allStudyCards = createMemo<StudyCard[]>(() =>
+    collectAllStudyCards(notes(), folders(), settings().canvasMode)
+  );
+
+  const flashcardDeckStats = createMemo<DeckStats>(() => {
+    const now = flashcardClockTick();
+    return computeDeckStats(allStudyCards(), flashcardProgress(), now);
+  });
+
+  const getNoteStudyCardCount = (noteId: string): number =>
+    allStudyCards().filter((c) => c.noteId === noteId).length;
+
+  const openFlashcards = (scope?: FlashcardScope, autoStart = false) => {
+    setFlashcardClockTick(Date.now());
+    if (scope) {
+      setFlashcardScope(scope);
+    }
+    setFlashcardAutoStart(autoStart);
+    setActiveScreen('flashcards');
+  };
+
+  const closeFlashcards = () => {
+    setFlashcardAutoStart(false);
+    if (previousNonSettingsScreen === 'note' && activeNote()) {
+      setActiveScreen('note');
+    } else {
+      setActiveScreen('home');
+    }
+  };
+
+  const openNoteAtPage = (noteId: string, pageId?: string) => {
+    const target = notes().find((n) => n.id === noteId);
+    if (!target) return;
+    setOpenTabIds((prev) => (prev.includes(noteId) ? prev : [...prev, noteId]));
+    setActiveNoteId(noteId);
+    if (pageId && target.pages.some((p) => p.id === pageId)) {
+      updateNoteById(noteId, (curr) => ({ ...curr, activePageId: pageId }));
+    }
+    setActiveScreen('note');
+  };
+
+  const reviewFlashcard = (cardKey: string, rating: FlashcardRating) => {
+    const now = Date.now();
+    setFlashcardProgress((prev) => ({
+      ...prev,
+      [cardKey]: scheduleFlashcardReview(prev[cardKey], cardKey, rating, now),
+    }));
+    setFlashcardClockTick(now);
+  };
+
+  const toggleFlashcardSuspended = (cardKey: string) => {
+    setFlashcardProgress((prev) => {
+      const curr = prev[cardKey] ?? createDefaultProgress(cardKey);
+      return {
+        ...prev,
+        [cardKey]: {
+          ...curr,
+          suspended: !curr.suspended,
+        },
+      };
+    });
+    setFlashcardClockTick(Date.now());
+  };
+
+  const resetFlashcardProgress = (cardKeys?: string[]) => {
+    if (!cardKeys) {
+      setFlashcardProgress({});
+      setFlashcardClockTick(Date.now());
+      showToast('Gesamter Karteikarten-Lernfortschritt zurückgesetzt');
+      return;
+    }
+    const keySet = new Set(cardKeys);
+    setFlashcardProgress((prev) => {
+      const next: Record<string, FlashcardProgress> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (!keySet.has(k)) next[k] = v;
+      }
+      return next;
+    });
+    setFlashcardClockTick(Date.now());
+    showToast(
+      cardKeys.length === 1
+        ? 'Lernfortschritt der Karte zurückgesetzt'
+        : `Lernfortschritt von ${cardKeys.length} Karten zurückgesetzt`
+    );
+  };
+
+  const addManualFlashcard = (
+    noteId: string,
+    card: Omit<ManualFlashcard, 'id' | 'createdAt' | 'updatedAt'>
+  ): ManualFlashcard | null => {
+    if (!notes().some((n) => n.id === noteId)) return null;
+    const now = Date.now();
+    const created: ManualFlashcard = {
+      id: generateId(),
+      kind: card.kind,
+      front: card.front,
+      back: card.back,
+      bidirectional: card.kind === 'basic' ? card.bidirectional : false,
+      ...(card.hint?.trim() ? { hint: card.hint.trim() } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+    updateNoteById(noteId, (n) => ({
+      ...n,
+      flashcards: [...(n.flashcards ?? []), created],
+      updatedAt: now,
+    }));
+    showToast(
+      created.kind === 'cloze'
+        ? 'Lückentext-Karteikarte erstellt'
+        : created.bidirectional
+          ? 'Beidseitige Karteikarte erstellt'
+          : 'Karteikarte erstellt'
+    );
+    return created;
+  };
+
+  const updateManualFlashcard = (
+    noteId: string,
+    cardId: string,
+    patch: Partial<Omit<ManualFlashcard, 'id' | 'createdAt'>>
+  ) => {
+    const now = Date.now();
+    updateNoteById(noteId, (n) => {
+      const list = n.flashcards ?? [];
+      if (!list.some((c) => c.id === cardId)) return n;
+      return {
+        ...n,
+        flashcards: list.map((c) => {
+          if (c.id !== cardId) return c;
+          const nextKind = patch.kind ?? c.kind;
+          const nextHint =
+            patch.hint !== undefined ? patch.hint.trim() || undefined : c.hint;
+          const updated: ManualFlashcard = {
+            ...c,
+            ...patch,
+            kind: nextKind,
+            bidirectional:
+              nextKind === 'basic'
+                ? patch.bidirectional ?? c.bidirectional
+                : false,
+            updatedAt: now,
+          };
+          if (nextHint) updated.hint = nextHint;
+          else delete updated.hint;
+          return updated;
+        }),
+        updatedAt: now,
+      };
+    });
+  };
+
+  const deleteManualFlashcard = (noteId: string, cardId: string) => {
+    const now = Date.now();
+    updateNoteById(noteId, (n) => {
+      const list = n.flashcards ?? [];
+      const next = list.filter((c) => c.id !== cardId);
+      if (next.length === list.length) return n;
+      const updated: Note = {
+        ...n,
+        updatedAt: now,
+      };
+      if (next.length > 0) updated.flashcards = next;
+      else delete updated.flashcards;
+      return updated;
+    });
+    showToast('Karteikarte gelöscht');
+  };
 
   const openSettings = (tab?: SettingsScopeTab) => {
     const resolvedTab: SettingsScopeTab =
@@ -1185,6 +1392,25 @@ export function createNotesStore() {
       })),
       texts: page.texts.map((t) => ({ ...t, id: generateId() })),
       images: page.images.map((img) => ({ ...img, id: generateId() })),
+      occlusions: (() => {
+        const pairMap = new Map<string, string>();
+        return (page.occlusions ?? []).map((occ) => {
+          let nextPairId = occ.pairId;
+          if (occ.pairId) {
+            let mapped = pairMap.get(occ.pairId);
+            if (!mapped) {
+              mapped = generateId();
+              pairMap.set(occ.pairId, mapped);
+            }
+            nextPairId = mapped;
+          }
+          return {
+            ...occ,
+            id: generateId(),
+            ...(nextPairId ? { pairId: nextPairId } : {}),
+          };
+        });
+      })(),
     }));
     const copy: Note = {
       ...original,
@@ -1195,6 +1421,9 @@ export function createNotesStore() {
       attachments: original.attachments.map((a) => ({ ...a })),
       pages: clonedPages,
       activePageId: clonedPages[0].id,
+      ...(original.flashcards && original.flashcards.length > 0
+        ? { flashcards: original.flashcards.map((fc) => ({ ...fc, id: generateId() })) }
+        : {}),
       ...(original.settings ? { settings: { ...original.settings } } : {}),
       createdAt: now,
       updatedAt: now,
@@ -1387,6 +1616,25 @@ export function createNotesStore() {
       })),
       texts: orig.texts.map((t) => ({ ...t, id: generateId() })),
       images: orig.images.map((img) => ({ ...img, id: generateId() })),
+      occlusions: (() => {
+        const pairMap = new Map<string, string>();
+        return (orig.occlusions ?? []).map((occ) => {
+          let nextPairId = occ.pairId;
+          if (occ.pairId) {
+            let mapped = pairMap.get(occ.pairId);
+            if (!mapped) {
+              mapped = generateId();
+              pairMap.set(occ.pairId, mapped);
+            }
+            nextPairId = mapped;
+          }
+          return {
+            ...occ,
+            id: generateId(),
+            ...(nextPairId ? { pairId: nextPairId } : {}),
+          };
+        });
+      })(),
     };
     const nextPages = [...n.pages];
     nextPages.splice(idx + 1, 0, copy);
@@ -1544,6 +1792,7 @@ export function createNotesStore() {
     strokes: page.strokes,
     texts: page.texts,
     images: page.images,
+    occlusions: page.occlusions ?? [],
   });
 
   const pushCanvasHistory = (noteId: string, pageId: string, previous: CanvasSnapshot) => {
@@ -1572,6 +1821,7 @@ export function createNotesStore() {
       strokes: next.strokes,
       texts: next.texts,
       images: next.images,
+      occlusions: next.occlusions !== undefined ? next.occlusions : page.occlusions ?? [],
     }));
   };
 
@@ -1723,14 +1973,216 @@ export function createNotesStore() {
     );
   };
 
+  // ==================== CANVAS OCCLUSION FLASHCARDS OPS ====================
+  const addCanvasOcclusion = (item: CanvasOcclusionItem, targetPageId?: string) => {
+    const resolved = resolveTargetPage(targetPageId);
+    if (!resolved) return;
+    const { page: p } = resolved;
+    commitCanvasSnapshot(
+      {
+        strokes: p.strokes,
+        texts: p.texts,
+        images: p.images,
+        occlusions: [...(p.occlusions ?? []), item],
+      },
+      undefined,
+      p.id
+    );
+  };
+
+  const updateCanvasOcclusionLive = (item: CanvasOcclusionItem, targetPageId?: string) => {
+    const resolved = resolveTargetPage(targetPageId);
+    if (!resolved) return;
+    const { note: n, page: p } = resolved;
+    updatePageById(n.id, p.id, (page) => ({
+      ...page,
+      occlusions: (page.occlusions ?? []).map((o) => (o.id === item.id ? item : o)),
+    }));
+  };
+
+  const updateCanvasOcclusion = (
+    item: CanvasOcclusionItem,
+    previousOverride?: CanvasSnapshot,
+    targetPageId?: string
+  ) => {
+    const resolved = resolveTargetPage(targetPageId);
+    if (!resolved) return;
+    const { page: p } = resolved;
+    commitCanvasSnapshot(
+      {
+        strokes: p.strokes,
+        texts: p.texts,
+        images: p.images,
+        occlusions: (p.occlusions ?? []).map((o) => (o.id === item.id ? item : o)),
+      },
+      previousOverride,
+      p.id
+    );
+  };
+
+  const deleteCanvasOcclusion = (occlusionId: string, targetPageId?: string) => {
+    const resolved = resolveTargetPage(targetPageId);
+    if (!resolved) return;
+    const { page: p } = resolved;
+    const list = p.occlusions ?? [];
+    const target = list.find((o) => o.id === occlusionId);
+    if (!target) return;
+
+    const nextOcclusions = list
+      .filter((o) => o.id !== occlusionId)
+      .map((o) => {
+        if (target.pairId && o.pairId === target.pairId) {
+          const clean = { ...o };
+          delete clean.pairId;
+          delete clean.pairRole;
+          delete clean.bidirectional;
+          return clean;
+        }
+        return o;
+      });
+
+    commitCanvasSnapshot(
+      {
+        strokes: p.strokes,
+        texts: p.texts,
+        images: p.images,
+        occlusions: nextOcclusions,
+      },
+      undefined,
+      p.id
+    );
+  };
+
+  const createBidirectionalPartnerOcclusion = (
+    sourceId: string,
+    targetPageId?: string
+  ): CanvasOcclusionItem | null => {
+    const resolved = resolveTargetPage(targetPageId);
+    if (!resolved) return null;
+    const { note: n, page: p } = resolved;
+    const list = p.occlusions ?? [];
+    const source = list.find((o) => o.id === sourceId);
+    if (!source) return null;
+
+    // If already paired, toggle bidirectional flag instead of duplicating
+    if (source.pairId) {
+      const nextBi = !(source.bidirectional ?? true);
+      commitCanvasSnapshot(
+        {
+          strokes: p.strokes,
+          texts: p.texts,
+          images: p.images,
+          occlusions: list.map((o) =>
+            o.pairId === source.pairId ? { ...o, bidirectional: nextBi } : o
+          ),
+        },
+        undefined,
+        p.id
+      );
+      showToast(
+        nextBi
+          ? 'Beidseitige Karteikarte (A ↔ B) aktiviert'
+          : 'Einseitige Karteikarte (nur A → B) aktiv'
+      );
+      return null;
+    }
+
+    const isInf = (n.settings?.canvasMode ?? settings().canvasMode) === 'infinite';
+    const pairId = generateId();
+    const gap = 26;
+    let partnerX = source.x + source.width + gap;
+    let partnerY = source.y;
+
+    if (!isInf && partnerX + source.width > p.width - 12) {
+      partnerX = Math.max(12, source.x);
+      partnerY =
+        source.y + source.height + gap + source.height <= p.height - 12
+          ? source.y + source.height + gap
+          : Math.max(12, source.y - source.height - gap);
+    }
+
+    const updatedSource: CanvasOcclusionItem = {
+      ...source,
+      pairId,
+      pairRole: 'a',
+      bidirectional: true,
+    };
+    delete updatedSource.groupId;
+
+    const partner: CanvasOcclusionItem = {
+      id: generateId(),
+      x: Math.round(partnerX),
+      y: Math.round(partnerY),
+      width: source.width,
+      height: source.height,
+      color: source.color,
+      pairId,
+      pairRole: 'b',
+      bidirectional: true,
+    };
+
+    commitCanvasSnapshot(
+      {
+        strokes: p.strokes,
+        texts: p.texts,
+        images: p.images,
+        occlusions: [
+          ...list.map((o) => (o.id === source.id ? updatedSource : o)),
+          partner,
+        ],
+      },
+      undefined,
+      p.id
+    );
+    showToast('Beidseitige Stelle B erstellt — schiebe B auf das Gegenstück');
+    return partner;
+  };
+
+  const unlinkOcclusionPair = (occlusionId: string, targetPageId?: string) => {
+    const resolved = resolveTargetPage(targetPageId);
+    if (!resolved) return;
+    const { page: p } = resolved;
+    const list = p.occlusions ?? [];
+    const target = list.find((o) => o.id === occlusionId);
+    if (!target?.pairId) return;
+    const pairId = target.pairId;
+    commitCanvasSnapshot(
+      {
+        strokes: p.strokes,
+        texts: p.texts,
+        images: p.images,
+        occlusions: list.map((o) => {
+          if (o.pairId !== pairId) return o;
+          const clean = { ...o };
+          delete clean.pairId;
+          delete clean.pairRole;
+          delete clean.bidirectional;
+          return clean;
+        }),
+      },
+      undefined,
+      p.id
+    );
+    showToast('Paar-Verknüpfung gelöst (jetzt zwei einzelne Stellen)');
+  };
+
   const clearCanvas = (targetPageId?: string) => {
     const resolved = resolveTargetPage(targetPageId);
     if (!resolved) return;
     const { page: p } = resolved;
-    if (p.strokes.length === 0 && p.texts.length === 0 && p.images.length === 0) {
+    if (
+      p.strokes.length === 0 &&
+      p.texts.length === 0 &&
+      p.images.length === 0 &&
+      (p.occlusions?.length ?? 0) === 0
+    ) {
       return;
     }
-    commitCanvasSnapshot({ strokes: [], texts: [], images: [] }, undefined, p.id);
+    commitCanvasSnapshot(
+      { strokes: [], texts: [], images: [], occlusions: [] },
+      undefined,
+      p.id
+    );
     showToast(`Seite „${p.title}“ geleert (mit Rückgängig wiederherstellbar)`);
   };
 
@@ -1756,6 +2208,7 @@ export function createNotesStore() {
       strokes: previous.strokes,
       texts: previous.texts,
       images: previous.images,
+      occlusions: previous.occlusions !== undefined ? previous.occlusions : page.occlusions ?? [],
     }));
   };
 
@@ -1781,6 +2234,7 @@ export function createNotesStore() {
       strokes: next.strokes,
       texts: next.texts,
       images: next.images,
+      occlusions: next.occlusions !== undefined ? next.occlusions : page.occlusions ?? [],
     }));
   };
 
@@ -1863,6 +2317,12 @@ export function createNotesStore() {
 
       if (importedFolders.length > 0) {
         setFolders((prev) => [...prev, ...importedFolders]);
+      }
+      if (parsed && !Array.isArray(parsed) && parsed.flashcardProgress) {
+        const importedProgress = normalizeFlashcardProgressMap(parsed.flashcardProgress);
+        if (Object.keys(importedProgress).length > 0) {
+          setFlashcardProgress((prev) => ({ ...importedProgress, ...prev }));
+        }
       }
       setNotes((prev) => [...importedNotes, ...prev]);
       openNote(importedNotes[0].id);
@@ -2157,6 +2617,12 @@ export function createNotesStore() {
     updateCanvasImage,
     deleteCanvasImage,
     reorderCanvasImage,
+    addCanvasOcclusion,
+    updateCanvasOcclusionLive,
+    updateCanvasOcclusion,
+    deleteCanvasOcclusion,
+    createBidirectionalPartnerOcclusion,
+    unlinkOcclusionPair,
     clearCanvas,
     undoCanvas,
     redoCanvas,
@@ -2164,6 +2630,23 @@ export function createNotesStore() {
     extendCanvasHeight,
     importNotesFromJson,
     compactStorage,
+    flashcardProgress,
+    flashcardScope,
+    setFlashcardScope,
+    flashcardAutoStart,
+    setFlashcardAutoStart,
+    allStudyCards,
+    flashcardDeckStats,
+    getNoteStudyCardCount,
+    openFlashcards,
+    closeFlashcards,
+    openNoteAtPage,
+    reviewFlashcard,
+    toggleFlashcardSuspended,
+    resetFlashcardProgress,
+    addManualFlashcard,
+    updateManualFlashcard,
+    deleteManualFlashcard,
   };
 }
 

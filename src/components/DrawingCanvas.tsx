@@ -80,7 +80,9 @@ import {
   markGlobalPenActivity,
   type EditingTextState,
   type SelectedImageState,
+  type SelectedOcclusionState,
 } from './CanvasPageSheet';
+import type { OcclusionDisplayMode } from './CanvasOcclusionOverlay';
 import {
   InfiniteCanvasView,
   type InfiniteCanvasHandle,
@@ -109,7 +111,10 @@ import {
   IconDownload,
   IconEllipse,
   IconEraser,
+  IconEye,
+  IconEyeOff,
   IconFileUp,
+  IconFlashcards,
   IconFountainPen,
   IconGrid,
   IconHighlighter,
@@ -118,6 +123,7 @@ import {
   IconLasso,
   IconLine,
   IconMaximize,
+  IconOcclusion,
   IconPages,
   IconPlus,
   IconPointer,
@@ -579,6 +585,50 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [editingText, setEditingText] = createSignal<EditingTextState | null>(null);
   const [selectedImage, setSelectedImage] = createSignal<SelectedImageState | null>(null);
   const [lassoSelection, setLassoSelection] = createSignal<LassoSelection | null>(null);
+  const [occlusionDisplayMode, setOcclusionDisplayMode] =
+    createSignal<OcclusionDisplayMode>('edit');
+  const [selectedOcclusion, setSelectedOcclusion] =
+    createSignal<SelectedOcclusionState | null>(null);
+  const [revealedOcclusionIds, setRevealedOcclusionIds] = createSignal<Set<string>>(
+    new Set()
+  );
+
+  const toggleRevealOcclusion = (id: string) => {
+    setRevealedOcclusionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const totalNoteOcclusions = createMemo(() => {
+    const n = props.store.activeNote();
+    if (!n) return 0;
+    return n.pages.reduce((sum, p) => sum + (p.occlusions?.length ?? 0), 0);
+  });
+
+  const allOcclusionsRevealed = createMemo(() => {
+    const total = totalNoteOcclusions();
+    if (total === 0) return false;
+    return revealedOcclusionIds().size >= total;
+  });
+
+  const toggleRevealAllOcclusions = () => {
+    const n = props.store.activeNote();
+    if (!n) return;
+    if (allOcclusionsRevealed()) {
+      setRevealedOcclusionIds(new Set<string>());
+    } else {
+      const all = new Set<string>();
+      for (const p of n.pages) {
+        for (const o of p.occlusions ?? []) {
+          all.add(o.id);
+        }
+      }
+      setRevealedOcclusionIds(all);
+    }
+  };
 
   // Unified Canvas Export modal (Pages & Infinite) + interactive region picker state
   const [exportDialogOpen, setExportDialogOpen] = createSignal<boolean>(false);
@@ -599,6 +649,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     if (!inf) {
       setIsPickingExportRegion(false);
     }
+    setSelectedOcclusion(null);
+    setRevealedOcclusionIds(new Set<string>());
   });
 
   let stageWrapperRef: HTMLDivElement | undefined;
@@ -1050,7 +1102,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-ruler, .paper-popover'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .canvas-ruler, .paper-popover'
         )
       );
     };
@@ -1751,6 +1803,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         if (sizeMenuOpen()) setSizeMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
         if (selectedImage()) setSelectedImage(null);
+        if (selectedOcclusion()) setSelectedOcclusion(null);
         if (lassoSelection()) setLassoSelection(null);
         if (tool() === 'scribble') exitScribbleMode();
       }
@@ -1777,6 +1830,14 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         if (lassoSelection()) {
           e.preventDefault();
           handleLassoDelete();
+          return;
+        }
+        const selOcc = selectedOcclusion();
+        if (selOcc) {
+          e.preventDefault();
+          setSelectedOcclusion(null);
+          props.store.deleteCanvasOcclusion(selOcc.occlusionId, selOcc.pageId);
+          props.store.showToast('Verdeckte Stelle entfernt');
           return;
         }
         const sel = selectedImage();
@@ -1957,11 +2018,20 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     if (nextTool !== 'select') {
       setSelectedImage(null);
     }
+    if (nextTool !== 'occlusion' && nextTool !== 'select') {
+      setSelectedOcclusion(null);
+    }
     if (nextTool !== 'lasso') {
       setLassoSelection(null);
     }
 
     setTool(nextTool);
+    if (nextTool === 'occlusion') {
+      setOcclusionDisplayMode('edit');
+      props.store.showToast(
+        'Stellen verbergen aktiv — Rahmen aufziehen zum Verdecken · Tippe „Beidseitig“ für A ↔ B'
+      );
+    }
     if (nextTool !== 'pen') {
       setPenMenuOpen(false);
     }
@@ -2617,6 +2687,24 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </Show>
           </div>
 
+          {/* Canvas Occlusion Flashcard Tool (Stellen verbergen & Beidseitig A↔B) */}
+          <button
+            type="button"
+            class="tool-btn occlusion-tool-btn"
+            classList={{ 'is-active': tool() === 'occlusion' }}
+            onPointerDown={(e) => {
+              if (tool() === 'scribble' || editingText()) {
+                e.preventDefault();
+              }
+            }}
+            onClick={() => selectTool('occlusion')}
+            title="Karteikarte: Einzelne Stellen verbergen (optional beidseitig A ↔ B)"
+            aria-label="Stellen verbergen (Karteikarte)"
+            aria-pressed={tool() === 'occlusion'}
+          >
+            <IconOcclusion size={15} />
+          </button>
+
           {/* Interactive Drawing Ruler Toggle */}
           <button
             type="button"
@@ -2699,7 +2787,94 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           <div class="toolbar-divider" />
         </Show>
 
-        <Show when={tool() !== 'eraser' && tool() !== 'select' && tool() !== 'lasso'}>
+        <Show when={tool() === 'occlusion' || totalNoteOcclusions() > 0}>
+          <div class="toolbar-group occlusion-controls-group">
+            <div class="occ-mode-switch" role="group" aria-label="Verdeckungs-Ansicht">
+              <button
+                type="button"
+                class="occ-mode-btn"
+                classList={{ 'is-active': occlusionDisplayMode() === 'edit' }}
+                onClick={() => setOcclusionDisplayMode('edit')}
+                title="Verdeckte Stellen transparent zum Bearbeiten anzeigen"
+              >
+                Bearbeiten
+              </button>
+              <button
+                type="button"
+                class="occ-mode-btn"
+                classList={{ 'is-active': occlusionDisplayMode() === 'study' }}
+                onClick={() => {
+                  setSelectedOcclusion(null);
+                  setRevealedOcclusionIds(new Set<string>());
+                  setOcclusionDisplayMode('study');
+                }}
+                title="Abdeckband-Modus: Stellen verbergen & per Antippen aufdecken"
+              >
+                Abdecken
+              </button>
+              <button
+                type="button"
+                class="occ-mode-btn"
+                classList={{ 'is-active': occlusionDisplayMode() === 'hidden' }}
+                onClick={() => {
+                  setSelectedOcclusion(null);
+                  setOcclusionDisplayMode('hidden');
+                }}
+                title="Verdeckungs-Boxen vorübergehend ausblenden"
+              >
+                <IconEyeOff size={12} />
+              </button>
+            </div>
+
+            <Show when={occlusionDisplayMode() === 'study' && totalNoteOcclusions() > 0}>
+              <button
+                type="button"
+                class="tool-pill"
+                onClick={toggleRevealAllOcclusions}
+                title={
+                  allOcclusionsRevealed()
+                    ? 'Alle Stellen wieder verdecken'
+                    : 'Alle Stellen aufdecken'
+                }
+              >
+                <Show when={allOcclusionsRevealed()} fallback={<IconEye size={13} />}>
+                  <IconEyeOff size={13} />
+                </Show>
+                <span class="hide-compact">
+                  {allOcclusionsRevealed() ? 'Zudecken' : 'Aufdecken'}
+                </span>
+              </button>
+            </Show>
+
+            <Show when={totalNoteOcclusions() > 0}>
+              <button
+                type="button"
+                class="tool-pill is-flashcard-pill"
+                onClick={() => {
+                  const nid = note()?.id;
+                  if (nid) {
+                    props.store.openFlashcards({ type: 'note', noteId: nid }, true);
+                  }
+                }}
+                title="Karteikarten dieser Notiz jetzt abfragen"
+              >
+                <IconFlashcards size={13} />
+                <span class="hide-compact">Lernen</span>
+                <span class="occ-pill-count">{totalNoteOcclusions()}</span>
+              </button>
+            </Show>
+          </div>
+          <div class="toolbar-divider" />
+        </Show>
+
+        <Show
+          when={
+            tool() !== 'eraser' &&
+            tool() !== 'select' &&
+            tool() !== 'lasso' &&
+            tool() !== 'occlusion'
+          }
+        >
           <div class="toolbar-group color-group">
             <Index each={colorPalette()}>
               {(swatchColor, index) => {
@@ -2757,7 +2932,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           <div class="toolbar-divider" />
         </Show>
 
-        <Show when={tool() !== 'select' && tool() !== 'lasso'}>
+        <Show when={tool() !== 'select' && tool() !== 'lasso' && tool() !== 'occlusion'}>
           <div class="toolbar-group size-group">
             <Show
               when={
@@ -3610,6 +3785,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 editingText={editingText()}
                 selectedImage={selectedImage()}
                 lassoSelection={lassoSelection()}
+                occlusionDisplayMode={occlusionDisplayMode()}
+                selectedOcclusion={selectedOcclusion()}
+                revealedOcclusionIds={revealedOcclusionIds()}
+                onSetSelectedOcclusion={setSelectedOcclusion}
+                onToggleRevealOcclusion={toggleRevealOcclusion}
                 onPointerTypeChange={handlePointerTypeDetected}
                 onZoomChange={setInfiniteZoom}
                 onSetEditingText={setEditingText}
@@ -3706,6 +3886,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   editingText={editingText()}
                   selectedImage={selectedImage()}
                   lassoSelection={lassoSelection()}
+                  occlusionDisplayMode={occlusionDisplayMode()}
+                  selectedOcclusion={selectedOcclusion()}
+                  revealedOcclusionIds={revealedOcclusionIds()}
+                  onSetSelectedOcclusion={setSelectedOcclusion}
+                  onToggleRevealOcclusion={toggleRevealOcclusion}
                   onPointerTypeChange={handlePointerTypeDetected}
                   onPenPointerDown={() => penContactNotifier?.()}
                   onSetEditingText={setEditingText}

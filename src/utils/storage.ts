@@ -7,14 +7,18 @@ import {
   MAX_PAGE_HEIGHT,
   MAX_PAGE_WIDTH,
   MIN_PAGE_DIMENSION,
+  OCCLUSION_COLORS,
   PAGE_SIZE_PRESETS,
   type AppSettings,
   type CanvasFontFamily,
   type CanvasImageItem,
+  type CanvasOcclusionItem,
   type CanvasPage,
   type CanvasTextItem,
   type EditorFontFamily,
+  type FlashcardProgress,
   type Folder,
+  type ManualFlashcard,
   type Note,
   type NoteImageAttachment,
   type NoteLocalSettings,
@@ -220,6 +224,7 @@ export function createCanvasPage(options?: {
     strokes: [],
     texts: [],
     images: [],
+    occlusions: [],
     paperConfig: {
       ...DEFAULT_PAPER_CONFIG,
       ...(options?.paperConfig ?? {}),
@@ -348,6 +353,7 @@ function createSamplePage1(): CanvasPage {
       },
     ],
     images: [],
+    occlusions: [],
   };
 }
 
@@ -465,6 +471,7 @@ function createSamplePage2(): CanvasPage {
       },
     ],
     images: [],
+    occlusions: [],
   };
 }
 
@@ -556,6 +563,62 @@ function normalizeImages(rawPage: Record<string, unknown> | undefined): CanvasIm
     .filter((img) => img.src.length > 0);
 }
 
+function normalizeOcclusions(
+  rawPage: Record<string, unknown> | undefined
+): CanvasOcclusionItem[] {
+  const rawList = rawPage?.occlusions;
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .filter((o): o is Record<string, unknown> => Boolean(o && typeof o === 'object'))
+    .map((o) => ({
+      id: typeof o.id === 'string' ? o.id : generateId(),
+      x: typeof o.x === 'number' && Number.isFinite(o.x) ? o.x : 80,
+      y: typeof o.y === 'number' && Number.isFinite(o.y) ? o.y : 80,
+      width: typeof o.width === 'number' && o.width >= 16 ? o.width : 120,
+      height: typeof o.height === 'number' && o.height >= 16 ? o.height : 48,
+      color:
+        typeof o.color === 'string' && o.color.length > 0
+          ? o.color
+          : OCCLUSION_COLORS[0],
+      ...(typeof o.label === 'string' && o.label.trim().length > 0
+        ? { label: o.label }
+        : {}),
+      ...(typeof o.groupId === 'string' && o.groupId.trim().length > 0
+        ? { groupId: o.groupId.trim() }
+        : {}),
+      ...(typeof o.pairId === 'string' && o.pairId.trim().length > 0
+        ? { pairId: o.pairId.trim() }
+        : {}),
+      ...(o.pairRole === 'a' || o.pairRole === 'b' ? { pairRole: o.pairRole } : {}),
+      ...(typeof o.bidirectional === 'boolean'
+        ? { bidirectional: o.bidirectional }
+        : {}),
+    }));
+}
+
+function normalizeManualFlashcards(
+  rawNote: Record<string, unknown>
+): ManualFlashcard[] {
+  const rawList = rawNote.flashcards;
+  if (!Array.isArray(rawList)) return [];
+  const now = Date.now();
+  return rawList
+    .filter((c): c is Record<string, unknown> => Boolean(c && typeof c === 'object'))
+    .map((c) => ({
+      id: typeof c.id === 'string' ? c.id : generateId(),
+      kind: (c.kind === 'cloze' ? 'cloze' : 'basic') as 'basic' | 'cloze',
+      front: typeof c.front === 'string' ? c.front : '',
+      back: typeof c.back === 'string' ? c.back : '',
+      bidirectional: Boolean(c.bidirectional),
+      ...(typeof c.hint === 'string' && c.hint.trim().length > 0
+        ? { hint: c.hint.trim() }
+        : {}),
+      createdAt: typeof c.createdAt === 'number' ? c.createdAt : now,
+      updatedAt: typeof c.updatedAt === 'number' ? c.updatedAt : now,
+    }))
+    .filter((c) => c.front.trim().length > 0);
+}
+
 function normalizePage(rawPage: Record<string, unknown>, index: number): CanvasPage {
   const rawWidth =
     typeof rawPage.width === 'number'
@@ -596,6 +659,7 @@ function normalizePage(rawPage: Record<string, unknown>, index: number): CanvasP
     strokes: Array.isArray(rawPage.strokes) ? (rawPage.strokes as Stroke[]) : [],
     texts: normalizeTexts(rawPage),
     images: normalizeImages(rawPage),
+    occlusions: normalizeOcclusions(rawPage),
     paperConfig: normalizePaperConfig(rawPage),
     backgroundImage,
   };
@@ -703,6 +767,7 @@ export function normalizeNote(raw: Record<string, unknown>): Note {
     : pages[0].id;
 
   const normalizedSettings = normalizeNoteSettings(raw.settings);
+  const normalizedFlashcards = normalizeManualFlashcards(raw);
 
   return {
     id: typeof raw.id === 'string' ? raw.id : generateId(),
@@ -716,6 +781,7 @@ export function normalizeNote(raw: Record<string, unknown>): Note {
     attachments: normalizeAttachments(raw),
     pages,
     activePageId,
+    ...(normalizedFlashcards.length > 0 ? { flashcards: normalizedFlashcards } : {}),
     ...(normalizedSettings && Object.keys(normalizedSettings).length > 0
       ? { settings: normalizedSettings }
       : {}),
@@ -1243,11 +1309,18 @@ export function saveActiveScreen(screen: 'home' | 'note'): void {
 export function exportNotesAsJson(
   notes: Note[],
   folders: Folder[] = [],
-  settings?: AppSettings
+  settings?: AppSettings,
+  flashcardProgress?: Record<string, FlashcardProgress>
 ) {
-  const payload = settings
-    ? { version: 2, folders, notes, settings }
-    : { version: 2, folders, notes };
+  const payload = {
+    version: 2,
+    folders,
+    notes,
+    ...(settings ? { settings } : {}),
+    ...(flashcardProgress && Object.keys(flashcardProgress).length > 0
+      ? { flashcardProgress }
+      : {}),
+  };
   const blob = new Blob([JSON.stringify(payload)], {
     type: 'application/json',
   });

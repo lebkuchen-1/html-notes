@@ -8,18 +8,20 @@ import {
   Show,
 } from 'solid-js';
 import type { NotesStore } from '../store/notesStore';
-import type {
-  CanvasFontFamily,
-  CanvasImageItem,
-  CanvasPage,
-  CanvasSnapshot,
-  CanvasTextItem,
-  DrawingTool,
-  PalmSensitivity,
-  PenStyle,
-  StabilizationLevel,
-  Stroke,
-  StrokePoint,
+import {
+  OCCLUSION_COLORS,
+  type CanvasFontFamily,
+  type CanvasImageItem,
+  type CanvasOcclusionItem,
+  type CanvasPage,
+  type CanvasSnapshot,
+  type CanvasTextItem,
+  type DrawingTool,
+  type PalmSensitivity,
+  type PenStyle,
+  type StabilizationLevel,
+  type Stroke,
+  type StrokePoint,
 } from '../types';
 import {
   computePageContentBounds,
@@ -79,11 +81,16 @@ import {
   markGlobalPenActivity,
   type EditingTextState,
   type SelectedImageState,
+  type SelectedOcclusionState,
 } from './CanvasPageSheet';
 import {
   CanvasLassoOverlay,
   type LassoResizeCorner,
 } from './CanvasLassoOverlay';
+import {
+  CanvasOcclusionOverlay,
+  type OcclusionDisplayMode,
+} from './CanvasOcclusionOverlay';
 import { CanvasTextOverlay } from './CanvasTextOverlay';
 import { InfiniteExportRegionOverlay } from './InfiniteExportRegionOverlay';
 import type {
@@ -146,6 +153,11 @@ interface InfiniteCanvasViewProps {
   editingText: EditingTextState | null;
   selectedImage: SelectedImageState | null;
   lassoSelection: LassoSelection | null;
+  occlusionDisplayMode: OcclusionDisplayMode;
+  selectedOcclusion: SelectedOcclusionState | null;
+  revealedOcclusionIds: ReadonlySet<string>;
+  onSetSelectedOcclusion: (next: SelectedOcclusionState | null) => void;
+  onToggleRevealOcclusion: (id: string) => void;
   onPointerTypeChange: (type: string) => void;
   onZoomChange: (zoom: number) => void;
   onSetEditingText: (next: EditingTextState | null) => void;
@@ -212,6 +224,15 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
   let isLassoDrawing = false;
   let lassoPoints: LassoPoint[] = [];
   let hadLassoSelectionAtDown = false;
+
+  // Live drag-to-draw occlusion mask state (world coordinates)
+  let occlusionDraft: {
+    startX: number;
+    startY: number;
+    currX: number;
+    currY: number;
+    hadSelectedBefore: boolean;
+  } | null = null;
   let lassoTransformState: {
     mode: 'move' | LassoResizeCorner;
     pointerId: number;
@@ -511,6 +532,27 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       return;
     }
 
+    if (occlusionDraft) {
+      const rx = Math.min(occlusionDraft.startX, occlusionDraft.currX);
+      const ry = Math.min(occlusionDraft.startY, occlusionDraft.currY);
+      const rw = Math.abs(occlusionDraft.currX - occlusionDraft.startX);
+      const rh = Math.abs(occlusionDraft.currY - occlusionDraft.startY);
+      const invZ = 1 / Math.max(0.35, cam.zoom);
+      ctx.save();
+      ctx.scale(totalScale, totalScale);
+      ctx.translate(-cam.x, -cam.y);
+      ctx.fillStyle = 'rgba(79, 70, 229, 0.24)';
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 2 * invZ;
+      ctx.setLineDash([6 * invZ, 4 * invZ]);
+      ctx.beginPath();
+      ctx.roundRect(rx, ry, Math.max(2, rw), Math.max(2, rh), 6 * invZ);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
     const activeLassoT = lassoTransform();
     const activeLassoSel = localLassoSelection();
     if (activeLassoT && activeLassoSel) {
@@ -774,6 +816,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     isLassoDrawing = false;
     lassoPoints = [];
     hadLassoSelectionAtDown = false;
+    occlusionDraft = null;
     isErasing = false;
     erasingStrokes = null;
     erasingTexts = null;
@@ -799,6 +842,51 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     if (activeRulerLock) {
       activeRulerLock = null;
       props.rulerAdapter?.releaseLock();
+    }
+
+    if (occlusionDraft) {
+      const draft = occlusionDraft;
+      occlusionDraft = null;
+      clearLiveCanvas();
+      const p = page();
+      const shouldDiscard = cancelled && !wasPen;
+      if (!shouldDiscard && p) {
+        const rawW = Math.abs(draft.currX - draft.startX);
+        const rawH = Math.abs(draft.currY - draft.startY);
+        const minTap = 14 / Math.max(0.35, camera().zoom);
+        if (rawW < minTap && rawH < minTap) {
+          if (draft.hadSelectedBefore) {
+            props.onSetSelectedOcclusion(null);
+          } else {
+            const defW = 160;
+            const defH = 44;
+            const created: CanvasOcclusionItem = {
+              id: generateId(),
+              x: Math.round(draft.startX - defW / 2),
+              y: Math.round(draft.startY - defH / 2),
+              width: defW,
+              height: defH,
+              color: OCCLUSION_COLORS[0],
+            };
+            props.store.addCanvasOcclusion(created, props.pageId);
+            props.onSetSelectedOcclusion({ pageId: props.pageId, occlusionId: created.id });
+          }
+        } else {
+          const w = Math.max(24, Math.round(rawW));
+          const h = Math.max(24, Math.round(rawH));
+          const created: CanvasOcclusionItem = {
+            id: generateId(),
+            x: Math.round(Math.min(draft.startX, draft.currX)),
+            y: Math.round(Math.min(draft.startY, draft.currY)),
+            width: w,
+            height: h,
+            color: OCCLUSION_COLORS[0],
+          };
+          props.store.addCanvasOcclusion(created, props.pageId);
+          props.onSetSelectedOcclusion({ pageId: props.pageId, occlusionId: created.id });
+        }
+      }
+      return;
     }
 
     if (isLassoDrawing) {
@@ -1101,7 +1189,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-ruler, .export-region-interactive'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .canvas-ruler, .export-region-interactive'
         )
       );
     };
@@ -1644,6 +1732,8 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
 
     if (props.editingText) props.onCommitEditingText();
     if (props.selectedImage) props.onSetSelectedImage(null);
+    const hadSelectedOccAtDown = Boolean(props.selectedOcclusion);
+    if (props.selectedOcclusion) props.onSetSelectedOcclusion(null);
     hadLassoSelectionAtDown = Boolean(props.lassoSelection);
     if (props.lassoSelection) props.onSetLassoSelection(null);
 
@@ -1698,6 +1788,18 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       ? activeStabilizer.filter(rawPt, startEvTime)
       : rawPt;
     lastPoint = pt;
+
+    if (currentTool === 'occlusion') {
+      occlusionDraft = {
+        startX: rawPt.x,
+        startY: rawPt.y,
+        currX: rawPt.x,
+        currY: rawPt.y,
+        hadSelectedBefore: hadSelectedOccAtDown,
+      };
+      scheduleLiveRender();
+      return;
+    }
 
     if (currentTool === 'lasso') {
       isLassoDrawing = true;
@@ -1829,6 +1931,13 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       }
       const rawPt = toWorldStrokePoint(ev, parentPointerType, evTime, overrideClient);
       lastMoveTime = evTime;
+
+      if (occlusionDraft) {
+        occlusionDraft.currX = rawPt.x;
+        occlusionDraft.currY = rawPt.y;
+        lastPoint = rawPt;
+        continue;
+      }
 
       if (isLassoDrawing) {
         const minStep = 2.5 / Math.max(0.35, camZoom);
@@ -2229,6 +2338,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
                 (props.tool === 'text' || props.tool === 'scribble') && !spacePressed(),
               'is-select-tool': props.tool === 'select' && !spacePressed(),
               'is-lasso-tool': props.tool === 'lasso' && !spacePressed(),
+              'is-occlusion-tool': props.tool === 'occlusion' && !spacePressed(),
             }}
             style={{
               width: `${vpSize().width}px`,
@@ -2241,6 +2351,72 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
             onLostPointerCapture={handleLostPointerCapture}
             onPointerLeave={handlePointerLeave}
             onContextMenu={(e) => e.preventDefault()}
+          />
+
+          {/* Canvas Flashcard Occlusion Overlay (World Coordinates) */}
+          <CanvasOcclusionOverlay
+            occlusions={currPage().occlusions ?? []}
+            displayMode={props.occlusionDisplayMode}
+            interactiveEdit={
+              (props.tool === 'occlusion' || props.tool === 'select') && !spacePressed()
+            }
+            selectedId={
+              props.selectedOcclusion?.pageId === props.pageId
+                ? props.selectedOcclusion.occlusionId
+                : null
+            }
+            revealedIds={props.revealedOcclusionIds}
+            scale={camera().zoom}
+            toScreenRect={(occ) => {
+              const cam = camera();
+              return {
+                left: (occ.x - cam.x) * cam.zoom,
+                top: (occ.y - cam.y) * cam.zoom,
+                width: occ.width * cam.zoom,
+                height: occ.height * cam.zoom,
+              };
+            }}
+            onSelect={(id) =>
+              props.onSetSelectedOcclusion(
+                id ? { pageId: props.pageId, occlusionId: id } : null
+              )
+            }
+            onToggleReveal={(id) => props.onToggleRevealOcclusion(id)}
+            onCaptureSnapshot={() => {
+              const p = currPage();
+              return {
+                strokes: p.strokes,
+                texts: p.texts,
+                images: p.images,
+                occlusions: (p.occlusions ?? []).map((o) => ({ ...o })),
+              };
+            }}
+            onUpdateLive={(item) =>
+              props.store.updateCanvasOcclusionLive(item, props.pageId)
+            }
+            onCommitUpdate={(item, prevSnap) =>
+              props.store.updateCanvasOcclusion(item, prevSnap, props.pageId)
+            }
+            onToggleBidirectional={(id) => {
+              const partner = props.store.createBidirectionalPartnerOcclusion(
+                id,
+                props.pageId
+              );
+              if (partner) {
+                props.onSetSelectedOcclusion({
+                  pageId: props.pageId,
+                  occlusionId: partner.id,
+                });
+              }
+            }}
+            onUnlinkPair={(id) =>
+              props.store.unlinkOcclusionPair(id, props.pageId)
+            }
+            onDelete={(id) => {
+              props.onSetSelectedOcclusion(null);
+              props.store.deleteCanvasOcclusion(id, props.pageId);
+              props.store.showToast('Verdeckte Stelle entfernt');
+            }}
           />
 
           {/* Lasso Selection Move / Resize / Action Overlay (World Coordinates) */}

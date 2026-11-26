@@ -131,6 +131,7 @@ export async function importPdfAsPages(
         strokes: [],
         texts: [],
         images: [],
+        occlusions: [],
         paperConfig: {
           ...DEFAULT_PAPER_CONFIG,
           pattern: 'blank',
@@ -165,6 +166,7 @@ export async function importImageAsPage(file: File): Promise<CanvasPage> {
     strokes: [],
     texts: [],
     images: [],
+    occlusions: [],
     paperConfig: {
       ...DEFAULT_PAPER_CONFIG,
       pattern: 'blank',

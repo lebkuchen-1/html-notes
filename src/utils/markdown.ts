@@ -31,30 +31,105 @@ function resolveSafeImageUrl(
 
 function formatInline(
   raw: string,
-  attachmentMap: Map<string, NoteImageAttachment>
+  attachmentMap: Map<string, NoteImageAttachment>,
+  options?: { renderFlashcardSyntax?: boolean }
 ): string {
+  const renderFlashcards = options?.renderFlashcardSyntax !== false;
   // Extract markdown images first so their URLs don't get mangled by emphasis/code regexes
-  const imagePlaceholders: string[] = [];
-  const withPlaceholders = raw.replace(
+  const placeholders: string[] = [];
+  let withPlaceholders = raw.replace(
     /!\[([^\]]*)\]\(([^)]+)\)/g,
     (full, alt: string, url: string) => {
       const resolved = resolveSafeImageUrl(url, attachmentMap);
       if (!resolved) return full;
-      const idx = imagePlaceholders.length;
+      const idx = placeholders.length;
       const safeAlt = escapeHtml(alt || 'Bild');
       const safeSrc = escapeHtml(resolved);
-      imagePlaceholders.push(
+      placeholders.push(
         `<figure class="md-image-figure"><img src="${safeSrc}" alt="${safeAlt}" loading="lazy" />${
           alt.trim() ? `<figcaption>${safeAlt}</figcaption>` : ''
         }</figure>`
       );
-      return `\u0000IMG${idx}\u0000`;
+      return `\u0000PH${idx}\u0000`;
     }
   );
 
+  // Extract inline code before flashcard syntax so `{{code}}` or `a >> b` stays untouched
+  withPlaceholders = withPlaceholders.replace(/`([^`]+)`/g, (_full, code: string) => {
+    const idx = placeholders.length;
+    placeholders.push(`<code>${escapeHtml(code)}</code>`);
+    return `\u0000PH${idx}\u0000`;
+  });
+
+  // Render RemNote-style cloze deletions (`{{Antwort}}`, `{{Antwort::Hinweis}}`, `{{1::Antwort}}`)
+  if (renderFlashcards) {
+    withPlaceholders = withPlaceholders.replace(
+      /\{\{([^{}]+)\}\}/g,
+      (_full, inner: string) => {
+        const trimmed = inner.trim();
+        if (!trimmed) return _full;
+        const parts = trimmed.split('::');
+        let groupBadge = '';
+        let answer = trimmed;
+        let hint = '';
+        if (parts.length >= 2 && /^(?:c)?(\d+|[a-zA-Z])$/.test(parts[0].trim())) {
+          groupBadge = parts[0].trim().replace(/^c/i, '').toUpperCase();
+          answer = parts[1].trim();
+          hint = parts.slice(2).join('::').trim();
+        } else if (parts.length >= 2) {
+          answer = parts[0].trim();
+          hint = parts.slice(1).join('::').trim();
+        }
+        const idx = placeholders.length;
+        const safeAnswer = escapeHtml(answer);
+        const maskText = escapeHtml(hint || '•••');
+        const badgeHtml = groupBadge
+          ? `<span class="md-cloze-group">${escapeHtml(groupBadge)}</span>`
+          : '';
+        placeholders.push(
+          `<button type="button" class="md-cloze-pill" title="Tippen zum Aufdecken / Verbergen">` +
+            `${badgeHtml}` +
+            `<span class="md-cloze-mask">${maskText}</span>` +
+            `<span class="md-cloze-answer">${safeAnswer}</span>` +
+            `</button>`
+        );
+        return `\u0000PH${idx}\u0000`;
+      }
+    );
+
+    // Render RemNote-style card arrows (`<>`, `>>`, `<<`, ` :: `) cleanly as badges
+    withPlaceholders = withPlaceholders
+      .replace(/\s*<>\s*/g, () => {
+        const idx = placeholders.length;
+        placeholders.push(
+          ` <span class="md-card-arrow is-bi" title="Beidseitige Karteikarte (Vorderseite ↔ Rückseite)">↔</span> `
+        );
+        return `\u0000PH${idx}\u0000`;
+      })
+      .replace(/\s*>>\s*/g, () => {
+        const idx = placeholders.length;
+        placeholders.push(
+          ` <span class="md-card-arrow" title="Einseitige Karteikarte (Vorderseite → Rückseite)">→</span> `
+        );
+        return `\u0000PH${idx}\u0000`;
+      })
+      .replace(/\s*<<\s*/g, () => {
+        const idx = placeholders.length;
+        placeholders.push(
+          ` <span class="md-card-arrow" title="Rückwärts-Karteikarte">←</span> `
+        );
+        return `\u0000PH${idx}\u0000`;
+      })
+      .replace(/\s+::\s+/g, () => {
+        const idx = placeholders.length;
+        placeholders.push(
+          ` <span class="md-card-arrow is-bi" title="Beidseitige Karteikarte (RemNote ::)">↔</span> `
+        );
+        return `\u0000PH${idx}\u0000`;
+      });
+  }
+
   let s = escapeHtml(withPlaceholders);
-  // Inline code
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
   // Bold + italic
   s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
   // Bold
@@ -64,9 +139,27 @@ function formatInline(
   // Strikethrough
   s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
 
-  // Restore image HTML
-  s = s.replace(/\u0000IMG(\d+)\u0000/g, (_m, i: string) => imagePlaceholders[Number(i)] ?? '');
+  // Restore placeholders (images, inline code, cloze pills, card arrows)
+  s = s.replace(/\u0000PH(\d+)\u0000/g, (_m, i: string) => placeholders[Number(i)] ?? '');
   return s;
+}
+
+/**
+ * Renders inline Markdown formatting (bold, italic, code, images) without flashcard-arrow rewriting.
+ * Used by the Flashcards study view so cards can contain Markdown & note images cleanly.
+ */
+export function renderInlineMarkdown(
+  source: string,
+  attachments: NoteImageAttachment[] = []
+): string {
+  const attachmentMap = new Map<string, NoteImageAttachment>();
+  for (const att of attachments) {
+    attachmentMap.set(att.id, att);
+  }
+  return source
+    .split('\n')
+    .map((line) => formatInline(line, attachmentMap, { renderFlashcardSyntax: false }))
+    .join('<br />');
 }
 
 /**

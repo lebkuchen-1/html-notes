@@ -5,6 +5,7 @@ export type DrawingTool =
   | 'scribble'
   | 'highlighter'
   | 'text'
+  | 'occlusion'
   | 'eraser'
   | 'line'
   | 'arrow'
@@ -64,7 +65,10 @@ export interface StrokePoint {
 
 export interface Stroke {
   id: string;
-  tool: Exclude<DrawingTool, 'select' | 'lasso' | 'eraser' | 'text' | 'scribble'>;
+  tool: Exclude<
+    DrawingTool,
+    'select' | 'lasso' | 'eraser' | 'text' | 'scribble' | 'occlusion'
+  >;
   /** Pen tip style when tool === 'pen' (undefined preserves legacy smooth pen rendering) */
   penStyle?: PenStyle;
   /** Calligraphic nib angle in degrees for fountain pen strokes (default 40° right-handed, 140° left-handed) */
@@ -107,6 +111,72 @@ export interface CanvasImageItem {
   opacity: number;
 }
 
+/** Interactive occlusion mask placed on a canvas page to hide spots for flashcards */
+export interface CanvasOcclusionItem {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Accent color of the occlusion mask (hex) */
+  color: string;
+  /** Optional hint or short label shown on the hidden mask */
+  label?: string;
+  /** Optional group ID ('G1', 'G2', …) to test multiple spots together as one card */
+  groupId?: string;
+  /** Optional pair ID linking two spots on the same page (A ↔ B) */
+  pairId?: string;
+  /** Side role within a pair ('a' = Vorderseite / Gegeben, 'b' = Rückseite / Gesucht) */
+  pairRole?: 'a' | 'b';
+  /** When paired (pairId set), true tests BOTH A→B and B→A (RemNote bidirectional); false tests only A→B */
+  bidirectional?: boolean;
+}
+
+export const OCCLUSION_COLORS = [
+  '#4f46e5', // Indigo
+  '#0284c7', // Sky
+  '#059669', // Emerald
+  '#d97706', // Amber
+  '#e11d48', // Rose
+  '#7c3aed', // Violet
+] as const;
+
+/** Standalone / custom flashcard attached directly to a note (in addition to Markdown & Canvas cards) */
+export interface ManualFlashcard {
+  id: string;
+  kind: 'basic' | 'cloze';
+  /** Question / Front side (or cloze text containing {{hidden}} markers when kind === 'cloze') */
+  front: string;
+  /** Answer / Back side (used for kind === 'basic') */
+  back: string;
+  /** Optional RemNote-style bidirectional flag (generates both Front→Back and Back→Front) */
+  bidirectional: boolean;
+  /** Optional hint displayed before revealing */
+  hint?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type FlashcardRating = 'again' | 'hard' | 'good' | 'easy';
+
+export interface FlashcardProgress {
+  cardKey: string;
+  /** Timestamp (ms) when this card is next due for review */
+  dueAt: number;
+  /** Current SM-2 interval in days (0 = new / learning) */
+  intervalDays: number;
+  /** SM-2 ease factor (default 2.5, min 1.3) */
+  easeFactor: number;
+  /** Successful consecutive reviews */
+  repetitions: number;
+  /** Number of times rated 'again' */
+  lapses: number;
+  /** Last reviewed timestamp (ms) */
+  lastReviewedAt?: number;
+  /** Temporarily excluded from due review queue */
+  suspended?: boolean;
+}
+
 export interface NoteImageAttachment {
   id: string;
   name: string;
@@ -143,6 +213,7 @@ export interface CanvasPage {
   strokes: Stroke[];
   texts: CanvasTextItem[];
   images: CanvasImageItem[];
+  occlusions: CanvasOcclusionItem[];
   paperConfig: PaperConfig;
   backgroundImage?: PageBackgroundImage | null;
 }
@@ -151,6 +222,7 @@ export interface CanvasSnapshot {
   strokes: Stroke[];
   texts: CanvasTextItem[];
   images: CanvasImageItem[];
+  occlusions?: CanvasOcclusionItem[];
 }
 
 export interface Folder {
@@ -171,6 +243,8 @@ export interface Note {
   attachments: NoteImageAttachment[];
   pages: CanvasPage[];
   activePageId: string;
+  /** Optional standalone flashcards belonging to this note */
+  flashcards?: ManualFlashcard[];
   /** Optional per-note overrides for local settings (undefined keys inherit from global AppSettings) */
   settings?: Partial<NoteLocalSettings>;
   createdAt: number;

@@ -4,6 +4,7 @@ import type { Folder, ViewMode } from '../types';
 import {
   IconClipboardPaste,
   IconExitFullscreen,
+  IconFlashcards,
   IconFolder,
   IconMaximize,
   IconMoon,
@@ -277,49 +278,76 @@ export function NoteHeader(props: NoteHeaderProps) {
         </div>
 
         <Show when={note()}>
-          {(current) => (
-            <>
-              <button
-                type="button"
-                class="icon-btn"
-                onClick={() => void props.store.quickImportFromClipboard('existing')}
-                title="Schnellimport aus Zwischenablage (Safari: Teilen → Kopieren) · Strg+Umschalt+V"
-                aria-label="Aus Zwischenablage importieren"
-              >
-                <IconClipboardPaste size={17} />
-              </button>
+          {(current) => {
+            const noteCardCount = () =>
+              props.store.getNoteStudyCardCount(current().id);
+            return (
+              <>
+                <button
+                  type="button"
+                  class="icon-btn note-fc-header-btn"
+                  classList={{ 'has-cards': noteCardCount() > 0 }}
+                  onClick={() =>
+                    props.store.openFlashcards(
+                      { type: 'note', noteId: current().id },
+                      noteCardCount() > 0
+                    )
+                  }
+                  title={
+                    noteCardCount() > 0
+                      ? `${noteCardCount()} Karteikarte(n) dieser Notiz lernen`
+                      : 'Karteikarten für diese Notiz öffnen / erstellen'
+                  }
+                  aria-label="Karteikarten dieser Notiz"
+                >
+                  <IconFlashcards size={17} />
+                  <Show when={noteCardCount() > 0}>
+                    <span class="note-fc-count-dot">{noteCardCount()}</span>
+                  </Show>
+                </button>
 
-              <button
-                type="button"
-                class="icon-btn"
-                classList={{ 'is-accent': current().pinned }}
-                onClick={() => props.store.togglePin(current().id)}
-                title={current().pinned ? 'Nicht mehr anpinnen' : 'Notiz anpinnen'}
-              >
-                <IconPin size={17} filled={current().pinned} />
-              </button>
+                <button
+                  type="button"
+                  class="icon-btn"
+                  onClick={() => void props.store.quickImportFromClipboard('existing')}
+                  title="Schnellimport aus Zwischenablage (Safari: Teilen → Kopieren) · Strg+Umschalt+V"
+                  aria-label="Aus Zwischenablage importieren"
+                >
+                  <IconClipboardPaste size={17} />
+                </button>
 
-              <button
-                type="button"
-                class="icon-btn note-settings-btn"
-                classList={{
-                  'has-overrides': props.store.activeNoteLocalOverrideCount() > 0,
-                }}
-                onClick={() => props.store.openSettings('local')}
-                title={
-                  props.store.activeNoteLocalOverrideCount() > 0
-                    ? `Notiz- & globale Einstellungen (${props.store.activeNoteLocalOverrideCount()} lokale Anpassungen) · Strg+,`
-                    : 'Notiz- & globale Einstellungen öffnen (Strg+,)'
-                }
-                aria-label="Einstellungen für diese Notiz"
-              >
-                <IconSettings size={17} />
-                <Show when={props.store.activeNoteLocalOverrideCount() > 0}>
-                  <span class="override-dot" />
-                </Show>
-              </button>
-            </>
-          )}
+                <button
+                  type="button"
+                  class="icon-btn"
+                  classList={{ 'is-accent': current().pinned }}
+                  onClick={() => props.store.togglePin(current().id)}
+                  title={current().pinned ? 'Nicht mehr anpinnen' : 'Notiz anpinnen'}
+                >
+                  <IconPin size={17} filled={current().pinned} />
+                </button>
+
+                <button
+                  type="button"
+                  class="icon-btn note-settings-btn"
+                  classList={{
+                    'has-overrides': props.store.activeNoteLocalOverrideCount() > 0,
+                  }}
+                  onClick={() => props.store.openSettings('local')}
+                  title={
+                    props.store.activeNoteLocalOverrideCount() > 0
+                      ? `Notiz- & globale Einstellungen (${props.store.activeNoteLocalOverrideCount()} lokale Anpassungen) · Strg+,`
+                      : 'Notiz- & globale Einstellungen öffnen (Strg+,)'
+                  }
+                  aria-label="Einstellungen für diese Notiz"
+                >
+                  <IconSettings size={17} />
+                  <Show when={props.store.activeNoteLocalOverrideCount() > 0}>
+                    <span class="override-dot" />
+                  </Show>
+                </button>
+              </>
+            );
+          }}
         </Show>
 
         <button

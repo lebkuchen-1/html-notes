@@ -1,8 +1,10 @@
 import type {
   CanvasImageItem,
+  CanvasOcclusionItem,
   CanvasPage,
   CanvasTextItem,
   Folder,
+  ManualFlashcard,
   Note,
   NoteImageAttachment,
   NoteLocalSettings,
@@ -67,6 +69,7 @@ interface DbNoteRecord {
   attachments: NoteImageAttachment[];
   pageIds: string[];
   activePageId: string;
+  flashcards?: ManualFlashcard[];
   settings?: Partial<NoteLocalSettings>;
   createdAt: number;
   updatedAt: number;
@@ -80,6 +83,7 @@ interface DbPageRecord {
   height: number;
   texts: CanvasTextItem[];
   images: CanvasImageItem[];
+  occlusions?: CanvasOcclusionItem[];
   paperConfig: PaperConfig;
   backgroundImage?: PageBackgroundImage | null;
   chunkCount: number;
@@ -110,6 +114,7 @@ interface SavedPageTracker {
   height: number;
   texts: CanvasTextItem[];
   images: CanvasImageItem[];
+  occlusions: CanvasOcclusionItem[];
   paperConfig: PaperConfig;
   backgroundImage: PageBackgroundImage | null | undefined;
   chunks: Stroke[][];
@@ -477,6 +482,7 @@ function pageMetaUnchanged(
     prev.height === page.height &&
     prev.texts === page.texts &&
     prev.images === page.images &&
+    prev.occlusions === page.occlusions &&
     prev.paperConfig === page.paperConfig &&
     prev.backgroundImage === page.backgroundImage
   );
@@ -490,6 +496,7 @@ function buildPageTracker(noteId: string, page: CanvasPage, chunks: Stroke[][]):
     height: page.height,
     texts: page.texts,
     images: page.images,
+    occlusions: page.occlusions,
     paperConfig: page.paperConfig,
     backgroundImage: page.backgroundImage,
     chunks,
@@ -611,6 +618,7 @@ async function readWorkspaceFromV2Db(db: IDBDatabase): Promise<{
       strokes,
       texts: Array.isArray(rawPage.texts) ? rawPage.texts : [],
       images,
+      occlusions: Array.isArray(rawPage.occlusions) ? rawPage.occlusions : [],
       paperConfig: rawPage.paperConfig,
       backgroundImage,
     });
@@ -654,6 +662,9 @@ async function readWorkspaceFromV2Db(db: IDBDatabase): Promise<{
       attachments,
       pages,
       activePageId: rawNote.activePageId,
+      ...(Array.isArray(rawNote.flashcards) && rawNote.flashcards.length > 0
+        ? { flashcards: rawNote.flashcards }
+        : {}),
       ...(rawNote.settings ? { settings: rawNote.settings } : {}),
       createdAt: rawNote.createdAt,
       updatedAt: rawNote.updatedAt,
@@ -800,6 +811,7 @@ async function writeFullWorkspaceIntoDb(
           height: page.height,
           texts: page.texts,
           images: dehydratedImages,
+          occlusions: page.occlusions,
           paperConfig: page.paperConfig,
           backgroundImage: dehydratedBg,
           chunkCount: chunks.length,
@@ -817,6 +829,9 @@ async function writeFullWorkspaceIntoDb(
         attachments: dehydratedAttachments,
         pageIds: note.pages.map((p) => p.id),
         activePageId: note.activePageId,
+        ...(note.flashcards && note.flashcards.length > 0
+          ? { flashcards: note.flashcards }
+          : {}),
         ...(note.settings ? { settings: note.settings } : {}),
         createdAt: note.createdAt,
         updatedAt: note.updatedAt,
@@ -1061,6 +1076,7 @@ export function syncNotesDeltaToIndexedDb(
               height: page.height,
               texts: page.texts,
               images: dehydratedImages,
+              occlusions: page.occlusions,
               paperConfig: page.paperConfig,
               backgroundImage: dehydratedBg,
               chunkCount: nextChunks.length,
@@ -1081,6 +1097,9 @@ export function syncNotesDeltaToIndexedDb(
           attachments: dehydratedAttachments,
           pageIds: currPageIds,
           activePageId: note.activePageId,
+          ...(note.flashcards && note.flashcards.length > 0
+            ? { flashcards: note.flashcards }
+            : {}),
           ...(note.settings ? { settings: note.settings } : {}),
           createdAt: note.createdAt,
           updatedAt: note.updatedAt,

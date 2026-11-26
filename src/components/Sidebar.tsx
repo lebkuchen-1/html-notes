@@ -11,6 +11,7 @@ import {
   IconDownload,
   IconEdit,
   IconFileText,
+  IconFlashcards,
   IconFolder,
   IconFolderPlus,
   IconHome,
@@ -486,6 +487,36 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           class="nav-item"
+          classList={{
+            'is-active': props.store.activeScreen() === 'flashcards',
+          }}
+          onClick={() => {
+            props.store.openFlashcards({ type: 'all' }, false);
+            if (window.innerWidth < 900) props.store.setSidebarOpen(false);
+          }}
+          title="Karteikarten & Spaced Repetition (Stellen verbergen & Beidseitig)"
+        >
+          <IconFlashcards size={15} />
+          <span class="nav-item-label">Karteikarten</span>
+          <Show
+            when={props.store.flashcardDeckStats().due > 0}
+            fallback={
+              <Show when={props.store.flashcardDeckStats().total > 0}>
+                <span class="nav-item-count">
+                  {props.store.flashcardDeckStats().total}
+                </span>
+              </Show>
+            }
+          >
+            <span class="nav-item-count is-due-badge" title="Fällige Karteikarten">
+              {props.store.flashcardDeckStats().due}
+            </span>
+          </Show>
+        </button>
+
+        <button
+          type="button"
+          class="nav-item"
           onClick={() => {
             if (window.innerWidth < 900) props.store.setSidebarOpen(false);
             void props.store.quickImportFromClipboard();
@@ -745,7 +776,8 @@ export function Sidebar(props: SidebarProps) {
             exportNotesAsJson(
               props.store.notes(),
               props.store.folders(),
-              props.store.settings()
+              props.store.settings(),
+              props.store.flashcardProgress()
             );
             props.store.showToast('JSON-Backup exportiert');
           }}

@@ -625,3 +625,46 @@ export const IconLayers = (p: IconProps) => (
     <polyline points="2 17 12 22 22 17" />
   </svg>
 );
+
+export const IconFlashcards = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <rect x="3" y="6" width="15" height="12" rx="2.2" />
+    <path d="M7 3.5h12a2 2 0 0 1 2 2V15" />
+    <path d="M8.5 11.5h4" />
+    <path d="M10.5 9.5v4" />
+  </svg>
+);
+
+export const IconOcclusion = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <rect x="3" y="5" width="18" height="14" rx="2.5" stroke-dasharray="3 2" />
+    <rect x="6.5" y="8.5" width="11" height="7" rx="1.5" fill="currentColor" fill-opacity="0.22" />
+    <path d="M10.8 10.6a1.4 1.4 0 0 1 2.4 1c0 .8-1.2 1.1-1.2 1.8" />
+    <circle cx="12" cy="14.6" r="0.4" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconBidirectional = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="m7 8-4 4 4 4" />
+    <path d="m17 8 4 4-4 4" />
+    <path d="M3 12h18" />
+  </svg>
+);
+
+export const IconPlay = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <polygon points="6 4 20 12 6 20 6 4" fill="currentColor" fill-opacity="0.18" />
+  </svg>
+);
+
+export const IconUnlink = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71" />
+    <path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71" />
+    <line x1="8" y1="2" x2="8" y2="5" />
+    <line x1="2" y1="8" x2="5" y2="8" />
+    <line x1="16" y1="19" x2="16" y2="22" />
+    <line x1="19" y1="16" x2="22" y2="16" />
+  </svg>
+);
