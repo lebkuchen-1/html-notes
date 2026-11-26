@@ -10841,3 +10841,227 @@ button {
 .occ-practice-peek-btn:active {
   transform: scale(0.92);
 }
+
+
+/* ==================== Inline Canvas Study Bar & Deferred Compare Mode ==================== */
+
+.canvas-study-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-surface));
+  flex-shrink: 0;
+  z-index: 20;
+}
+
+.csb-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.csb-center {
+  justify-content: center;
+}
+
+.csb-exam-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.csb-exam-status strong {
+  color: var(--accent);
+}
+
+.csb-finish-btn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 8px;
+}
+
+.csb-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+}
+
+.csb-step-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.csb-step-count {
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.csb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.csb-pill.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.csb-pill.is-retry {
+  background: rgba(217, 119, 6, 0.14);
+  border-color: rgba(217, 119, 6, 0.42);
+  color: #b45309;
+}
+
+[data-theme='dark'] .csb-pill.is-retry {
+  color: #fbbf24;
+}
+
+.csb-pill.is-bi-flip {
+  background: rgba(124, 58, 237, 0.14);
+  border-color: rgba(124, 58, 237, 0.4);
+  color: #7c3aed;
+}
+
+[data-theme='dark'] .csb-pill.is-bi-flip {
+  color: #c4b5fd;
+}
+
+.csb-score-badge {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+[data-theme='dark'] .csb-score-badge {
+  color: #34d399;
+}
+
+/* Practice canvas uses touch-action: none so DrawingCanvas/InfiniteCanvasView touch scroll/pinch works uniformly */
+.canvas-occ-practice-canvas.is-live,
+.canvas-occ-practice-canvas.is-live.is-stylus-only {
+  touch-action: none;
+}
+
+/* Bidirectional "Gegeben" highlight box in direct Canvas study mode */
+.canvas-occlusion-box.is-study.is-prompt-given {
+  background: rgba(37, 99, 235, 0.08);
+  border: 2px solid #2563eb;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.occ-given-pill {
+  position: absolute;
+  top: -19px;
+  left: 0;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Focused & self-graded occlusion visual feedback */
+.canvas-occlusion-box.is-focused-study {
+  box-shadow:
+    0 0 0 3px rgba(79, 70, 229, 0.35),
+    0 4px 16px rgba(15, 23, 42, 0.18);
+  z-index: 8;
+}
+
+.canvas-occlusion-box.is-study.is-revealed.is-graded-correct {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.canvas-occlusion-box.is-study.is-revealed.is-graded-wrong {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.occ-revealed-pill.is-correct {
+  background: #10b981;
+}
+
+.occ-revealed-pill.is-wrong {
+  background: #ef4444;
+}
+
+/* Floating corner peek + ✓/✗ self-grade pill group on each box */
+.occ-practice-corner-controls {
+  position: absolute;
+  z-index: 22;
+  transform: translateX(-100%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.occ-practice-corner-controls .occ-practice-peek-btn {
+  position: static;
+}
+
+.occ-practice-grade-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--bg-surface);
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.22);
+}
+
+.occ-practice-grade-btn.is-correct.is-active,
+.occ-practice-grade-btn.is-correct:hover {
+  background: #10b981;
+  color: #ffffff;
+}
+
+.occ-practice-grade-btn.is-wrong.is-active,
+.occ-practice-grade-btn.is-wrong:hover {
+  background: #ef4444;
+  color: #ffffff;
+}

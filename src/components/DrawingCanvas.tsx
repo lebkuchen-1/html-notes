@@ -17,6 +17,7 @@ import {
   PAGE_SIZE_PRESETS,
   type CanvasFontFamily,
   type CanvasImageItem,
+  type CanvasOcclusionItem,
   type CanvasTextItem,
   type DrawingTool,
   type PaperPattern,
@@ -82,7 +83,12 @@ import {
   type SelectedImageState,
   type SelectedOcclusionState,
 } from './CanvasPageSheet';
-import type { OcclusionDisplayMode } from './CanvasOcclusionOverlay';
+import type {
+  OcclusionDisplayMode,
+  OcclusionGrade,
+  OcclusionPairDirection,
+  OcclusionStudyCompareMode,
+} from './CanvasOcclusionOverlay';
 import {
   InfiniteCanvasView,
   type InfiniteCanvasHandle,
@@ -102,7 +108,9 @@ import {
 import {
   IconArrow,
   IconBallpointPen,
+  IconBidirectional,
   IconBrushPen,
+  IconCheck,
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
@@ -598,8 +606,241 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     createSignal<number>(0);
   const [occlusionPracticeHasStrokes, setOcclusionPracticeHasStrokes] =
     createSignal<boolean>(false);
+  const [studyCompareMode, setStudyCompareMode] =
+    createSignal<OcclusionStudyCompareMode>(
+      (() => {
+        try {
+          const saved = localStorage.getItem('solid-notes:v1:canvasStudyCompareMode');
+          if (saved === 'instant' || saved === 'deferred') return saved;
+        } catch {
+          // ignore
+        }
+        return 'deferred';
+      })()
+    );
+  const [deferredPhase, setDeferredPhase] = createSignal<'answering' | 'comparing'>(
+    'answering'
+  );
+  const [studyPairDirection, setStudyPairDirection] =
+    createSignal<OcclusionPairDirection>('ab');
+  const [showPracticeStrokes, setShowPracticeStrokes] = createSignal<boolean>(true);
+  const [studyActiveTargetIds, setStudyActiveTargetIds] =
+    createSignal<Set<string> | null>(null);
+  const [studyGrades, setStudyGrades] = createSignal<Map<string, OcclusionGrade>>(
+    new Map()
+  );
+  const [studyFocusedId, setStudyFocusedId] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    saveStorageValue('solid-notes:v1:canvasStudyCompareMode', studyCompareMode());
+  });
+
+  const allNoteOcclusions = createMemo(() => {
+    const n = props.store.activeNote();
+    const out: { pageId: string; occ: CanvasOcclusionItem }[] = [];
+    if (!n) return out;
+    for (const p of n.pages) {
+      for (const occ of p.occlusions ?? []) {
+        out.push({ pageId: p.id, occ });
+      }
+    }
+    return out;
+  });
+
+  const totalNoteOcclusions = createMemo(() => allNoteOcclusions().length);
+
+  const hasNotePairs = createMemo(() =>
+    allNoteOcclusions().some((entry) => Boolean(entry.occ.pairId))
+  );
+
+  // Visible "Gegeben" prompt boxes in bidirectional A↔B study mode
+  const studyPromptIds = createMemo<Set<string>>(() => {
+    const dir = studyPairDirection();
+    const out = new Set<string>();
+    if (dir === 'both') return out;
+    for (const { occ } of allNoteOcclusions()) {
+      if (!occ.pairId) continue;
+      const role = occ.pairRole ?? 'a';
+      if (dir === 'ab' && role === 'a') out.add(occ.id);
+      if (dir === 'ba' && role === 'b') out.add(occ.id);
+    }
+    return out;
+  });
+
+  // Active target occlusion spots to be answered & compared in the current run
+  const studyTargetEntries = createMemo(() => {
+    const prompts = studyPromptIds();
+    const subset = studyActiveTargetIds();
+    return allNoteOcclusions().filter(({ occ }) => {
+      if (prompts.has(occ.id)) return false;
+      if (subset && !subset.has(occ.id)) return false;
+      return true;
+    });
+  });
+
+  const studyAllowIndividualPeek = createMemo(() => {
+    if (studyCompareMode() === 'instant') return true;
+    return deferredPhase() === 'comparing';
+  });
+
+  const studyGradeStats = createMemo(() => {
+    const grades = studyGrades();
+    const targets = studyTargetEntries();
+    let correct = 0;
+    let wrong = 0;
+    for (const { occ } of targets) {
+      const g = grades.get(occ.id);
+      if (g === 'correct') correct += 1;
+      else if (g === 'wrong') wrong += 1;
+    }
+    return { total: targets.length, correct, wrong, graded: correct + wrong };
+  });
+
+  const focusStudyOcclusionById = (occId: string | null) => {
+    setStudyFocusedId(occId);
+    if (!occId) return;
+    const entry = allNoteOcclusions().find((e) => e.occ.id === occId);
+    if (!entry) return;
+    if (isInfiniteMode()) {
+      props.store.setActivePage(entry.pageId);
+      requestAnimationFrame(() => {
+        infiniteHandle?.focusWorldRect({
+          x: entry.occ.x,
+          y: entry.occ.y,
+          width: entry.occ.width,
+          height: entry.occ.height,
+        });
+      });
+    } else {
+      props.store.setActivePage(entry.pageId);
+      requestAnimationFrame(() => {
+        const el = viewportRef?.querySelector<HTMLElement>(
+          `.canvas-occlusion-box[data-occ-id="${occId}"]`
+        );
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        } else {
+          scrollToPage(entry.pageId);
+        }
+      });
+    }
+  };
+
+  const stepStudyFocus = (delta: -1 | 1) => {
+    const targets = studyTargetEntries();
+    if (targets.length === 0) return;
+    const currId = studyFocusedId();
+    const currIdx = currId ? targets.findIndex((t) => t.occ.id === currId) : -1;
+    const nextIdx =
+      currIdx < 0
+        ? delta > 0
+          ? 0
+          : targets.length - 1
+        : (currIdx + delta + targets.length) % targets.length;
+    focusStudyOcclusionById(targets[nextIdx].occ.id);
+  };
+
+  const studyFocusIndex = createMemo(() => {
+    const currId = studyFocusedId();
+    if (!currId) return -1;
+    return studyTargetEntries().findIndex((t) => t.occ.id === currId);
+  });
+
+  const startCanvasStudySession = (options?: {
+    compareMode?: OcclusionStudyCompareMode;
+    pairDir?: OcclusionPairDirection;
+    subsetIds?: Set<string> | null;
+    clearInk?: boolean;
+  }) => {
+    if (options?.compareMode) setStudyCompareMode(options.compareMode);
+    if (options?.pairDir) setStudyPairDirection(options.pairDir);
+    if (options?.subsetIds !== undefined) setStudyActiveTargetIds(options.subsetIds);
+    else setStudyActiveTargetIds(null);
+
+    setSelectedOcclusion(null);
+    setRevealedOcclusionIds(new Set<string>());
+    setDeferredPhase('answering');
+    setShowPracticeStrokes(true);
+    setStudyGrades(new Map<string, OcclusionGrade>());
+    setStudyFocusedId(null);
+    setOcclusionDisplayMode('study');
+    setOcclusionPracticeDraw(true);
+    if (tool() === 'occlusion' || tool() === 'select' || tool() === 'lasso') {
+      setTool('pen');
+    }
+    if (options?.clearInk !== false) {
+      setOcclusionPracticeClearToken((n) => n + 1);
+      setOcclusionPracticeHasStrokes(false);
+    }
+  };
+
+  const finishDeferredAndCompare = () => {
+    const targets = studyTargetEntries();
+    const nextRevealed = new Set<string>();
+    for (const { occ } of targets) {
+      nextRevealed.add(occ.id);
+    }
+    setRevealedOcclusionIds(nextRevealed);
+    setDeferredPhase('comparing');
+    setShowPracticeStrokes(true);
+    if (targets.length > 0) {
+      focusStudyOcclusionById(targets[0].occ.id);
+    }
+    props.store.showToast(
+      `Alle ${targets.length} Stellen aufgedeckt — vergleiche deine Antworten direkt im Canvas`
+    );
+  };
+
+  const retryWrongOcclusions = () => {
+    const grades = studyGrades();
+    const wrongIds = new Set<string>();
+    for (const { occ } of studyTargetEntries()) {
+      if (grades.get(occ.id) === 'wrong') {
+        wrongIds.add(occ.id);
+      }
+    }
+    if (wrongIds.size === 0) return;
+    startCanvasStudySession({
+      subsetIds: wrongIds,
+      clearInk: true,
+    });
+    const firstId = [...wrongIds][0];
+    if (firstId) focusStudyOcclusionById(firstId);
+    props.store.showToast(
+      `${wrongIds.size} ${wrongIds.size === 1 ? 'Stelle' : 'Stellen'} zum nochmal Üben verdeckt`
+    );
+  };
+
+  const handleGradeOcclusion = (occId: string, grade: OcclusionGrade) => {
+    setStudyGrades((prev) => {
+      const next = new Map(prev);
+      if (next.get(occId) === grade) {
+        next.delete(occId);
+      } else {
+        next.set(occId, grade);
+      }
+      return next;
+    });
+
+    // Also sync self-grade seamlessly with SM-2 flashcard progress
+    const n = props.store.activeNote();
+    const entry = allNoteOcclusions().find((e) => e.occ.id === occId);
+    if (n && entry) {
+      const { pageId, occ } = entry;
+      const rating = grade === 'correct' ? 'good' : 'again';
+      if (occ.pairId) {
+        const dirKey = occ.pairRole === 'a' ? 'ba' : 'ab';
+        props.store.reviewFlashcard(`occp:${n.id}:${pageId}:${occ.pairId}:${dirKey}`, rating);
+      } else if (occ.groupId) {
+        props.store.reviewFlashcard(`occg:${n.id}:${pageId}:${occ.groupId}`, rating);
+      } else {
+        props.store.reviewFlashcard(`occ:${n.id}:${pageId}:${occ.id}`, rating);
+      }
+    }
+  };
 
   const toggleRevealOcclusion = (id: string) => {
+    if (!studyAllowIndividualPeek()) return;
     setRevealedOcclusionIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -608,31 +849,27 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     });
   };
 
-  const totalNoteOcclusions = createMemo(() => {
-    const n = props.store.activeNote();
-    if (!n) return 0;
-    return n.pages.reduce((sum, p) => sum + (p.occlusions?.length ?? 0), 0);
-  });
-
   const allOcclusionsRevealed = createMemo(() => {
-    const total = totalNoteOcclusions();
-    if (total === 0) return false;
-    return revealedOcclusionIds().size >= total;
+    const targets = studyTargetEntries();
+    if (targets.length === 0) return false;
+    const rev = revealedOcclusionIds();
+    return targets.every(({ occ }) => rev.has(occ.id));
   });
 
   const toggleRevealAllOcclusions = () => {
-    const n = props.store.activeNote();
-    if (!n) return;
+    const targets = studyTargetEntries();
+    if (targets.length === 0) return;
     if (allOcclusionsRevealed()) {
       setRevealedOcclusionIds(new Set<string>());
-    } else {
-      const all = new Set<string>();
-      for (const p of n.pages) {
-        for (const o of p.occlusions ?? []) {
-          all.add(o.id);
-        }
+      if (studyCompareMode() === 'deferred') {
+        setDeferredPhase('answering');
       }
+    } else {
+      const all = new Set<string>(targets.map((t) => t.occ.id));
       setRevealedOcclusionIds(all);
+      if (studyCompareMode() === 'deferred') {
+        setDeferredPhase('comparing');
+      }
     }
   };
 
@@ -656,7 +893,17 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       setIsPickingExportRegion(false);
     }
     setSelectedOcclusion(null);
+  });
+
+  // Reset inline Canvas study session ONLY when switching to a different note (NOT when scrolling between pages!)
+  createEffect(() => {
+    void props.store.activeNoteId();
     setRevealedOcclusionIds(new Set<string>());
+    setDeferredPhase('answering');
+    setStudyActiveTargetIds(null);
+    setStudyGrades(new Map<string, OcclusionGrade>());
+    setStudyFocusedId(null);
+    setShowPracticeStrokes(true);
     setOcclusionPracticeHasStrokes(false);
     setOcclusionPracticeClearToken((n) => n + 1);
   });
@@ -1110,14 +1357,16 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .occ-practice-peek-btn, .canvas-ruler, .paper-popover'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .occ-practice-peek-btn, .occ-practice-grade-btn, .occ-practice-corner-controls, .canvas-ruler, .paper-popover'
         )
       );
     };
 
     const canOneFingerScrollTarget = (target: EventTarget | null): boolean => {
       if (isInteractiveTarget(target)) return false;
-      const onCanvas = Boolean(getTargetElement(target)?.closest('.drawing-canvas'));
+      const onCanvas = Boolean(
+        getTargetElement(target)?.closest('.drawing-canvas, .canvas-occ-practice-canvas')
+      );
       if (!onCanvas) return true;
       if (stylusOnly()) return oneFingerScroll();
       return tool() === 'select';
@@ -2811,14 +3060,10 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 type="button"
                 class="occ-mode-btn"
                 classList={{ 'is-active': occlusionDisplayMode() === 'study' }}
-                onClick={() => {
-                  setSelectedOcclusion(null);
-                  setRevealedOcclusionIds(new Set<string>());
-                  setOcclusionDisplayMode('study');
-                }}
-                title="Abdeckband-Modus: Stellen verbergen & per Antippen aufdecken"
+                onClick={() => startCanvasStudySession()}
+                title="Direkt im Canvas üben: Stellen verdecken, Antworten einzeichnen & vergleichen"
               >
-                Abdecken
+                Im Canvas üben
               </button>
               <button
                 type="button"
@@ -2834,70 +3079,19 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               </button>
             </div>
 
-            <Show when={occlusionDisplayMode() === 'study' && totalNoteOcclusions() > 0}>
-              <button
-                type="button"
-                class="tool-pill"
-                classList={{ 'is-active': occlusionPracticeDraw() }}
-                onClick={() => setOcclusionPracticeDraw((v) => !v)}
-                title={
-                  occlusionPracticeDraw()
-                    ? 'Übungs-Stift aktiv: Schreibe Antworten direkt über die verdeckten Stellen (verändert deine Originalnotiz nicht)'
-                    : 'Übungs-Stift aktivieren, um Antworten direkt im Canvas einzuzeichnen'
-                }
-              >
-                <IconPen size={13} />
-                <span class="hide-compact">Übungs-Stift</span>
-              </button>
-
-              <Show when={occlusionPracticeHasStrokes()}>
-                <button
-                  type="button"
-                  class="tool-btn is-danger-hover"
-                  onClick={() => {
-                    setOcclusionPracticeClearToken((n) => n + 1);
-                    setOcclusionPracticeHasStrokes(false);
-                  }}
-                  title="Temporäre Übungs-Zeichnung leeren"
-                  aria-label="Übungs-Zeichnung leeren"
-                >
-                  <IconTrash size={14} />
-                </button>
-              </Show>
-
-              <button
-                type="button"
-                class="tool-pill"
-                onClick={toggleRevealAllOcclusions}
-                title={
-                  allOcclusionsRevealed()
-                    ? 'Alle Stellen wieder verdecken'
-                    : 'Alle Stellen aufdecken & vergleichen'
-                }
-              >
-                <Show when={allOcclusionsRevealed()} fallback={<IconEye size={13} />}>
-                  <IconEyeOff size={13} />
-                </Show>
-                <span class="hide-compact">
-                  {allOcclusionsRevealed() ? 'Zudecken' : 'Aufdecken'}
-                </span>
-              </button>
-            </Show>
-
-            <Show when={totalNoteOcclusions() > 0}>
+            <Show when={totalNoteOcclusions() > 0 && occlusionDisplayMode() !== 'study'}>
               <button
                 type="button"
                 class="tool-pill is-flashcard-pill"
                 onClick={() => {
                   const nid = note()?.id;
                   if (nid) {
-                    props.store.openFlashcards({ type: 'note', noteId: nid }, true);
+                    props.store.openFlashcards({ type: 'note', noteId: nid }, false);
                   }
                 }}
-                title="Karteikarten dieser Notiz jetzt abfragen"
+                title="Karteikarten-Übersicht & Spaced-Repetition-Stapel öffnen"
               >
                 <IconFlashcards size={13} />
-                <span class="hide-compact">Lernen</span>
                 <span class="occ-pill-count">{totalNoteOcclusions()}</span>
               </button>
             </Show>
@@ -3789,6 +3983,260 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         />
       </Show>
 
+      {/* Inline Direct-in-Canvas Study & Compare Bar (no separate flashcard screen!) */}
+      <Show when={occlusionDisplayMode() === 'study' && totalNoteOcclusions() > 0}>
+        <div class="canvas-study-bar" role="region" aria-label="Direkt im Canvas lernen">
+          <div class="csb-group">
+            {/* Instant vs. Deferred ("Erst am Ende vergleichen") mode switch */}
+            <div class="occ-mode-switch csb-mode-switch" role="group" aria-label="Vergleichsmodus">
+              <button
+                type="button"
+                class="occ-mode-btn"
+                classList={{ 'is-active': studyCompareMode() === 'instant' }}
+                onClick={() =>
+                  startCanvasStudySession({ compareMode: 'instant', clearInk: false })
+                }
+                title="Sofort vergleichen: Jede Stelle einzeln aufdecken & prüfen"
+              >
+                Sofort
+              </button>
+              <button
+                type="button"
+                class="occ-mode-btn"
+                classList={{ 'is-active': studyCompareMode() === 'deferred' }}
+                onClick={() =>
+                  startCanvasStudySession({ compareMode: 'deferred', clearInk: true })
+                }
+                title="Erst am Ende vergleichen: Alle Antworten erst einzeichnen, am Ende komplett aufdecken & abgleichen"
+              >
+                Erst am Ende
+              </button>
+            </div>
+
+            {/* Bidirectional pair direction (A→B / B→A / Alle) */}
+            <Show when={hasNotePairs()}>
+              <div class="occ-mode-switch" role="group" aria-label="Paar-Richtung">
+                <button
+                  type="button"
+                  class="occ-mode-btn"
+                  classList={{ 'is-active': studyPairDirection() === 'ab' }}
+                  onClick={() => startCanvasStudySession({ pairDir: 'ab', clearInk: true })}
+                  title="A gegeben → B verdeckt"
+                >
+                  A → B
+                </button>
+                <button
+                  type="button"
+                  class="occ-mode-btn"
+                  classList={{ 'is-active': studyPairDirection() === 'ba' }}
+                  onClick={() => startCanvasStudySession({ pairDir: 'ba', clearInk: true })}
+                  title="B gegeben → A verdeckt (Rückrichtung)"
+                >
+                  B → A
+                </button>
+                <button
+                  type="button"
+                  class="occ-mode-btn"
+                  classList={{ 'is-active': studyPairDirection() === 'both' }}
+                  onClick={() => startCanvasStudySession({ pairDir: 'both', clearInk: true })}
+                  title="Alle Stellen gleichzeitig verdecken"
+                >
+                  Alle
+                </button>
+              </div>
+            </Show>
+          </div>
+
+          {/* Center Phase / Compare Controls */}
+          <div class="csb-group csb-center">
+            <Show
+              when={studyCompareMode() === 'deferred' && deferredPhase() === 'answering'}
+              fallback={
+                <>
+                  {/* Spot stepper (scrolls/focuses each spot directly in the Canvas) */}
+                  <div class="csb-stepper">
+                    <button
+                      type="button"
+                      class="tool-btn csb-step-btn"
+                      disabled={studyTargetEntries().length === 0}
+                      onClick={() => stepStudyFocus(-1)}
+                      title="Vorherige Stelle im Canvas anzeigen"
+                      aria-label="Vorherige Stelle"
+                    >
+                      <IconChevronLeft size={14} />
+                    </button>
+                    <span class="csb-step-count">
+                      {studyFocusIndex() >= 0
+                        ? `${studyFocusIndex() + 1} / ${studyTargetEntries().length}`
+                        : `${studyTargetEntries().length} Stellen`}
+                    </span>
+                    <button
+                      type="button"
+                      class="tool-btn csb-step-btn"
+                      disabled={studyTargetEntries().length === 0}
+                      onClick={() => stepStudyFocus(1)}
+                      title="Nächste Stelle im Canvas anzeigen"
+                      aria-label="Nächste Stelle"
+                    >
+                      <IconChevronRight size={14} />
+                    </button>
+                  </div>
+
+                  {/* Quick overlay vs. solution-only blink toggle */}
+                  <Show when={occlusionPracticeHasStrokes()}>
+                    <button
+                      type="button"
+                      class="csb-pill"
+                      classList={{ 'is-active': showPracticeStrokes() }}
+                      onClick={() => setShowPracticeStrokes((v) => !v)}
+                      title={
+                        showPracticeStrokes()
+                          ? 'Zeichnung ausblenden, um nur die Originallösung zu sehen'
+                          : 'Deine Zeichnung wieder über der Lösung einblenden'
+                      }
+                    >
+                      <Show when={showPracticeStrokes()} fallback={<IconEyeOff size={12} />}>
+                        <IconEye size={12} />
+                      </Show>
+                      <span>{showPracticeStrokes() ? 'Überlagert' : 'Nur Lösung'}</span>
+                    </button>
+                  </Show>
+
+                  {/* Instant mode: Reveal/Hide all button */}
+                  <Show when={studyCompareMode() === 'instant'}>
+                    <button
+                      type="button"
+                      class="csb-pill"
+                      onClick={toggleRevealAllOcclusions}
+                    >
+                      <Show when={allOcclusionsRevealed()} fallback={<IconEye size={12} />}>
+                        <IconEyeOff size={12} />
+                      </Show>
+                      <span>{allOcclusionsRevealed() ? 'Alle zudecken' : 'Alle aufdecken'}</span>
+                    </button>
+                  </Show>
+
+                  {/* Score & Retry Missed */}
+                  <Show when={studyGradeStats().graded > 0}>
+                    <span class="csb-score-badge">
+                      {studyGradeStats().correct}/{studyGradeStats().total} richtig
+                    </span>
+                  </Show>
+
+                  <Show when={studyGradeStats().wrong > 0}>
+                    <button
+                      type="button"
+                      class="csb-pill is-retry"
+                      onClick={retryWrongOcclusions}
+                      title="Nur die als falsch markierten Stellen erneut verdecken & üben"
+                    >
+                      <IconRotateCcw size={12} />
+                      <span>Falsche nochmal ({studyGradeStats().wrong})</span>
+                    </button>
+                  </Show>
+
+                  {/* Bidirectional quick flip after comparing */}
+                  <Show
+                    when={
+                      studyCompareMode() === 'deferred' &&
+                      hasNotePairs() &&
+                      studyPairDirection() !== 'both'
+                    }
+                  >
+                    <button
+                      type="button"
+                      class="csb-pill is-bi-flip"
+                      onClick={() =>
+                        startCanvasStudySession({
+                          pairDir: studyPairDirection() === 'ab' ? 'ba' : 'ab',
+                          clearInk: true,
+                        })
+                      }
+                      title="Gegenrichtung der beidseitigen Paare direkt üben"
+                    >
+                      <IconBidirectional size={12} />
+                      <span>
+                        {studyPairDirection() === 'ab' ? 'Jetzt B → A' : 'Jetzt A → B'}
+                      </span>
+                    </button>
+                  </Show>
+
+                  <Show when={studyCompareMode() === 'deferred'}>
+                    <button
+                      type="button"
+                      class="csb-pill"
+                      onClick={() => startCanvasStudySession({ clearInk: true })}
+                      title="Neuer Durchgang (alles verdecken & Tinte leeren)"
+                    >
+                      <IconRotateCcw size={12} />
+                      <span class="hide-compact">Neu</span>
+                    </button>
+                  </Show>
+                </>
+              }
+            >
+              {/* Deferred Answering Phase (Exam Mode: All hidden until done!) */}
+              <span class="csb-exam-status">
+                Zeichne deine Antworten ein · <strong>{studyTargetEntries().length}</strong>{' '}
+                {studyTargetEntries().length === 1 ? 'Stelle' : 'Stellen'} verdeckt
+              </span>
+              <button
+                type="button"
+                class="btn-primary csb-finish-btn"
+                onClick={finishDeferredAndCompare}
+                title="Alle verdeckten Stellen aufdecken und mit deinen Zeichnungen vergleichen"
+              >
+                <IconCheck size={14} />
+                <span>Fertig → Vergleichen</span>
+              </button>
+            </Show>
+          </div>
+
+          {/* Right: Practice Pen Toggle, Clear Ink, Exit */}
+          <div class="csb-group">
+            <button
+              type="button"
+              class="csb-pill"
+              classList={{ 'is-active': occlusionPracticeDraw() }}
+              onClick={() => setOcclusionPracticeDraw((v) => !v)}
+              title={
+                occlusionPracticeDraw()
+                  ? 'Übungs-Stift aktiv (verändert Originalnotiz nicht)'
+                  : 'Übungs-Stift einschalten'
+              }
+            >
+              <IconPen size={12} />
+              <span class="hide-compact">Stift</span>
+            </button>
+
+            <Show when={occlusionPracticeHasStrokes()}>
+              <button
+                type="button"
+                class="tool-btn is-danger-hover csb-step-btn"
+                onClick={() => {
+                  setOcclusionPracticeClearToken((n) => n + 1);
+                  setOcclusionPracticeHasStrokes(false);
+                }}
+                title="Übungs-Zeichnung leeren"
+                aria-label="Übungs-Zeichnung leeren"
+              >
+                <IconTrash size={13} />
+              </button>
+            </Show>
+
+            <button
+              type="button"
+              class="tool-btn csb-step-btn"
+              onClick={() => setOcclusionDisplayMode('edit')}
+              title="Im-Canvas-Üben beenden (Originalnotiz bleibt unverändert)"
+              aria-label="Üben beenden"
+            >
+              <IconX size={14} />
+            </button>
+          </div>
+        </div>
+      </Show>
+
       {/* Main Canvas Area: Infinite OneNote-style Canvas OR Continuous Multi-Page Document */}
       <div ref={stageWrapperRef} class="canvas-stage-wrapper">
       <Show
@@ -3828,6 +4276,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 revealedOcclusionIds={revealedOcclusionIds()}
                 occlusionPracticeActive={occlusionPracticeDraw()}
                 occlusionPracticeClearToken={occlusionPracticeClearToken()}
+                occlusionShowPracticeStrokes={showPracticeStrokes()}
+                occlusionAllowIndividualPeek={studyAllowIndividualPeek()}
+                occlusionStudyPromptIds={studyPromptIds()}
+                occlusionStudyActiveTargetIds={studyActiveTargetIds()}
+                occlusionStudyFocusedId={studyFocusedId()}
+                occlusionStudyGrades={studyGrades()}
+                onGradeOcclusion={handleGradeOcclusion}
                 onSetSelectedOcclusion={setSelectedOcclusion}
                 onToggleRevealOcclusion={toggleRevealOcclusion}
                 onOcclusionPracticeHasStrokesChange={setOcclusionPracticeHasStrokes}
@@ -3932,6 +4387,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   revealedOcclusionIds={revealedOcclusionIds()}
                   occlusionPracticeActive={occlusionPracticeDraw()}
                   occlusionPracticeClearToken={occlusionPracticeClearToken()}
+                  occlusionShowPracticeStrokes={showPracticeStrokes()}
+                  occlusionAllowIndividualPeek={studyAllowIndividualPeek()}
+                  occlusionStudyPromptIds={studyPromptIds()}
+                  occlusionStudyActiveTargetIds={studyActiveTargetIds()}
+                  occlusionStudyFocusedId={studyFocusedId()}
+                  occlusionStudyGrades={studyGrades()}
+                  onGradeOcclusion={handleGradeOcclusion}
                   onSetSelectedOcclusion={setSelectedOcclusion}
                   onToggleRevealOcclusion={toggleRevealOcclusion}
                   onOcclusionPracticeHasStrokesChange={setOcclusionPracticeHasStrokes}

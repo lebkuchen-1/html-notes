@@ -38,13 +38,17 @@ import {
   IconEyeOff,
   IconTrash,
   IconUnlink,
+  IconX,
 } from './Icons';
 
+export type OcclusionDisplayMode = 'edit' | 'study' | 'hidden';
+export type OcclusionStudyCompareMode = 'instant' | 'deferred';
+export type OcclusionPairDirection = 'ab' | 'ba' | 'both';
+export type OcclusionGrade = 'correct' | 'wrong';
 interface AppleTouch extends Touch {
   touchType?: 'direct' | 'stylus';
 }
 
-export type OcclusionDisplayMode = 'edit' | 'study' | 'hidden';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 export interface OcclusionScreenRect {
@@ -72,7 +76,7 @@ interface CanvasOcclusionOverlayProps {
   onToggleBidirectional: (id: string) => void;
   onUnlinkPair: (id: string) => void;
   onDelete: (id: string) => void;
-  // Direct-on-Canvas temporary practice ink during Abdeckband (`study`) mode
+  // Direct-on-Canvas temporary practice ink & inline study controls during Abdeckband (`study`) mode
   studyPracticeActive?: boolean;
   studyPracticeTool?: 'pen' | 'eraser';
   studyPracticeColor?: string;
@@ -81,6 +85,18 @@ interface CanvasOcclusionOverlayProps {
   studyPracticeStylusOnly?: boolean;
   studyPracticeStabilization?: StabilizationLevel;
   studyPracticePressure?: boolean;
+  studyShowPracticeStrokes?: boolean;
+  studyAllowIndividualPeek?: boolean;
+  /** Visible "Gegeben" partner boxes in bidirectional A↔B study mode */
+  studyPromptIds?: ReadonlySet<string>;
+  /** Optional subset of active target occlusion IDs (e.g. "Falsche nochmal üben") */
+  studyActiveTargetIds?: ReadonlySet<string> | null;
+  /** Currently focused occlusion ID when stepping through spots */
+  studyFocusedId?: string | null;
+  /** Self-evaluation grades per occlusion ID */
+  studyGrades?: ReadonlyMap<string, OcclusionGrade>;
+  onGradeOcclusion?: (id: string, grade: OcclusionGrade) => void;
+  onPenPointerDown?: () => void;
   paperConfig?: PaperConfig;
   theme?: ThemeMode;
   viewportSize?: { width: number; height: number };
@@ -208,7 +224,8 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
     ctx.clearRect(0, 0, targetW, targetH);
 
     const list = pIsErasing && pErasingList ? pErasingList : practiceStrokes();
-    if (list.length > 0 && props.paperConfig) {
+    const shouldShowStrokes = props.studyShowPracticeStrokes !== false;
+    if (shouldShowStrokes && list.length > 0 && props.paperConfig) {
       const origin = getPracticeOrigin();
       const s = Math.max(0.1, props.scale);
       ctx.save();
@@ -281,6 +298,7 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
     void isStudyMode();
     void isPracticeDrawOn();
     void practiceStrokes();
+    void props.studyShowPracticeStrokes;
     void props.scale;
     void props.viewportSize?.width;
     void props.viewportSize?.height;
@@ -380,6 +398,7 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
 
     if (e.pointerType === 'pen') {
       pLastPenTs = now;
+      props.onPenPointerDown?.();
     }
     if (e.pointerType === 'touch') {
       const isLargePalm = e.width > 34 || e.height > 34;
@@ -754,20 +773,45 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
             const rect = () => props.toScreenRect(occ);
             const isSelected = () =>
               isEditInteractive() && props.selectedId === occ.id;
-            const isRevealed = () => isStudyMode() && props.revealedIds.has(occ.id);
+            const isPromptInStudy = () =>
+              isStudyMode() && Boolean(props.studyPromptIds?.has(occ.id));
+            const isInactiveInSubset = () =>
+              isStudyMode() &&
+              !isPromptInStudy() &&
+              props.studyActiveTargetIds != null &&
+              !props.studyActiveTargetIds.has(occ.id);
+            const isRevealed = () =>
+              isStudyMode() &&
+              (isPromptInStudy() ||
+                isInactiveInSubset() ||
+                props.revealedIds.has(occ.id));
+            const isFocused = () =>
+              isStudyMode() && props.studyFocusedId === occ.id;
+            const grade = () =>
+              isStudyMode() ? props.studyGrades?.get(occ.id) ?? null : null;
+            const canDirectTapToggle = () =>
+              isStudyMode() &&
+              !isPracticeDrawOn() &&
+              !isPromptInStudy() &&
+              !isInactiveInSubset() &&
+              props.studyAllowIndividualPeek !== false;
             const badge = () => badgeById().get(occ.id) ?? '#';
             const placeBarBelow = () => rect().top < 64;
 
             return (
               <div
+                data-occ-id={occ.id}
                 class="canvas-occlusion-box"
                 classList={{
                   'is-selected': isSelected(),
                   'is-study': isStudyMode(),
-                  'is-practice-surface': isPracticeDrawOn(),
-                  'is-revealed': isRevealed(),
-                  'is-interactive':
-                    isEditInteractive() || (isStudyMode() && !isPracticeDrawOn()),
+                  'is-practice-surface': isPracticeDrawOn() && !isPromptInStudy(),
+                  'is-prompt-given': isPromptInStudy(),
+                  'is-revealed': isRevealed() && !isPromptInStudy(),
+                  'is-focused-study': isFocused(),
+                  'is-graded-correct': grade() === 'correct',
+                  'is-graded-wrong': grade() === 'wrong',
+                  'is-interactive': isEditInteractive() || canDirectTapToggle(),
                   'is-paired': Boolean(occ.pairId),
                 }}
                 style={{
@@ -778,7 +822,7 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
                   '--occ-color': occ.color || OCCLUSION_COLORS[0],
                 }}
                 onPointerDown={(e) => {
-                  if (isStudyMode()) {
+                  if (canDirectTapToggle()) {
                     e.stopPropagation();
                     return;
                   }
@@ -796,7 +840,7 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
                   if (isEditInteractive()) endTransform(e);
                 }}
                 onClick={(e) => {
-                  if (isStudyMode()) {
+                  if (canDirectTapToggle()) {
                     e.preventDefault();
                     e.stopPropagation();
                     props.onToggleReveal(occ.id);
@@ -805,15 +849,17 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
                   }
                 }}
                 title={
-                  isStudyMode()
-                    ? isRevealed()
-                      ? 'Tippen zum Wieder-Verdecken'
-                      : occ.label
-                        ? `Hinweis: ${occ.label} — Tippen zum Aufdecken`
-                        : 'Tippen zum Aufdecken'
-                    : isEditInteractive()
-                      ? 'Ziehen zum Verschieben · Tippen für Optionen'
-                      : undefined
+                  isPromptInStudy()
+                    ? 'Gegeben (Partner-Stelle)'
+                    : canDirectTapToggle()
+                      ? isRevealed()
+                        ? 'Tippen zum Wieder-Verdecken'
+                        : occ.label
+                          ? `Hinweis: ${occ.label} — Tippen zum Aufdecken`
+                          : 'Tippen zum Aufdecken'
+                      : isEditInteractive()
+                        ? 'Ziehen zum Verschieben · Tippen für Optionen'
+                        : undefined
                 }
               >
                 {/* Study-mode badge / hint */}
@@ -829,19 +875,45 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
                   }
                 >
                   <Show
-                    when={!isRevealed()}
+                    when={!isPromptInStudy()}
                     fallback={
-                      <span class="occ-revealed-pill">
-                        <IconEye size={11} />
+                      <span class="occ-given-pill">
+                        Gegeben{occ.label ? `: ${occ.label}` : ''}
                       </span>
                     }
                   >
-                    <div class="occ-study-center">
-                      <span class="occ-study-q">?</span>
-                      <Show when={occ.label}>
-                        <span class="occ-study-hint">{occ.label}</span>
-                      </Show>
-                    </div>
+                    <Show
+                      when={!isRevealed()}
+                      fallback={
+                        <Show
+                          when={grade()}
+                          fallback={
+                            <span class="occ-revealed-pill">
+                              <IconEye size={11} />
+                            </span>
+                          }
+                        >
+                          {(g) => (
+                            <span
+                              class="occ-revealed-pill"
+                              classList={{
+                                'is-correct': g() === 'correct',
+                                'is-wrong': g() === 'wrong',
+                              }}
+                            >
+                              {g() === 'correct' ? <IconCheck size={11} /> : <IconX size={11} />}
+                            </span>
+                          )}
+                        </Show>
+                      }
+                    >
+                      <div class="occ-study-center">
+                        <span class="occ-study-q">?</span>
+                        <Show when={occ.label}>
+                          <span class="occ-study-hint">{occ.label}</span>
+                        </Show>
+                      </div>
+                    </Show>
                   </Show>
                 </Show>
 
@@ -1079,37 +1151,84 @@ export function CanvasOcclusionOverlay(props: CanvasOcclusionOverlayProps) {
               onContextMenu={(e) => e.preventDefault()}
             />
 
-            {/* Per-box corner peek buttons floating above practice ink so you can reveal any single spot while drawing! */}
+            {/* Per-box corner peek & self-grade buttons floating above practice ink */}
             <For each={props.occlusions}>
               {(occ) => {
                 const rect = () => props.toScreenRect(occ);
+                const isPrompt = () => Boolean(props.studyPromptIds?.has(occ.id));
+                const isInactive = () =>
+                  !isPrompt() &&
+                  props.studyActiveTargetIds != null &&
+                  !props.studyActiveTargetIds.has(occ.id);
                 const rev = () => props.revealedIds.has(occ.id);
+                const grade = () => props.studyGrades?.get(occ.id) ?? null;
+                const allowPeek = () => props.studyAllowIndividualPeek !== false;
+
                 return (
-                  <button
-                    type="button"
-                    class="occ-practice-peek-btn"
-                    classList={{ 'is-revealed': rev() }}
-                    style={{
-                      left: `${rect().left + rect().width - 24}px`,
-                      top: `${rect().top - 10}px`,
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      props.onToggleReveal(occ.id);
-                    }}
-                    title={
-                      rev()
-                        ? 'Stelle wieder verdecken'
-                        : 'Stelle direkt unter deiner Zeichnung aufdecken & vergleichen'
-                    }
-                    aria-label={rev() ? 'Wieder verdecken' : 'Aufdecken zum Vergleichen'}
-                  >
-                    <Show when={rev()} fallback={<IconEye size={12} />}>
-                      <IconEyeOff size={12} />
-                    </Show>
-                  </button>
+                  <Show when={!isPrompt() && !isInactive() && (allowPeek() || rev())}>
+                    <div
+                      class="occ-practice-corner-controls"
+                      style={{
+                        left: `${rect().left + rect().width}px`,
+                        top: `${rect().top - 12}px`,
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                    >
+                      <Show when={rev() && props.onGradeOcclusion}>
+                        <button
+                          type="button"
+                          class="occ-practice-grade-btn is-correct"
+                          classList={{ 'is-active': grade() === 'correct' }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            props.onGradeOcclusion?.(occ.id, 'correct');
+                          }}
+                          title="Als richtig markieren"
+                          aria-label="Richtig"
+                        >
+                          <IconCheck size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          class="occ-practice-grade-btn is-wrong"
+                          classList={{ 'is-active': grade() === 'wrong' }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            props.onGradeOcclusion?.(occ.id, 'wrong');
+                          }}
+                          title="Als falsch / nochmal markieren"
+                          aria-label="Nochmal"
+                        >
+                          <IconX size={11} />
+                        </button>
+                      </Show>
+
+                      <Show when={allowPeek()}>
+                        <button
+                          type="button"
+                          class="occ-practice-peek-btn"
+                          classList={{ 'is-revealed': rev() }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            props.onToggleReveal(occ.id);
+                          }}
+                          title={
+                            rev()
+                              ? 'Stelle wieder verdecken'
+                              : 'Stelle direkt unter deiner Zeichnung aufdecken & vergleichen'
+                          }
+                          aria-label={rev() ? 'Wieder verdecken' : 'Aufdecken zum Vergleichen'}
+                        >
+                          <Show when={rev()} fallback={<IconEye size={12} />}>
+                            <IconEyeOff size={12} />
+                          </Show>
+                        </button>
+                      </Show>
+                    </div>
+                  </Show>
                 );
               }}
             </For>

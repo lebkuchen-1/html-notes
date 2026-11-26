@@ -72,6 +72,7 @@ import {
 import {
   CanvasOcclusionOverlay,
   type OcclusionDisplayMode,
+  type OcclusionGrade,
 } from './CanvasOcclusionOverlay';
 import { CanvasTextOverlay } from './CanvasTextOverlay';
 import {
@@ -153,6 +154,13 @@ interface CanvasPageSheetProps {
   revealedOcclusionIds: ReadonlySet<string>;
   occlusionPracticeActive: boolean;
   occlusionPracticeClearToken: number;
+  occlusionShowPracticeStrokes: boolean;
+  occlusionAllowIndividualPeek: boolean;
+  occlusionStudyPromptIds: ReadonlySet<string>;
+  occlusionStudyActiveTargetIds: ReadonlySet<string> | null;
+  occlusionStudyFocusedId: string | null;
+  occlusionStudyGrades: ReadonlyMap<string, OcclusionGrade>;
+  onGradeOcclusion: (id: string, grade: OcclusionGrade) => void;
   onSetSelectedOcclusion: (next: SelectedOcclusionState | null) => void;
   onToggleRevealOcclusion: (id: string) => void;
   onOcclusionPracticeHasStrokesChange: (hasStrokes: boolean) => void;
@@ -1809,6 +1817,14 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
               studyPracticeStylusOnly={props.stylusOnly}
               studyPracticeStabilization={props.stabilization}
               studyPracticePressure={props.pressureSensitivity}
+              studyShowPracticeStrokes={props.occlusionShowPracticeStrokes}
+              studyAllowIndividualPeek={props.occlusionAllowIndividualPeek}
+              studyPromptIds={props.occlusionStudyPromptIds}
+              studyActiveTargetIds={props.occlusionStudyActiveTargetIds}
+              studyFocusedId={props.occlusionStudyFocusedId}
+              studyGrades={props.occlusionStudyGrades}
+              onGradeOcclusion={props.onGradeOcclusion}
+              onPenPointerDown={props.onPenPointerDown}
               paperConfig={currPage().paperConfig}
               theme={props.store.theme()}
               viewportSize={{ width: cssSize().width, height: cssSize().height }}

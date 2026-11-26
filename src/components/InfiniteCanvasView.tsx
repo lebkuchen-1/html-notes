@@ -90,6 +90,7 @@ import {
 import {
   CanvasOcclusionOverlay,
   type OcclusionDisplayMode,
+  type OcclusionGrade,
 } from './CanvasOcclusionOverlay';
 import { CanvasTextOverlay } from './CanvasTextOverlay';
 import { InfiniteExportRegionOverlay } from './InfiniteExportRegionOverlay';
@@ -110,6 +111,7 @@ export interface InfiniteCanvasHandle {
   setZoom: (nextZoom: number) => void;
   fitToContent: () => void;
   resetView: () => void;
+  focusWorldRect: (rect: WorldRect) => void;
   getViewportCenterWorld: () => { x: number; y: number };
   getViewportSnapshot: () => InfiniteViewportSnapshot;
 }
@@ -158,6 +160,13 @@ interface InfiniteCanvasViewProps {
   revealedOcclusionIds: ReadonlySet<string>;
   occlusionPracticeActive: boolean;
   occlusionPracticeClearToken: number;
+  occlusionShowPracticeStrokes: boolean;
+  occlusionAllowIndividualPeek: boolean;
+  occlusionStudyPromptIds: ReadonlySet<string>;
+  occlusionStudyActiveTargetIds: ReadonlySet<string> | null;
+  occlusionStudyFocusedId: string | null;
+  occlusionStudyGrades: ReadonlyMap<string, OcclusionGrade>;
+  onGradeOcclusion: (id: string, grade: OcclusionGrade) => void;
   onSetSelectedOcclusion: (next: SelectedOcclusionState | null) => void;
   onToggleRevealOcclusion: (id: string) => void;
   onOcclusionPracticeHasStrokesChange: (hasStrokes: boolean) => void;
@@ -665,6 +674,26 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
     updateCamera({ x: -24, y: -24, zoom: 1 });
   };
 
+  const focusWorldRect = (rect: WorldRect) => {
+    const vp = vpSize();
+    const cam = camera();
+    const cx = rect.x + rect.width / 2;
+    const cy = rect.y + rect.height / 2;
+    const padX = Math.max(140, rect.width * 0.8);
+    const padY = Math.max(120, rect.height * 0.9);
+    const desiredW = rect.width + padX * 2;
+    const desiredH = rect.height + padY * 2;
+    const targetZoom = Math.max(
+      INF_MIN_ZOOM,
+      Math.min(1.6, Math.max(cam.zoom, Math.min(vp.width / desiredW, vp.height / desiredH)))
+    );
+    updateCamera({
+      x: cx - vp.width / (2 * targetZoom),
+      y: cy - vp.height / (2 * targetZoom),
+      zoom: Math.round(targetZoom * 100) / 100,
+    });
+  };
+
   const getViewportCenterWorld = () => {
     const cam = camera();
     const vp = vpSize();
@@ -1054,6 +1083,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       },
       fitToContent,
       resetView,
+      focusWorldRect,
       getViewportCenterWorld,
       getViewportSnapshot,
     });
@@ -1192,7 +1222,7 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .occ-practice-peek-btn, .canvas-ruler, .export-region-interactive'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .occ-practice-peek-btn, .occ-practice-grade-btn, .occ-practice-corner-controls, .canvas-ruler, .export-region-interactive'
         )
       );
     };
@@ -2428,6 +2458,14 @@ export function InfiniteCanvasView(props: InfiniteCanvasViewProps) {
             studyPracticeStylusOnly={props.stylusOnly}
             studyPracticeStabilization={props.stabilization}
             studyPracticePressure={props.pressureSensitivity}
+            studyShowPracticeStrokes={props.occlusionShowPracticeStrokes}
+            studyAllowIndividualPeek={props.occlusionAllowIndividualPeek}
+            studyPromptIds={props.occlusionStudyPromptIds}
+            studyActiveTargetIds={props.occlusionStudyActiveTargetIds}
+            studyFocusedId={props.occlusionStudyFocusedId}
+            studyGrades={props.occlusionStudyGrades}
+            onGradeOcclusion={props.onGradeOcclusion}
+            onPenPointerDown={() => penContactNotifier?.()}
             paperConfig={currPage().paperConfig}
             theme={props.store.theme()}
             viewportSize={vpSize()}
