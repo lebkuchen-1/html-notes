@@ -15,7 +15,6 @@ import type {
   Folder,
   ManualFlashcard,
   Note,
-  ThemeMode,
 } from '../types';
 import {
   computeDeckStats,
@@ -24,12 +23,12 @@ import {
   isCardDue,
   parseClozeText,
   previewRatingIntervals,
-  renderOcclusionStudyCanvas,
   type StudyCard,
   type StudyCardSource,
 } from '../utils/flashcards';
 import { renderInlineMarkdown } from '../utils/markdown';
 import { FlashcardScratchpad } from './FlashcardScratchpad';
+import { OcclusionStudyCanvas } from './OcclusionStudyCanvas';
 import {
   IconArrowLeft,
   IconBidirectional,
@@ -63,98 +62,6 @@ interface FlashcardsPageProps {
 
 type SourceFilter = 'all' | StudyCardSource;
 type StudyMode = 'srs' | 'practice';
-
-function OcclusionStudyCanvas(props: {
-  page: CanvasPage;
-  theme: ThemeMode;
-  isInfinite: boolean;
-  targetIds: string[];
-  promptIds: string[];
-  revealed: boolean;
-  hideOtherOcclusions: boolean;
-  viewMode: 'focus' | 'full';
-  onCanvasClick: () => void;
-}) {
-  let wrapperRef: HTMLDivElement | undefined;
-  let canvasRef: HTMLCanvasElement | undefined;
-  const [size, setSize] = createSignal({ width: 640, height: 380 });
-
-  const redraw = () => {
-    const canvas = canvasRef;
-    if (!canvas) return;
-    const { width, height } = size();
-    if (width <= 0 || height <= 0) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const targetW = Math.round(width * dpr);
-    const targetH = Math.round(height * dpr);
-    if (canvas.width !== targetW || canvas.height !== targetH) {
-      canvas.width = targetW;
-      canvas.height = targetH;
-    }
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    renderOcclusionStudyCanvas(ctx, {
-      page: props.page,
-      theme: props.theme,
-      isInfinite: props.isInfinite,
-      targetIds: props.targetIds,
-      promptIds: props.promptIds,
-      revealed: props.revealed,
-      hideOtherOcclusions: props.hideOtherOcclusions,
-      viewMode: props.viewMode,
-      cssWidth: width,
-      cssHeight: height,
-      dpr,
-      onImageLoad: redraw,
-    });
-  };
-
-  onMount(() => {
-    if (!wrapperRef) return;
-    const sync = () => {
-      if (!wrapperRef) return;
-      const rect = wrapperRef.getBoundingClientRect();
-      const w = Math.max(240, Math.round(rect.width));
-      const h = Math.max(240, Math.min(480, Math.round(rect.height || 360)));
-      setSize({ width: w, height: h });
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrapperRef);
-    onCleanup(() => ro.disconnect());
-  });
-
-  createEffect(() => {
-    void size();
-    void props.page;
-    void props.theme;
-    void props.isInfinite;
-    void props.targetIds;
-    void props.promptIds;
-    void props.revealed;
-    void props.hideOtherOcclusions;
-    void props.viewMode;
-    requestAnimationFrame(redraw);
-  });
-
-  return (
-    <div
-      ref={wrapperRef}
-      class="fc-occ-canvas-wrap"
-      onClick={props.onCanvasClick}
-      title={props.revealed ? undefined : 'Tippen zum Aufdecken'}
-    >
-      <canvas
-        ref={canvasRef}
-        class="fc-occ-canvas"
-        style={{
-          width: `${size().width}px`,
-          height: `${size().height}px`,
-        }}
-      />
-    </div>
-  );
-}
 
 export function FlashcardsPage(props: FlashcardsPageProps) {
   const [sourceFilter, setSourceFilter] = createSignal<SourceFilter>('all');
@@ -203,6 +110,11 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
   );
   const [scratchpadResetToken, setScratchpadResetToken] = createSignal<number>(0);
   const [scratchpadHasDrawing, setScratchpadHasDrawing] = createSignal<boolean>(false);
+  const [occCanvasHasDrawing, setOccCanvasHasDrawing] = createSignal<boolean>(false);
+  const [extraScratchpadOnOcclusion, setExtraScratchpadOnOcclusion] =
+    createSignal<boolean>(false);
+
+  const anyAnswerDrawn = () => scratchpadHasDrawing() || occCanvasHasDrawing();
 
   createEffect(() => {
     try {
@@ -369,6 +281,7 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
     setRevealed(false);
     setOccViewMode('focus');
     setScratchpadHasDrawing(false);
+    setOccCanvasHasDrawing(false);
     setScratchpadResetToken((n) => n + 1);
     setInSession(true);
   };
@@ -411,6 +324,7 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
     }
     setRevealed(false);
     setScratchpadHasDrawing(false);
+    setOccCanvasHasDrawing(false);
     setScratchpadResetToken((n) => n + 1);
   };
 
@@ -419,6 +333,7 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
     setQueue([]);
     setRevealed(false);
     setScratchpadHasDrawing(false);
+    setOccCanvasHasDrawing(false);
     setScratchpadResetToken((n) => n + 1);
   };
 
@@ -792,8 +707,12 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                 const badge = () => formatCardBadge(card());
                 const attachments = () => currentCardNote()?.attachments ?? [];
 
+                const showSeparateScratchpad = () =>
+                  card().kind === 'occlusion'
+                    ? extraScratchpadOnOcclusion()
+                    : scratchpadOpen();
                 const isComparingSide = () =>
-                  revealed() && scratchpadOpen() && compareLayout() === 'side';
+                  revealed() && showSeparateScratchpad() && compareLayout() === 'side';
 
                 return (
                   <div
@@ -822,20 +741,32 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                         <button
                           type="button"
                           class="fc-jump-btn fc-sp-toggle-btn"
-                          classList={{ 'is-active': scratchpadOpen() }}
-                          onClick={() => setScratchpadOpen((v) => !v)}
+                          classList={{ 'is-active': showSeparateScratchpad() }}
+                          onClick={() => {
+                            if (card().kind === 'occlusion') {
+                              setExtraScratchpadOnOcclusion((v) => !v);
+                            } else {
+                              setScratchpadOpen((v) => !v);
+                            }
+                          }}
                           title={
-                            scratchpadOpen()
-                              ? 'Freies Antwort-Zeichenfeld ausblenden'
-                              : 'Freies Antwort-Zeichenfeld zum Einzeichnen mit Stift öffnen'
+                            card().kind === 'occlusion'
+                              ? showSeparateScratchpad()
+                                ? 'Zusätzliches Antwortfeld ausblenden (Direkt-Zeichnen im Canvas bleibt aktiv)'
+                                : 'Zusätzliches freies Antwortfeld neben dem Canvas öffnen'
+                              : scratchpadOpen()
+                                ? 'Freies Antwort-Zeichenfeld ausblenden'
+                                : 'Freies Antwort-Zeichenfeld zum Einzeichnen mit Stift öffnen'
                           }
-                          aria-pressed={scratchpadOpen()}
+                          aria-pressed={showSeparateScratchpad()}
                         >
                           <IconPen size={13} />
-                          <span>Antwortfeld</span>
+                          <span>
+                            {card().kind === 'occlusion' ? 'Extra-Feld' : 'Antwortfeld'}
+                          </span>
                         </button>
 
-                        <Show when={revealed() && scratchpadOpen()}>
+                        <Show when={revealed() && showSeparateScratchpad()}>
                           <button
                             type="button"
                             class="fc-jump-btn fc-layout-toggle-btn"
@@ -874,12 +805,12 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                     <div
                       class="fc-card-body"
                       classList={{
-                        'is-compare-active': revealed() && scratchpadOpen(),
+                        'is-compare-active': revealed() && showSeparateScratchpad(),
                         'is-compare-side': isComparingSide(),
                       }}
                     >
                       <div class="fc-solution-pane">
-                        <Show when={revealed() && scratchpadOpen()}>
+                        <Show when={revealed() && showSeparateScratchpad()}>
                           <div class="fc-compare-pane-header is-solution">
                             <IconCheck size={13} />
                             <span>Lösung</span>
@@ -896,13 +827,13 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                                   when={card().pairId}
                                   fallback={
                                     revealed()
-                                      ? 'Aufgedeckte Stelle auf dem Canvas:'
-                                      : 'Was verbirgt sich hinter der verdeckten Stelle?'
+                                      ? 'Aufgedeckt — vergleiche deine Zeichnung direkt mit der Lösung:'
+                                      : 'Zeichne deine Antwort direkt in die verdeckte Stelle:'
                                   }
                                 >
                                   {revealed()
-                                    ? 'Beidseitiges Paar aufgedeckt:'
-                                    : 'Finde die verdeckte Partner-Stelle (?) zum markierten Bereich:'}
+                                    ? 'Beidseitiges Paar aufgedeckt — direkt vergleichen:'
+                                    : 'Zeichne die gesuchte Partner-Stelle (?) direkt im Canvas ein:'}
                                 </Show>
                               </span>
 
@@ -946,9 +877,12 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                               revealed={revealed()}
                               hideOtherOcclusions={hideOtherOcclusions()}
                               viewMode={occViewMode()}
-                              onCanvasClick={() => {
-                                if (!revealed()) setRevealed(true);
-                              }}
+                              resetToken={scratchpadResetToken()}
+                              stabilization={props.store.settings().stabilization}
+                              pressureSensitivity={props.store.settings().pressureSensitivity}
+                              defaultStylusOnly={props.store.settings().stylusOnly}
+                              autoEnableStylusOnly={props.store.settings().autoEnableStylusOnly}
+                              onHasDrawingChange={setOccCanvasHasDrawing}
                             />
 
                             <Show when={card().hint && !revealed()}>
@@ -1041,7 +975,7 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                       </div>
 
                       {/* Optional Freehand Pen Scratchpad (Draw Answer & Compare!) */}
-                      <Show when={scratchpadOpen()}>
+                      <Show when={showSeparateScratchpad()}>
                         <div class="fc-scratchpad-pane">
                           <Show when={revealed()}>
                             <div class="fc-compare-pane-header is-user-answer">
@@ -1075,7 +1009,7 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                           >
                             <IconEye size={16} />
                             <span>
-                              {scratchpadHasDrawing()
+                              {anyAnswerDrawn()
                                 ? 'Antwort zeigen & vergleichen'
                                 : 'Antwort zeigen'}
                             </span>

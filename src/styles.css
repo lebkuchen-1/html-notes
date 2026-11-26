@@ -10681,3 +10681,163 @@ button {
     display: none;
   }
 }
+
+
+/* ==================== Direct-on-Canvas Flashcard Drawing & Practice Ink ==================== */
+
+.fc-occ-interactive-shell {
+  display: flex;
+  flex-direction: column;
+  border-radius: 13px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-surface-alt);
+  overflow: hidden;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.fc-occ-interactive-shell.is-revealed {
+  border-color: rgba(16, 185, 129, 0.52);
+  box-shadow: 0 4px 18px rgba(16, 185, 129, 0.08);
+}
+
+.fc-occ-canvas-wrap.is-drawable {
+  position: relative;
+  height: auto;
+  min-height: 220px;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.fc-occ-canvas.is-base {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fc-occ-canvas-live {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.fc-occ-canvas-live.is-stylus-only {
+  touch-action: pan-y;
+}
+
+.fc-occ-canvas-live.is-eraser {
+  cursor: cell;
+}
+
+.fc-occ-compare-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.fc-occ-compare-pill.is-active {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #059669;
+}
+
+[data-theme='dark'] .fc-occ-compare-pill.is-active {
+  color: #34d399;
+}
+
+/* Main Note Canvas: Writing-friendly opaque mask & temporary practice ink layer in Abdecken mode */
+.canvas-occlusion-box.is-study.is-practice-surface:not(.is-revealed) {
+  background: color-mix(in srgb, var(--occ-color, #4f46e5) 14%, #ffffff);
+  border-color: var(--occ-color, #4f46e5);
+  border-width: 2.2px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.14);
+}
+
+[data-theme='dark'] .canvas-occlusion-box.is-study.is-practice-surface:not(.is-revealed) {
+  background: color-mix(in srgb, var(--occ-color, #4f46e5) 22%, #181c2a);
+}
+
+.canvas-occlusion-box.is-study.is-practice-surface:not(.is-revealed) .occ-study-center {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--occ-color, #4f46e5);
+  color: #ffffff;
+}
+
+.canvas-occlusion-box.is-study.is-practice-surface:not(.is-revealed) .occ-study-q {
+  font-size: 11.5px;
+}
+
+.canvas-occ-practice-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.canvas-occ-practice-canvas.is-base {
+  z-index: 18;
+  pointer-events: none;
+}
+
+.canvas-occ-practice-canvas.is-live {
+  z-index: 19;
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.canvas-occ-practice-canvas.is-live.is-stylus-only {
+  touch-action: pan-y;
+}
+
+.canvas-occ-practice-canvas.is-live.is-eraser {
+  cursor: cell;
+}
+
+.occ-practice-peek-btn {
+  position: absolute;
+  z-index: 22;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--bg-surface);
+  background: var(--accent);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+  transition: transform 0.12s ease, background-color 0.14s ease;
+}
+
+.occ-practice-peek-btn.is-revealed {
+  background: #10b981;
+}
+
+.occ-practice-peek-btn:active {
+  transform: scale(0.92);
+}

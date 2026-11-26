@@ -151,8 +151,11 @@ interface CanvasPageSheetProps {
   occlusionDisplayMode: OcclusionDisplayMode;
   selectedOcclusion: SelectedOcclusionState | null;
   revealedOcclusionIds: ReadonlySet<string>;
+  occlusionPracticeActive: boolean;
+  occlusionPracticeClearToken: number;
   onSetSelectedOcclusion: (next: SelectedOcclusionState | null) => void;
   onToggleRevealOcclusion: (id: string) => void;
+  onOcclusionPracticeHasStrokesChange: (hasStrokes: boolean) => void;
   onPointerTypeChange: (type: string) => void;
   onPenPointerDown: () => void;
   onSetEditingText: (next: EditingTextState | null) => void;
@@ -1798,6 +1801,18 @@ export function CanvasPageSheet(props: CanvasPageSheetProps) {
                 props.store.deleteCanvasOcclusion(id, props.pageId);
                 props.store.showToast('Verdeckte Stelle entfernt');
               }}
+              studyPracticeActive={props.occlusionPracticeActive}
+              studyPracticeTool={props.tool === 'eraser' ? 'eraser' : 'pen'}
+              studyPracticeColor={props.penColor}
+              studyPracticeWidth={props.penWidth}
+              studyPracticeClearToken={props.occlusionPracticeClearToken}
+              studyPracticeStylusOnly={props.stylusOnly}
+              studyPracticeStabilization={props.stabilization}
+              studyPracticePressure={props.pressureSensitivity}
+              paperConfig={currPage().paperConfig}
+              theme={props.store.theme()}
+              viewportSize={{ width: cssSize().width, height: cssSize().height }}
+              onStudyPracticeHasStrokesChange={props.onOcclusionPracticeHasStrokesChange}
             />
 
             {/* Lasso Selection Move / Resize / Action Overlay */}

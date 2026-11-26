@@ -309,6 +309,8 @@ export function createNotesStore() {
       '.fc-modal-body',
       '.fc-scratchpad-canvas',
       '.fc-scratchpad-resize-handle',
+      '.fc-occ-canvas-live',
+      '.canvas-occ-practice-canvas',
     ].join(', ');
 
     const fullscreenTouchStarts = new Map<number, { x: number; y: number }>();

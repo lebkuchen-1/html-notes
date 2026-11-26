@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import {
   computePageContentBounds,
+  isPaperDark,
   renderFullCanvas,
   renderInfiniteCanvas,
 } from './canvasRenderer';
@@ -1005,45 +1006,78 @@ function drawRoundedRectPath(
   ctx.roundRect(x, y, w, h, radius);
 }
 
+function hexToRgbTuple(hex: string): [number, number, number] {
+  const clean = (hex || '#4f46e5').trim().replace(/^#/, '');
+  if (clean.length === 6) {
+    const r = Number.parseInt(clean.slice(0, 2), 16);
+    const g = Number.parseInt(clean.slice(2, 4), 16);
+    const b = Number.parseInt(clean.slice(4, 6), 16);
+    if (!Number.isNaN(r) && !Number.isNaN(g) && !Number.isNaN(b)) return [r, g, b];
+  }
+  return [79, 70, 229];
+}
+
+/** Mixes accent hex with a solid light/dark writing surface so the mask is 100% opaque yet super legible to write on! */
+function buildOpaqueWritableMaskFill(accentHex: string, darkSurface: boolean): string {
+  const [r, g, b] = hexToRgbTuple(accentHex);
+  const [bgR, bgG, bgB] = darkSurface ? [24, 28, 42] : [255, 255, 255];
+  const mix = darkSurface ? 0.22 : 0.14;
+  const outR = Math.round(bgR * (1 - mix) + r * mix);
+  const outG = Math.round(bgG * (1 - mix) + g * mix);
+  const outB = Math.round(bgB * (1 - mix) + b * mix);
+  return `rgb(${outR}, ${outG}, ${outB})`;
+}
+
 function drawOcclusionOverlayRect(
   ctx: CanvasRenderingContext2D,
   occ: CanvasOcclusionItem,
   role: 'target-hidden' | 'target-revealed' | 'prompt' | 'other-hidden',
-  invScale: number
+  invScale: number,
+  darkSurface: boolean
 ) {
-  const lw = Math.max(1.5, 2.2 * invScale);
-  const radius = Math.min(10 * invScale, occ.width * 0.2, occ.height * 0.2);
+  const lw = Math.max(1.6, 2.4 * invScale);
+  const radius = Math.min(9 * invScale, occ.width * 0.2, occ.height * 0.2);
+  const accent = occ.color || '#4f46e5';
 
   ctx.save();
   if (role === 'target-hidden') {
-    // Solid mask hiding the spot cleanly
+    // 100% opaque writing-friendly box so users can write their answer directly inside the hidden spot
     drawRoundedRectPath(ctx, occ.x, occ.y, occ.width, occ.height, radius);
-    ctx.fillStyle = occ.color || '#4f46e5';
+    ctx.fillStyle = buildOpaqueWritableMaskFill(accent, darkSurface);
     ctx.fill();
 
-    // Subtle crisp inner highlight + border
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    // Crisp colored outline around the hidden answer box
+    ctx.strokeStyle = accent;
     ctx.lineWidth = lw;
     ctx.stroke();
 
-    // Draw `?` or custom hint text centered inside the box
+    // Small corner badge (`?` or `? Hinweis`) in top-left so the interior stays clean for handwriting!
     const badgeText = occ.label?.trim() ? `? ${occ.label.trim()}` : '?';
-    const fontSize = Math.max(
-      11 * invScale,
-      Math.min(24 * invScale, occ.height * 0.52, (occ.width * 1.4) / Math.max(2, badgeText.length))
-    );
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `700 ${fontSize}px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(badgeText, occ.x + occ.width / 2, occ.y + occ.height / 2, occ.width - 8 * invScale);
+    const badgeFontSize = Math.max(10 * invScale, Math.min(13 * invScale, occ.height * 0.42));
+    ctx.font = `700 ${badgeFontSize}px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
+    const padX = 6 * invScale;
+    const pillH = Math.min(occ.height - 4 * invScale, badgeFontSize + 6 * invScale);
+    const rawW = ctx.measureText(badgeText).width + padX * 2;
+    const pillW = Math.min(occ.width - 6 * invScale, Math.max(pillH, rawW));
+
+    if (pillW > 8 * invScale && pillH > 8 * invScale) {
+      const px = occ.x + 3 * invScale;
+      const py = occ.y + 3 * invScale;
+      drawRoundedRectPath(ctx, px, py, pillW, pillH, 5 * invScale);
+      ctx.fillStyle = accent;
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(badgeText, px + padX, py + pillH / 2, pillW - padX * 1.5);
+    }
   } else if (role === 'target-revealed') {
     // Revealed spot: crystal-clear content underneath with glowing green highlight border
     drawRoundedRectPath(ctx, occ.x, occ.y, occ.width, occ.height, radius);
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.1)';
     ctx.fill();
     ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = lw * 1.15;
+    ctx.lineWidth = lw * 1.1;
     ctx.setLineDash([6 * invScale, 4 * invScale]);
     ctx.stroke();
   } else if (role === 'prompt') {
@@ -1071,13 +1105,19 @@ function drawOcclusionOverlayRect(
   } else {
     // Other unrelated occlusion hidden in "Alle verbergen" mode
     drawRoundedRectPath(ctx, occ.x, occ.y, occ.width, occ.height, radius);
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = darkSurface ? '#252b3b' : '#e2e8f0';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.strokeStyle = darkSurface ? 'rgba(148, 163, 184, 0.5)' : 'rgba(100, 116, 139, 0.55)';
     ctx.lineWidth = lw * 0.75;
     ctx.stroke();
   }
   ctx.restore();
+}
+
+export interface OcclusionStudyViewport {
+  camX: number;
+  camY: number;
+  zoom: number;
 }
 
 export interface OcclusionStudyRenderOptions {
@@ -1096,34 +1136,23 @@ export interface OcclusionStudyRenderOptions {
 }
 
 /**
- * Renders a crisp HiDPI canvas preview of an occlusion flashcard into the provided canvas context.
- * Automatically frames the occluded region (with generous surrounding context) or shows the full page.
+ * Computes the exact world-space camera (`camX`, `camY`, `zoom`) used by `renderOcclusionStudyCanvas`.
+ * Shared between rendering and direct-on-canvas stylus drawing so strokes align subpixel-accurately!
  */
-export function renderOcclusionStudyCanvas(
-  ctx: CanvasRenderingContext2D,
-  opts: OcclusionStudyRenderOptions
-) {
-  const {
-    page,
-    theme,
-    isInfinite,
-    targetIds,
-    promptIds = [],
-    revealed,
-    hideOtherOcclusions,
-    viewMode,
-    cssWidth,
-    cssHeight,
-    dpr,
-    onImageLoad,
-  } = opts;
+export function computeOcclusionStudyViewport(
+  opts: Pick<
+    OcclusionStudyRenderOptions,
+    'page' | 'isInfinite' | 'targetIds' | 'promptIds' | 'viewMode' | 'cssWidth' | 'cssHeight'
+  >,
+  measureCtx: CanvasRenderingContext2D | null = null
+): OcclusionStudyViewport {
+  const { page, isInfinite, targetIds, promptIds = [], viewMode, cssWidth, cssHeight } = opts;
 
   const targetSet = new Set(targetIds);
   const promptSet = new Set(promptIds);
   const occlusions = page.occlusions ?? [];
   const relevant = occlusions.filter((o) => targetSet.has(o.id) || promptSet.has(o.id));
 
-  // Compute world-space framing rectangle
   let minX = 0;
   let minY = 0;
   let maxX = page.width;
@@ -1155,7 +1184,6 @@ export function renderOcclusionStudyCanvas(
       minY = Math.max(0, minY);
       maxX = Math.min(page.width, maxX);
       maxY = Math.min(page.height, maxY);
-      // Ensure a comfortable minimum frame size on regular pages
       if (maxX - minX < 360) {
         const cx = (minX + maxX) / 2;
         minX = Math.max(0, cx - 180);
@@ -1168,7 +1196,7 @@ export function renderOcclusionStudyCanvas(
       }
     }
   } else if (isInfinite) {
-    const content = computePageContentBounds(page, ctx);
+    const content = computePageContentBounds(page, measureCtx);
     let bMinX = content ? content.minX : Infinity;
     let bMinY = content ? content.minY : Infinity;
     let bMaxX = content ? content.maxX : -Infinity;
@@ -1197,8 +1225,42 @@ export function renderOcclusionStudyCanvas(
   const zoom = Math.min(cssWidth / worldW, cssHeight / worldH);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
-  const camX = centerX - cssWidth / (2 * zoom);
-  const camY = centerY - cssHeight / (2 * zoom);
+  return {
+    camX: centerX - cssWidth / (2 * zoom),
+    camY: centerY - cssHeight / (2 * zoom),
+    zoom,
+  };
+}
+
+/**
+ * Renders a crisp HiDPI canvas preview of an occlusion flashcard into the provided canvas context.
+ * Automatically frames the occluded region (with generous surrounding context) or shows the full page.
+ * Returns the computed world-space viewport so interactive drawing overlays align exactly.
+ */
+export function renderOcclusionStudyCanvas(
+  ctx: CanvasRenderingContext2D,
+  opts: OcclusionStudyRenderOptions
+): OcclusionStudyViewport {
+  const {
+    page,
+    theme,
+    isInfinite,
+    targetIds,
+    promptIds = [],
+    revealed,
+    hideOtherOcclusions,
+    cssWidth,
+    cssHeight,
+    dpr,
+    onImageLoad,
+  } = opts;
+
+  const targetSet = new Set(targetIds);
+  const promptSet = new Set(promptIds);
+  const occlusions = page.occlusions ?? [];
+  const vp = computeOcclusionStudyViewport(opts, ctx);
+  const { camX, camY, zoom } = vp;
+  const darkSurface = isPaperDark(page.paperConfig, theme);
 
   ctx.save();
   ctx.clearRect(0, 0, Math.ceil(cssWidth * dpr), Math.ceil(cssHeight * dpr));
@@ -1258,12 +1320,12 @@ export function renderOcclusionStudyCanvas(
   for (const occ of occlusions) {
     if (targetSet.has(occ.id) || promptSet.has(occ.id)) continue;
     if (hideOtherOcclusions) {
-      drawOcclusionOverlayRect(ctx, occ, 'other-hidden', invScale);
+      drawOcclusionOverlayRect(ctx, occ, 'other-hidden', invScale, darkSurface);
     }
   }
   for (const occ of occlusions) {
     if (promptSet.has(occ.id)) {
-      drawOcclusionOverlayRect(ctx, occ, 'prompt', invScale);
+      drawOcclusionOverlayRect(ctx, occ, 'prompt', invScale, darkSurface);
     }
   }
   for (const occ of occlusions) {
@@ -1272,11 +1334,13 @@ export function renderOcclusionStudyCanvas(
         ctx,
         occ,
         revealed ? 'target-revealed' : 'target-hidden',
-        invScale
+        invScale,
+        darkSurface
       );
     }
   }
 
   ctx.restore();
   ctx.restore();
+  return vp;
 }

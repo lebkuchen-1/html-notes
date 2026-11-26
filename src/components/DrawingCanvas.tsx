@@ -125,6 +125,7 @@ import {
   IconMaximize,
   IconOcclusion,
   IconPages,
+  IconPen,
   IconPlus,
   IconPointer,
   IconRect,
@@ -592,6 +593,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   const [revealedOcclusionIds, setRevealedOcclusionIds] = createSignal<Set<string>>(
     new Set()
   );
+  const [occlusionPracticeDraw, setOcclusionPracticeDraw] = createSignal<boolean>(true);
+  const [occlusionPracticeClearToken, setOcclusionPracticeClearToken] =
+    createSignal<number>(0);
+  const [occlusionPracticeHasStrokes, setOcclusionPracticeHasStrokes] =
+    createSignal<boolean>(false);
 
   const toggleRevealOcclusion = (id: string) => {
     setRevealedOcclusionIds((prev) => {
@@ -651,6 +657,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     }
     setSelectedOcclusion(null);
     setRevealedOcclusionIds(new Set<string>());
+    setOcclusionPracticeHasStrokes(false);
+    setOcclusionPracticeClearToken((n) => n + 1);
   });
 
   let stageWrapperRef: HTMLDivElement | undefined;
@@ -1102,7 +1110,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (!el) return false;
       return Boolean(
         el.closest(
-          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .canvas-ruler, .paper-popover'
+          'button, input, select, textarea, label, a, summary, [role="button"], [role="tab"], .canvas-text-overlay, .canvas-image-selection, .canvas-lasso-selection, .canvas-occlusion-box, .canvas-occlusion-bar, .occ-practice-peek-btn, .canvas-ruler, .paper-popover'
         )
       );
     };
@@ -2830,11 +2838,41 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               <button
                 type="button"
                 class="tool-pill"
+                classList={{ 'is-active': occlusionPracticeDraw() }}
+                onClick={() => setOcclusionPracticeDraw((v) => !v)}
+                title={
+                  occlusionPracticeDraw()
+                    ? 'Übungs-Stift aktiv: Schreibe Antworten direkt über die verdeckten Stellen (verändert deine Originalnotiz nicht)'
+                    : 'Übungs-Stift aktivieren, um Antworten direkt im Canvas einzuzeichnen'
+                }
+              >
+                <IconPen size={13} />
+                <span class="hide-compact">Übungs-Stift</span>
+              </button>
+
+              <Show when={occlusionPracticeHasStrokes()}>
+                <button
+                  type="button"
+                  class="tool-btn is-danger-hover"
+                  onClick={() => {
+                    setOcclusionPracticeClearToken((n) => n + 1);
+                    setOcclusionPracticeHasStrokes(false);
+                  }}
+                  title="Temporäre Übungs-Zeichnung leeren"
+                  aria-label="Übungs-Zeichnung leeren"
+                >
+                  <IconTrash size={14} />
+                </button>
+              </Show>
+
+              <button
+                type="button"
+                class="tool-pill"
                 onClick={toggleRevealAllOcclusions}
                 title={
                   allOcclusionsRevealed()
                     ? 'Alle Stellen wieder verdecken'
-                    : 'Alle Stellen aufdecken'
+                    : 'Alle Stellen aufdecken & vergleichen'
                 }
               >
                 <Show when={allOcclusionsRevealed()} fallback={<IconEye size={13} />}>
@@ -3788,8 +3826,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 occlusionDisplayMode={occlusionDisplayMode()}
                 selectedOcclusion={selectedOcclusion()}
                 revealedOcclusionIds={revealedOcclusionIds()}
+                occlusionPracticeActive={occlusionPracticeDraw()}
+                occlusionPracticeClearToken={occlusionPracticeClearToken()}
                 onSetSelectedOcclusion={setSelectedOcclusion}
                 onToggleRevealOcclusion={toggleRevealOcclusion}
+                onOcclusionPracticeHasStrokesChange={setOcclusionPracticeHasStrokes}
                 onPointerTypeChange={handlePointerTypeDetected}
                 onZoomChange={setInfiniteZoom}
                 onSetEditingText={setEditingText}
@@ -3889,8 +3930,11 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   occlusionDisplayMode={occlusionDisplayMode()}
                   selectedOcclusion={selectedOcclusion()}
                   revealedOcclusionIds={revealedOcclusionIds()}
+                  occlusionPracticeActive={occlusionPracticeDraw()}
+                  occlusionPracticeClearToken={occlusionPracticeClearToken()}
                   onSetSelectedOcclusion={setSelectedOcclusion}
                   onToggleRevealOcclusion={toggleRevealOcclusion}
+                  onOcclusionPracticeHasStrokesChange={setOcclusionPracticeHasStrokes}
                   onPointerTypeChange={handlePointerTypeDetected}
                   onPenPointerDown={() => penContactNotifier?.()}
                   onSetEditingText={setEditingText}
