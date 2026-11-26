@@ -668,3 +668,11 @@ export const IconUnlink = (p: IconProps) => (
     <line x1="19" y1="16" x2="22" y2="16" />
   </svg>
 );
+
+export const IconMoreHorizontal = (p: IconProps) => (
+  <svg {...baseProps(p.size)} class={p.class}>
+    <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" />
+  </svg>
+);

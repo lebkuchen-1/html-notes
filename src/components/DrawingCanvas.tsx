@@ -96,6 +96,7 @@ import {
 import { CanvasRulerOverlay } from './CanvasRulerOverlay';
 import { ColorPickerPopover } from './ColorPickerPopover';
 import { CanvasExportDialog } from './CanvasExportDialog';
+import type { CanvasQuickBridge } from '../utils/canvasBridge';
 import {
   clampRulerCenter,
   computeRulerGeometry,
@@ -115,29 +116,23 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconClipboardPaste,
-  IconCrosshair,
-  IconDownload,
   IconEllipse,
   IconEraser,
   IconEye,
   IconEyeOff,
   IconFileUp,
-  IconFlashcards,
   IconFountainPen,
   IconGrid,
   IconHighlighter,
   IconImage,
-  IconInfinity,
   IconLasso,
   IconLine,
-  IconMaximize,
   IconOcclusion,
-  IconPages,
   IconPen,
+  IconPlay,
   IconPlus,
   IconPointer,
   IconRect,
-  IconRedo,
   IconRotateCcw,
   IconRuler,
   IconScribble,
@@ -145,7 +140,6 @@ import {
   IconSwap,
   IconText,
   IconTrash,
-  IconUndo,
   IconX,
   IconZoomIn,
   IconZoomOut,
@@ -154,6 +148,7 @@ import { PageOverview } from './PageOverview';
 
 interface DrawingCanvasProps {
   store: NotesStore;
+  canvasBridge: CanvasQuickBridge;
 }
 
 const DEFAULT_PEN_COLORS = [
@@ -209,11 +204,6 @@ const PATTERN_OPTIONS: { value: PaperPattern; label: string }[] = [
   { value: 'dots', label: 'Punkte' },
 ];
 
-const LEADING_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
-  { id: 'select', label: 'Auswählen & Verschieben' },
-  { id: 'lasso', label: 'Lasso (Einkreisen, Verschieben & Skalieren)' },
-];
-
 type ShapeTool = 'line' | 'arrow' | 'rect' | 'ellipse';
 
 const SHAPE_TOOL_ITEMS: { id: ShapeTool; label: string; description: string }[] = [
@@ -231,11 +221,9 @@ function isShapeTool(t: DrawingTool): t is ShapeTool {
   return t === 'line' || t === 'arrow' || t === 'rect' || t === 'ellipse';
 }
 
-const MIDDLE_TOOL_ITEMS: { id: DrawingTool; label: string }[] = [
-  { id: 'highlighter', label: 'Textmarker' },
-  { id: 'scribble', label: 'Handschrift → Text (Kritzeln)' },
-  { id: 'text', label: 'Text auf Canvas' },
-];
+function isSecondaryTool(t: DrawingTool): boolean {
+  return t === 'select' || t === 'scribble' || t === 'occlusion';
+}
 
 function PenPreviewCanvas(props: {
   penStyle: PenStyle;
@@ -566,6 +554,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
   const [penMenuOpen, setPenMenuOpen] = createSignal<boolean>(false);
   const [shapeMenuOpen, setShapeMenuOpen] = createSignal<boolean>(false);
+  const [moreToolsMenuOpen, setMoreToolsMenuOpen] = createSignal<boolean>(false);
   const [activeShapeTool, setActiveShapeTool] = createSignal<ShapeTool>(
     loadStoredShapeTool()
   );
@@ -915,6 +904,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
   let infiniteHandle: InfiniteCanvasHandle | null = null;
   let penMenuRef: HTMLDivElement | undefined;
   let shapeMenuRef: HTMLDivElement | undefined;
+  let moreToolsMenuRef: HTMLDivElement | undefined;
   let paperMenuRef: HTMLDivElement | undefined;
   let sizeMenuRef: HTMLDivElement | undefined;
   let imageFileInputRef: HTMLInputElement | undefined;
@@ -1219,6 +1209,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         setPaperMenuOpen(false);
         setPenMenuOpen(false);
         setShapeMenuOpen(false);
+        setMoreToolsMenuOpen(false);
         setRulerActiveEdge(null);
       }
       prevNoteId = id;
@@ -2038,6 +2029,9 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       if (shapeMenuOpen() && shapeMenuRef && !shapeMenuRef.contains(e.target as Node)) {
         setShapeMenuOpen(false);
       }
+      if (moreToolsMenuOpen() && moreToolsMenuRef && !moreToolsMenuRef.contains(e.target as Node)) {
+        setMoreToolsMenuOpen(false);
+      }
       if (paperMenuOpen() && paperMenuRef && !paperMenuRef.contains(e.target as Node)) {
         setPaperMenuOpen(false);
       }
@@ -2056,6 +2050,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         }
         if (penMenuOpen()) setPenMenuOpen(false);
         if (shapeMenuOpen()) setShapeMenuOpen(false);
+        if (moreToolsMenuOpen()) setMoreToolsMenuOpen(false);
         if (paperMenuOpen()) setPaperMenuOpen(false);
         if (sizeMenuOpen()) setSizeMenuOpen(false);
         if (overviewOpen()) setOverviewOpen(false);
@@ -2313,6 +2308,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     const currentlyVisible = rulerState().visible;
     setPenMenuOpen(false);
     setShapeMenuOpen(false);
+    setMoreToolsMenuOpen(false);
     setPaperMenuOpen(false);
     setSizeMenuOpen(false);
 
@@ -2382,6 +2378,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     const alreadyActive = tool() === 'pen' && penStyle() === style;
     if (alreadyActive) {
       setShapeMenuOpen(false);
+      setMoreToolsMenuOpen(false);
       setPaperMenuOpen(false);
       setSizeMenuOpen(false);
       setPenMenuOpen((v) => !v);
@@ -2409,6 +2406,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
     if (!note() || !page()) return;
     setPenMenuOpen(false);
     setShapeMenuOpen(false);
+    setMoreToolsMenuOpen(false);
     setPaperMenuOpen(false);
     setSizeMenuOpen(false);
 
@@ -2498,6 +2496,88 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
       (page()?.images.length ?? 0) > 0
   );
 
+  // Sync compact state & action handlers to NoteHeader (Row 1) via canvasBridge
+  createEffect(() => props.canvasBridge.setOverviewOpenState(overviewOpen()));
+  createEffect(() => props.canvasBridge.setOcclusionDisplayModeState(occlusionDisplayMode()));
+  createEffect(() => props.canvasBridge.setTotalNoteOcclusionsState(totalNoteOcclusions()));
+  createEffect(() => props.canvasBridge.setHasCanvasContentState(hasCanvasContent()));
+  createEffect(() => props.canvasBridge.setResolvedPaperBgState(resolvedPaperBg()));
+
+  onMount(() => {
+    const unregister = props.canvasBridge.registerHandlers({
+      toggleOverview: () => {
+        if (editingText()) commitEditingText();
+        setPenMenuOpen(false);
+        setShapeMenuOpen(false);
+        setMoreToolsMenuOpen(false);
+        setSizeMenuOpen(false);
+        setPaperMenuOpen(false);
+        setOverviewAutoCreator(false);
+        setOverviewOpen((v) => !v);
+      },
+      goToAdjacentPage: (delta) => goToAdjacentPage(delta),
+      appendPage: () => handleAppendPage(),
+      openSizeMenu: () => {
+        setPenMenuOpen(false);
+        setShapeMenuOpen(false);
+        setMoreToolsMenuOpen(false);
+        setPaperMenuOpen(false);
+        setSizeMenuOpen(true);
+      },
+      openPaperMenu: () => {
+        setPenMenuOpen(false);
+        setShapeMenuOpen(false);
+        setMoreToolsMenuOpen(false);
+        setSizeMenuOpen(false);
+        setPaperMenuOpen(true);
+      },
+      openExportDialog: () => openExportDialog('viewport'),
+      triggerPdfImport: () => pageImportInputRef?.click(),
+      clearPage: () => {
+        setEditingText(null);
+        setSelectedImage(null);
+        setLassoSelection(null);
+        props.store.clearCanvas();
+      },
+      undo: () => {
+        if (editingText()) setEditingText(null);
+        if (lassoSelection()) setLassoSelection(null);
+        props.store.undoCanvas();
+      },
+      redo: () => {
+        if (editingText()) setEditingText(null);
+        if (lassoSelection()) setLassoSelection(null);
+        props.store.redoCanvas();
+      },
+      setCanvasMode: (mode) => {
+        if (mode === 'pages' && isInfiniteMode()) {
+          if (editingText()) commitEditingText();
+          setSelectedImage(null);
+          setLassoSelection(null);
+          props.store.updateNoteSettings({ canvasMode: 'pages' });
+          props.store.showToast('Seiten-Modus aktiv');
+        } else if (mode === 'infinite' && !isInfiniteMode()) {
+          if (editingText()) commitEditingText();
+          setSelectedImage(null);
+          setLassoSelection(null);
+          setOverviewOpen(false);
+          setSizeMenuOpen(false);
+          props.store.updateNoteSettings({ canvasMode: 'infinite' });
+          props.store.showToast('Unendlicher Canvas (wie OneNote) aktiv');
+        }
+      },
+      fitInfiniteToContent: () => infiniteHandle?.fitToContent(),
+      resetInfiniteView: () => infiniteHandle?.resetView(),
+      startCanvasStudy: () => startCanvasStudySession(),
+      setOcclusionDisplayMode: (mode) => {
+        if (mode === 'hidden') setSelectedOcclusion(null);
+        setOcclusionDisplayMode(mode);
+      },
+      selectOcclusionTool: () => selectTool('occlusion'),
+    });
+    onCleanup(unregister);
+  });
+
   return (
     <section
       class="pane canvas-pane"
@@ -2529,7 +2609,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         void importImagesToPage(currPageId, files);
       }}
     >
-      {/* Drawing Toolbar */}
+      {/* Single-Line Drawing Toolbar (Row 2) */}
       <div
         class="pane-toolbar canvas-toolbar"
         onPointerDown={(e) => {
@@ -2543,66 +2623,37 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
           }
         }}
       >
-        <div class="toolbar-group">
-          <For each={LEADING_TOOL_ITEMS}>
-            {(item) => (
+        <div class="toolbar-group primary-tools-group">
+          {/* Compact Single Pen Split-Button (Active Pen Style + Popover for Ballpoint/Fountain/Brush & Tuning) */}
+          <div class="paper-menu-anchor pen-menu-anchor" ref={penMenuRef}>
+            <div
+              class="pen-style-group is-compact-pen"
+              classList={{ 'is-pen-active': tool() === 'pen' }}
+              role="group"
+              aria-label="Stift"
+            >
               <button
                 type="button"
-                class="tool-btn"
-                classList={{ 'is-active': tool() === item.id }}
+                class="tool-btn pen-style-btn"
+                classList={{ 'is-active': tool() === 'pen' }}
                 onPointerDown={(e) => {
                   if (tool() === 'scribble' || editingText()) {
                     e.preventDefault();
                   }
                 }}
-                onClick={() => selectTool(item.id)}
-                title={item.label}
-                aria-label={item.label}
+                onClick={() => selectPenStyle(penStyle())}
+                title={
+                  tool() === 'pen'
+                    ? `${penStyleConfig().label} aktiv — nochmal tippen für Stiftarten & Optionen`
+                    : `${penStyleConfig().label} auswählen`
+                }
+                aria-label={penStyleConfig().label}
+                aria-pressed={tool() === 'pen'}
               >
-                {item.id === 'select' && <IconPointer size={15} />}
-                {item.id === 'lasso' && <IconLasso size={15} />}
+                {penStyle() === 'ballpoint' && <IconBallpointPen size={15} />}
+                {penStyle() === 'fountain' && <IconFountainPen size={15} />}
+                {penStyle() === 'brush' && <IconBrushPen size={15} />}
               </button>
-            )}
-          </For>
-
-          {/* Dedicated 3-Pen Selector: Kugelschreiber, Füllerfederhalter & Pinselstift + Options Popover */}
-          <div class="paper-menu-anchor pen-menu-anchor" ref={penMenuRef}>
-            <div
-              class="pen-style-group"
-              classList={{ 'is-pen-active': tool() === 'pen' }}
-              role="group"
-              aria-label="Stiftarten"
-            >
-              <For each={PEN_STYLE_ORDER}>
-                {(style) => {
-                  const cfg = PEN_STYLE_CONFIGS[style];
-                  const isActive = () => tool() === 'pen' && penStyle() === style;
-                  return (
-                    <button
-                      type="button"
-                      class="tool-btn pen-style-btn"
-                      classList={{ 'is-active': isActive() }}
-                      onPointerDown={(e) => {
-                        if (tool() === 'scribble' || editingText()) {
-                          e.preventDefault();
-                        }
-                      }}
-                      onClick={() => selectPenStyle(style)}
-                      title={
-                        isActive()
-                          ? `${cfg.label} aktiv — nochmal tippen für Stift-Optionen`
-                          : `${cfg.label}: ${cfg.description}`
-                      }
-                      aria-label={cfg.label}
-                      aria-pressed={isActive()}
-                    >
-                      {style === 'ballpoint' && <IconBallpointPen size={15} />}
-                      {style === 'fountain' && <IconFountainPen size={15} />}
-                      {style === 'brush' && <IconBrushPen size={15} />}
-                    </button>
-                  );
-                }}
-              </For>
               <button
                 type="button"
                 class="pen-options-trigger"
@@ -2614,12 +2665,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 }}
                 onClick={() => {
                   setShapeMenuOpen(false);
+                  setMoreToolsMenuOpen(false);
                   setPaperMenuOpen(false);
                   setSizeMenuOpen(false);
                   if (tool() !== 'pen') selectTool('pen');
                   setPenMenuOpen((v) => !v);
                 }}
-                title="Stift-Optionen & Vorschau (Kugelschreiber, Füller, Pinsel)"
+                title="Stiftart wechseln & Spitze konfigurieren (Kugelschreiber, Füller, Pinsel)"
                 aria-label="Stift-Optionen öffnen"
                 aria-expanded={penMenuOpen()}
               >
@@ -2784,37 +2836,50 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </Show>
           </div>
 
-          <For each={MIDDLE_TOOL_ITEMS}>
-            {(item) => (
-              <button
-                type="button"
-                class={item.id === 'scribble' ? 'tool-pill scribble-tool-btn' : 'tool-btn'}
-                classList={{ 'is-active': tool() === item.id }}
-                onPointerDown={(e) => {
-                  // Prevent iPadOS Safari Scribble/focus-shift from swallowing the tap on toolbar buttons
-                  if (tool() === 'scribble' || editingText()) {
-                    e.preventDefault();
-                  }
-                }}
-                onClick={() => selectTool(item.id)}
-                title={
-                  item.id === 'scribble' && tool() === 'scribble'
-                    ? 'Handschrift → Text (Kritzeln) beenden'
-                    : item.label
-                }
-                aria-label={item.label}
-              >
-                {item.id === 'scribble' && (
-                  <>
-                    <IconScribble size={15} />
-                    <span class="hide-compact">H→Text</span>
-                  </>
-                )}
-                {item.id === 'highlighter' && <IconHighlighter size={15} />}
-                {item.id === 'text' && <IconText size={15} />}
-              </button>
-            )}
-          </For>
+          {/* Highlighter */}
+          <button
+            type="button"
+            class="tool-btn"
+            classList={{ 'is-active': tool() === 'highlighter' }}
+            onPointerDown={(e) => {
+              if (tool() === 'scribble' || editingText()) e.preventDefault();
+            }}
+            onClick={() => selectTool('highlighter')}
+            title="Textmarker"
+            aria-label="Textmarker"
+          >
+            <IconHighlighter size={15} />
+          </button>
+
+          {/* Eraser */}
+          <button
+            type="button"
+            class="tool-btn"
+            classList={{ 'is-active': tool() === 'eraser' }}
+            onPointerDown={(e) => {
+              if (tool() === 'scribble' || editingText()) e.preventDefault();
+            }}
+            onClick={() => selectTool('eraser')}
+            title="Radierer"
+            aria-label="Radierer"
+          >
+            <IconEraser size={15} />
+          </button>
+
+          {/* Lasso */}
+          <button
+            type="button"
+            class="tool-btn"
+            classList={{ 'is-active': tool() === 'lasso' }}
+            onPointerDown={(e) => {
+              if (tool() === 'scribble' || editingText()) e.preventDefault();
+            }}
+            onClick={() => selectTool('lasso')}
+            title="Lasso (Einkreisen, Verschieben & Skalieren)"
+            aria-label="Lasso"
+          >
+            <IconLasso size={15} />
+          </button>
 
           {/* Grouped Geometric Shapes Split-Button + Popover (Linie, Pfeil, Rechteck, Ellipse) */}
           <div class="paper-menu-anchor shape-menu-anchor" ref={shapeMenuRef}>
@@ -2836,6 +2901,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 onClick={() => {
                   if (isShapeTool(tool())) {
                     setPenMenuOpen(false);
+                    setMoreToolsMenuOpen(false);
                     setPaperMenuOpen(false);
                     setSizeMenuOpen(false);
                     setShapeMenuOpen((v) => !v);
@@ -2868,6 +2934,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                 }}
                 onClick={() => {
                   setPenMenuOpen(false);
+                  setMoreToolsMenuOpen(false);
                   setPaperMenuOpen(false);
                   setSizeMenuOpen(false);
                   setShapeMenuOpen((v) => !v);
@@ -2944,72 +3011,180 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             </Show>
           </div>
 
-          {/* Canvas Occlusion Flashcard Tool (Stellen verbergen & Beidseitig A↔B) */}
-          <button
-            type="button"
-            class="tool-btn occlusion-tool-btn"
-            classList={{ 'is-active': tool() === 'occlusion' }}
-            onPointerDown={(e) => {
-              if (tool() === 'scribble' || editingText()) {
-                e.preventDefault();
-              }
-            }}
-            onClick={() => selectTool('occlusion')}
-            title="Karteikarte: Einzelne Stellen verbergen (optional beidseitig A ↔ B)"
-            aria-label="Stellen verbergen (Karteikarte)"
-            aria-pressed={tool() === 'occlusion'}
-          >
-            <IconOcclusion size={15} />
-          </button>
-
-          {/* Interactive Drawing Ruler Toggle */}
-          <button
-            type="button"
-            class="tool-btn ruler-toggle-btn"
-            classList={{ 'is-active': rulerState().visible }}
-            onPointerDown={(e) => {
-              if (tool() === 'scribble' || editingText()) {
-                e.preventDefault();
-              }
-            }}
-            onClick={() => toggleRuler()}
-            title={
-              rulerState().visible
-                ? 'Lineal ausblenden (R)'
-                : 'Lineal einblenden — gerade Linien mit Stift & Textmarker zeichnen (R)'
-            }
-            aria-label={rulerState().visible ? 'Lineal ausblenden' : 'Lineal einblenden'}
-            aria-pressed={rulerState().visible}
-          >
-            <IconRuler size={15} />
-          </button>
-
-          {/* Eraser */}
+          {/* Text Tool */}
           <button
             type="button"
             class="tool-btn"
-            classList={{ 'is-active': tool() === 'eraser' }}
+            classList={{ 'is-active': tool() === 'text' }}
             onPointerDown={(e) => {
-              if (tool() === 'scribble' || editingText()) {
-                e.preventDefault();
-              }
+              if (tool() === 'scribble' || editingText()) e.preventDefault();
             }}
-            onClick={() => selectTool('eraser')}
-            title="Radierer"
-            aria-label="Radierer"
+            onClick={() => selectTool('text')}
+            title="Text auf Canvas"
+            aria-label="Text auf Canvas"
           >
-            <IconEraser size={15} />
+            <IconText size={15} />
           </button>
 
-          <button
-            type="button"
-            class="tool-btn"
-            onClick={() => imageFileInputRef?.click()}
-            title="Bild auf aktive Seite importieren (oder per Drag & Drop / Strg+V)"
-            aria-label="Bild importieren"
-          >
-            <IconImage size={15} />
-          </button>
+          {/* Secondary Tools & Insert Quick-Menu (+ / Active Secondary Tool) */}
+          <div class="paper-menu-anchor more-tools-anchor" ref={moreToolsMenuRef}>
+            <button
+              type="button"
+              class="tool-btn more-tools-trigger"
+              classList={{
+                'is-active': isSecondaryTool(tool()),
+                'is-open': moreToolsMenuOpen(),
+                'has-ruler-active': rulerState().visible,
+              }}
+              onPointerDown={(e) => {
+                if (tool() === 'scribble' || editingText()) e.preventDefault();
+              }}
+              onClick={() => {
+                setPenMenuOpen(false);
+                setShapeMenuOpen(false);
+                setPaperMenuOpen(false);
+                setSizeMenuOpen(false);
+                setMoreToolsMenuOpen((v) => !v);
+              }}
+              title="Weitere Werkzeuge & Einfügen (Auswählen, Kritzeln, Lineal, Verdecken, Bild)"
+              aria-label="Weitere Werkzeuge & Einfügen"
+              aria-expanded={moreToolsMenuOpen()}
+            >
+              {tool() === 'select' ? (
+                <IconPointer size={15} />
+              ) : tool() === 'scribble' ? (
+                <IconScribble size={15} />
+              ) : tool() === 'occlusion' ? (
+                <IconOcclusion size={15} />
+              ) : (
+                <IconPlus size={15} />
+              )}
+              <Show when={rulerState().visible}>
+                <span class="tool-active-dot" aria-hidden="true" />
+              </Show>
+            </button>
+
+            <Show when={moreToolsMenuOpen()}>
+              <div
+                class="paper-popover more-tools-popover"
+                role="dialog"
+                aria-label="Weitere Werkzeuge & Einfügen"
+              >
+                <div class="paper-popover-header">
+                  <span>Werkzeuge &amp; Einfügen</span>
+                  <button
+                    type="button"
+                    class="icon-btn-xs"
+                    onClick={() => setMoreToolsMenuOpen(false)}
+                    aria-label="Schließen"
+                  >
+                    <IconX size={14} />
+                  </button>
+                </div>
+
+                <div class="mt-list">
+                  <button
+                    type="button"
+                    class="mt-item"
+                    classList={{ 'is-active': tool() === 'select' }}
+                    onClick={() => {
+                      setMoreToolsMenuOpen(false);
+                      selectTool('select');
+                    }}
+                  >
+                    <IconPointer size={15} />
+                    <span class="mt-item-label">Auswählen &amp; Bilder bewegen</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    class="mt-item"
+                    classList={{ 'is-active': tool() === 'scribble' }}
+                    onClick={() => {
+                      setMoreToolsMenuOpen(false);
+                      selectTool('scribble');
+                    }}
+                  >
+                    <IconScribble size={15} />
+                    <span class="mt-item-label">Handschrift → Text (Kritzeln)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    class="mt-item"
+                    classList={{ 'is-active': rulerState().visible }}
+                    onClick={() => {
+                      setMoreToolsMenuOpen(false);
+                      toggleRuler();
+                    }}
+                  >
+                    <IconRuler size={15} />
+                    <span class="mt-item-label">Lineal</span>
+                    <span class="mt-item-badge">
+                      {rulerState().visible ? 'An' : 'R'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    class="mt-item"
+                    classList={{ 'is-active': tool() === 'occlusion' }}
+                    onClick={() => {
+                      setMoreToolsMenuOpen(false);
+                      selectTool('occlusion');
+                    }}
+                  >
+                    <IconOcclusion size={15} />
+                    <span class="mt-item-label">Stellen verbergen (Karteikarte)</span>
+                  </button>
+
+                  <Show when={totalNoteOcclusions() > 0 && occlusionDisplayMode() !== 'study'}>
+                    <button
+                      type="button"
+                      class="mt-item is-accent-row"
+                      onClick={() => {
+                        setMoreToolsMenuOpen(false);
+                        startCanvasStudySession();
+                      }}
+                    >
+                      <IconPlay size={14} />
+                      <span class="mt-item-label">Im Canvas üben</span>
+                      <span class="mt-item-badge">{totalNoteOcclusions()}</span>
+                    </button>
+                  </Show>
+
+                  <div class="qm-divider" />
+
+                  <button
+                    type="button"
+                    class="mt-item"
+                    onClick={() => {
+                      setMoreToolsMenuOpen(false);
+                      imageFileInputRef?.click();
+                    }}
+                  >
+                    <IconImage size={15} />
+                    <span class="mt-item-label">Bild auf Seite einfügen</span>
+                  </button>
+
+                  <Show when={!isInfiniteMode()}>
+                    <button
+                      type="button"
+                      class="mt-item"
+                      onClick={() => {
+                        setMoreToolsMenuOpen(false);
+                        pageImportInputRef?.click();
+                      }}
+                    >
+                      <IconFileUp size={15} />
+                      <span class="mt-item-label">PDF / Bild als Seite</span>
+                    </button>
+                  </Show>
+                </div>
+              </div>
+            </Show>
+          </div>
+
           <input
             ref={imageFileInputRef}
             type="file"
@@ -3025,10 +3200,23 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               e.currentTarget.value = '';
             }}
           />
+          <input
+            ref={pageImportInputRef}
+            type="file"
+            accept="application/pdf,.pdf,image/*"
+            multiple
+            class="sr-only"
+            onChange={(e) => {
+              const files = Array.from(e.currentTarget.files ?? []);
+              if (files.length > 0) void handleImportFilesAsPages(files);
+              e.currentTarget.value = '';
+            }}
+          />
         </div>
 
         <div class="toolbar-divider" />
 
+        {/* Contextual Controls (ONLY shown when Lasso clipboard, Scribble, or Occlusion tool is active) */}
         <Show when={tool() === 'lasso' && getLassoClipboard()}>
           <div class="toolbar-group">
             <button
@@ -3038,63 +3226,50 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               title="Kopierte Lasso-Auswahl auf dieser Seite einfügen (Strg+V)"
             >
               <IconClipboardPaste size={14} />
-              <span class="hide-compact">Einfügen</span>
+              <span>Einfügen</span>
             </button>
           </div>
           <div class="toolbar-divider" />
         </Show>
 
-        <Show when={tool() === 'occlusion' || totalNoteOcclusions() > 0}>
-          <div class="toolbar-group occlusion-controls-group">
-            <div class="occ-mode-switch" role="group" aria-label="Verdeckungs-Ansicht">
-              <button
-                type="button"
-                class="occ-mode-btn"
-                classList={{ 'is-active': occlusionDisplayMode() === 'edit' }}
-                onClick={() => setOcclusionDisplayMode('edit')}
-                title="Verdeckte Stellen transparent zum Bearbeiten anzeigen"
-              >
-                Bearbeiten
-              </button>
-              <button
-                type="button"
-                class="occ-mode-btn"
-                classList={{ 'is-active': occlusionDisplayMode() === 'study' }}
-                onClick={() => startCanvasStudySession()}
-                title="Direkt im Canvas üben: Stellen verdecken, Antworten einzeichnen & vergleichen"
-              >
-                Im Canvas üben
-              </button>
-              <button
-                type="button"
-                class="occ-mode-btn"
-                classList={{ 'is-active': occlusionDisplayMode() === 'hidden' }}
-                onClick={() => {
-                  setSelectedOcclusion(null);
-                  setOcclusionDisplayMode('hidden');
-                }}
-                title="Verdeckungs-Boxen vorübergehend ausblenden"
-              >
-                <IconEyeOff size={12} />
-              </button>
-            </div>
+        <Show when={tool() === 'scribble'}>
+          <div class="toolbar-group">
+            <button
+              type="button"
+              class="tool-pill is-active"
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => exitScribbleMode()}
+              title="Handschrift → Text beenden"
+            >
+              <IconCheck size={13} />
+              <span>Kritzeln fertig</span>
+            </button>
+          </div>
+          <div class="toolbar-divider" />
+        </Show>
 
-            <Show when={totalNoteOcclusions() > 0 && occlusionDisplayMode() !== 'study'}>
+        <Show when={tool() === 'occlusion'}>
+          <div class="toolbar-group occlusion-controls-group">
+            <Show when={totalNoteOcclusions() > 0}>
               <button
                 type="button"
-                class="tool-pill is-flashcard-pill"
-                onClick={() => {
-                  const nid = note()?.id;
-                  if (nid) {
-                    props.store.openFlashcards({ type: 'note', noteId: nid }, false);
-                  }
-                }}
-                title="Karteikarten-Übersicht & Spaced-Repetition-Stapel öffnen"
+                class="tool-pill is-accent-pill"
+                onClick={() => startCanvasStudySession()}
+                title="Direkt im Canvas üben"
               >
-                <IconFlashcards size={13} />
-                <span class="occ-pill-count">{totalNoteOcclusions()}</span>
+                <IconPlay size={12} />
+                <span>Im Canvas üben ({totalNoteOcclusions()})</span>
               </button>
             </Show>
+            <button
+              type="button"
+              class="tool-pill"
+              onClick={() => selectTool('pen')}
+              title="Verdecken-Werkzeug beenden und zurück zum Stift"
+            >
+              <IconCheck size={13} />
+              <span>Fertig</span>
+            </button>
           </div>
           <div class="toolbar-divider" />
         </Show>
@@ -3155,6 +3330,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               onOpen={() => {
                 setPenMenuOpen(false);
                 setShapeMenuOpen(false);
+                setMoreToolsMenuOpen(false);
                 setPaperMenuOpen(false);
                 setSizeMenuOpen(false);
               }}
@@ -3200,6 +3376,13 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             <input
               type="range"
               class="width-slider"
+              classList={{
+                'has-dot-presets':
+                  tool() !== 'highlighter' &&
+                  tool() !== 'eraser' &&
+                  tool() !== 'text' &&
+                  tool() !== 'scribble',
+              }}
               min={
                 tool() === 'highlighter'
                   ? 12
@@ -3235,33 +3418,39 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
               }
             />
           </div>
-          <div class="toolbar-divider" />
         </Show>
 
-        {/* Configurable Paper / Background Popover */}
-        <div class="toolbar-group paper-menu-anchor" ref={paperMenuRef}>
+        <div class="toolbar-spacer" />
+
+        {/* Right Side: Compact Paper & Stylus-Only Toggles */}
+        <div class="toolbar-group toolbar-right-group paper-menu-anchor" ref={paperMenuRef}>
           <button
             type="button"
-            class="tool-pill paper-trigger-btn"
+            class="tool-pill paper-trigger-btn is-compact-pill"
             classList={{ 'is-active': paperMenuOpen() }}
             onClick={() => {
               setPenMenuOpen(false);
               setShapeMenuOpen(false);
+              setMoreToolsMenuOpen(false);
               setSizeMenuOpen(false);
               setPaperMenuOpen((v) => !v);
             }}
-            title="Hintergrund der aktiven Seite konfigurieren (Farbe, Zeilen, Kästchen)"
+            title="Papier & Hintergrund der aktiven Seite (Farbe, Zeilen, Kästchen)"
+            aria-label="Papier & Hintergrund konfigurieren"
           >
             <span
               class="paper-trigger-swatch"
               style={{ background: resolvedPaperBg() }}
             />
             <IconGrid size={14} />
-            <span class="hide-compact">Hintergrund</span>
           </button>
 
           <Show when={paperMenuOpen()}>
-            <div class="paper-popover" role="dialog" aria-label="Hintergrund konfigurieren">
+            <div
+              class="paper-popover is-align-right"
+              role="dialog"
+              aria-label="Hintergrund konfigurieren"
+            >
               <div class="paper-popover-header">
                 <span>Hintergrund ({page()?.title})</span>
                 <button
@@ -3540,8 +3729,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
 
           <button
             type="button"
-            class="tool-pill"
-            classList={{ 'is-active': stylusOnly() }}
+            class="tool-btn stylus-only-btn"
+            classList={{ 'is-stylus-active': stylusOnly() }}
             onClick={() => {
               const next = !stylusOnly();
               setStylusOnlyPersisted(next);
@@ -3551,423 +3740,139 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                   : 'Touch-Zeichnen aktiv (1 Finger zeichnet · 2 Finger zoomen)'
               );
             }}
-            title="Nur-Stift-Modus: Stift schreibt, 1 Finger scrollt, 2 Finger zoomen (Handballen blockiert)"
-          >
-            <IconStylus size={14} />
-            <span class="hide-compact">Nur Stift</span>
-          </button>
-        </div>
-
-        <div class="toolbar-spacer" />
-
-        {/* History, Clear, Export */}
-        <div class="toolbar-group">
-          <button
-            type="button"
-            class="tool-btn"
-            disabled={!props.store.canUndo()}
-            onClick={() => {
-              if (editingText()) setEditingText(null);
-              if (lassoSelection()) setLassoSelection(null);
-              props.store.undoCanvas();
-            }}
-            title="Rückgängig auf aktiver Seite (Strg+Z)"
-            aria-label="Rückgängig"
-          >
-            <IconUndo size={15} />
-          </button>
-          <button
-            type="button"
-            class="tool-btn"
-            disabled={!props.store.canRedo()}
-            onClick={() => {
-              if (editingText()) setEditingText(null);
-              if (lassoSelection()) setLassoSelection(null);
-              props.store.redoCanvas();
-            }}
-            title="Wiederholen auf aktiver Seite (Strg+Umschalt+Z)"
-            aria-label="Wiederholen"
-          >
-            <IconRedo size={15} />
-          </button>
-          <button
-            type="button"
-            class="tool-btn is-danger-hover"
-            disabled={!hasCanvasContent()}
-            onClick={() => {
-              setEditingText(null);
-              setSelectedImage(null);
-              setLassoSelection(null);
-              props.store.clearCanvas();
-            }}
-            title="Aktuelle Seite leeren"
-            aria-label="Aktuelle Seite leeren"
-          >
-            <IconTrash size={15} />
-          </button>
-          <button
-            type="button"
-            class="tool-btn"
-            classList={{ 'is-active': exportDialogOpen() || isPickingExportRegion() }}
-            onClick={() => openExportDialog('viewport')}
             title={
-              isInfiniteMode()
-                ? 'Unendlichen Canvas exportieren (Bildschirm, Inhalt, Bereich, PDF…)'
-                : 'Seiten exportieren (PDF, PNG, JPEG, einzelne oder alle Seiten…)'
+              stylusOnly()
+                ? 'Nur-Stift-Modus aktiv (Stift schreibt, 1 Finger scrollt)'
+                : 'Touch-Zeichnen aktiv (tippen für Nur-Stift-Modus)'
             }
-            aria-label="Exportieren"
+            aria-label="Nur-Stift-Modus umschalten"
+            aria-pressed={stylusOnly()}
           >
-            <IconDownload size={15} />
+            <IconStylus size={15} />
           </button>
         </div>
       </div>
 
-      {/* Page & Infinite Canvas Mode Controls Bar */}
-      <div class="page-strip">
-        <div class="page-strip-left">
-          {/* Compact Per-Note Mode Switch: Seiten vs Unendlich (OneNote) */}
-          <div
-            class="canvas-mode-switch"
-            role="tablist"
-            aria-label="Canvas-Modus für diese Notiz"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!isInfiniteMode()}
-              class="cms-btn"
-              classList={{ 'is-active': !isInfiniteMode() }}
-              onClick={() => {
-                if (isInfiniteMode()) {
-                  if (editingText()) commitEditingText();
-                  setSelectedImage(null);
-                  setLassoSelection(null);
-                  props.store.updateNoteSettings({ canvasMode: 'pages' });
-                  props.store.showToast('Seiten-Modus aktiv');
-                }
-              }}
-              title="Klassischer Seiten-Modus (mehrere Seiten)"
+      {/* Floating Page Format Popover (triggered from Quick Menu or Sheet Header dimension pill) */}
+      <Show when={!isInfiniteMode() && sizeMenuOpen() && page()}>
+        {(currPage) => (
+          <div class="floating-size-popover-anchor" ref={sizeMenuRef}>
+            <div
+              class="paper-popover size-popover is-floating"
+              role="dialog"
+              aria-label="Seitengröße konfigurieren"
             >
-              <IconPages size={13} />
-              <span class="hide-compact">Seiten</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={isInfiniteMode()}
-              class="cms-btn"
-              classList={{ 'is-active': isInfiniteMode() }}
-              onClick={() => {
-                if (!isInfiniteMode()) {
-                  if (editingText()) commitEditingText();
-                  setSelectedImage(null);
-                  setLassoSelection(null);
-                  setOverviewOpen(false);
-                  setSizeMenuOpen(false);
-                  props.store.updateNoteSettings({ canvasMode: 'infinite' });
-                  props.store.showToast('Unendlicher Canvas (wie OneNote) aktiv');
-                }
-              }}
-              title="Unendlicher Canvas wie in OneNote (grenzenlos in alle Richtungen)"
-            >
-              <IconInfinity size={14} />
-              <span class="hide-compact">Unendlich</span>
-            </button>
-          </div>
-
-          <Show
-            when={!isInfiniteMode()}
-            fallback={
-              <>
-                <div class="active-page-indicator is-infinite-pill" title="Unendliche Zeichenfläche aktiv">
-                  <span class="api-dot" />
-                  <span class="api-name">Unendliche Fläche</span>
-                </div>
-                <Show when={pages().length > 1}>
-                  <div class="page-nav-arrows">
-                    <button
-                      type="button"
-                      class="tool-btn"
-                      disabled={pageIndex() <= 0}
-                      onClick={() => goToAdjacentPage(-1)}
-                      title="Vorheriges Blatt"
-                      aria-label="Vorheriges Blatt"
-                    >
-                      <IconChevronLeft size={15} />
-                    </button>
-                    <span class="inf-page-count">
-                      {pageIndex() + 1}/{pages().length}
-                    </span>
-                    <button
-                      type="button"
-                      class="tool-btn"
-                      disabled={pageIndex() >= pages().length - 1}
-                      onClick={() => goToAdjacentPage(1)}
-                      title="Nächstes Blatt"
-                      aria-label="Nächstes Blatt"
-                    >
-                      <IconChevronRight size={15} />
-                    </button>
-                  </div>
-                </Show>
-              </>
-            }
-          >
-            <button
-              type="button"
-              class="tool-pill page-overview-btn"
-              classList={{ 'is-active': overviewOpen() }}
-              onClick={() => {
-                if (editingText()) commitEditingText();
-                setPenMenuOpen(false);
-                setShapeMenuOpen(false);
-                setSizeMenuOpen(false);
-                setPaperMenuOpen(false);
-                setOverviewAutoCreator(false);
-                setOverviewOpen((v) => !v);
-              }}
-              title="Horizontale Seitenübersicht ein-/ausblenden"
-            >
-              <IconPages size={14} />
-              <span>
-                Übersicht ({pageIndex() + 1}/{pages().length})
-              </span>
-            </button>
-
-            <div class="page-nav-arrows">
-              <button
-                type="button"
-                class="tool-btn"
-                disabled={pageIndex() <= 0}
-                onClick={() => goToAdjacentPage(-1)}
-                title="Zur vorherigen Seite scrollen"
-                aria-label="Vorherige Seite"
-              >
-                <IconChevronLeft size={15} />
-              </button>
-              <button
-                type="button"
-                class="tool-btn"
-                disabled={pageIndex() >= pages().length - 1}
-                onClick={() => goToAdjacentPage(1)}
-                title="Zur nächsten Seite scrollen"
-                aria-label="Nächste Seite"
-              >
-                <IconChevronRight size={15} />
-              </button>
-            </div>
-
-            <Show when={page()}>
-              {(currPage) => (
-                <div class="active-page-indicator" title="Aktuell sichtbare / aktive Seite">
-                  <span class="api-dot" />
-                  <span class="api-name">{currPage().title}</span>
-                </div>
-              )}
-            </Show>
-          </Show>
-        </div>
-
-        <div class="page-strip-right">
-          <Show
-            when={!isInfiniteMode()}
-            fallback={
-              <>
+              <div class="paper-popover-header">
+                <span>Seitenformat (Seite {pageIndex() + 1})</span>
                 <button
                   type="button"
-                  class="tool-pill"
-                  onClick={() => infiniteHandle?.fitToContent()}
-                  title="Alle Inhalte auf der unendlichen Fläche einpassen"
+                  class="icon-btn-xs"
+                  onClick={() => setSizeMenuOpen(false)}
+                  aria-label="Schließen"
                 >
-                  <IconMaximize size={13} />
-                  <span class="hide-compact">Einpassen</span>
+                  <IconX size={14} />
                 </button>
-                <button
-                  type="button"
-                  class="tool-pill"
-                  onClick={() => infiniteHandle?.resetView()}
-                  title="Ansicht zum Ursprung (100 %) zurücksetzen"
-                >
-                  <IconCrosshair size={13} />
-                  <span class="hide-compact">Ursprung</span>
-                </button>
-              </>
-            }
-          >
-            <Show when={page()}>
-              {(currPage) => (
-                <div class="paper-menu-anchor" ref={sizeMenuRef}>
+              </div>
+
+              <div class="paper-section">
+                <div class="paper-section-label">Seitenname</div>
+                <input
+                  type="text"
+                  class="size-title-input"
+                  value={currPage().title}
+                  onInput={(e) =>
+                    props.store.updatePageProperties(currPage().id, {
+                      title: e.currentTarget.value,
+                    })
+                  }
+                  placeholder={`Seite ${pageIndex() + 1}`}
+                />
+              </div>
+
+              <div class="paper-section">
+                <div class="paper-section-label">Individuelle Maße (px)</div>
+                <div class="dim-inputs">
+                  <label class="dim-field" title="Breite in Pixel">
+                    <span>B</span>
+                    <input
+                      type="number"
+                      min={MIN_PAGE_DIMENSION}
+                      max={MAX_PAGE_WIDTH}
+                      step={10}
+                      value={currPage().width}
+                      onChange={(e) =>
+                        props.store.updatePageProperties(currPage().id, {
+                          width: Number(e.currentTarget.value),
+                        })
+                      }
+                    />
+                  </label>
+                  <span class="dim-x">×</span>
+                  <label class="dim-field" title="Höhe in Pixel">
+                    <span>H</span>
+                    <input
+                      type="number"
+                      min={MIN_PAGE_DIMENSION}
+                      max={MAX_PAGE_HEIGHT}
+                      step={10}
+                      value={currPage().height}
+                      onChange={(e) =>
+                        props.store.updatePageProperties(currPage().id, {
+                          height: Number(e.currentTarget.value),
+                        })
+                      }
+                    />
+                  </label>
                   <button
                     type="button"
-                    class="tool-pill page-size-btn"
-                    classList={{ 'is-active': sizeMenuOpen() }}
-                    onClick={() => {
-                      setPenMenuOpen(false);
-                      setShapeMenuOpen(false);
-                      setPaperMenuOpen(false);
-                      setSizeMenuOpen((v) => !v);
-                    }}
-                    title="Individuelle Breite & Höhe dieser Seite festlegen"
+                    class="tool-btn"
+                    onClick={() =>
+                      props.store.updatePageProperties(currPage().id, {
+                        width: currPage().height,
+                        height: currPage().width,
+                      })
+                    }
+                    title="Breite & Höhe tauschen (Hoch-/Querformat)"
                   >
-                    <IconRuler size={14} />
-                    <span>
-                      {currPage().width} × {currPage().height}
-                    </span>
+                    <IconSwap size={14} />
                   </button>
+                </div>
+              </div>
 
-                <Show when={sizeMenuOpen()}>
-                  <div
-                    class="paper-popover size-popover"
-                    role="dialog"
-                    aria-label="Seitengröße konfigurieren"
-                  >
-                    <div class="paper-popover-header">
-                      <span>Seitenformat (Seite {pageIndex() + 1})</span>
-                      <button
-                        type="button"
-                        class="icon-btn-xs"
-                        onClick={() => setSizeMenuOpen(false)}
-                        aria-label="Schließen"
-                      >
-                        <IconX size={14} />
-                      </button>
-                    </div>
-
-                    <div class="paper-section">
-                      <div class="paper-section-label">Seitenname</div>
-                      <input
-                        type="text"
-                        class="size-title-input"
-                        value={currPage().title}
-                        onInput={(e) =>
-                          props.store.updatePageProperties(currPage().id, {
-                            title: e.currentTarget.value,
-                          })
-                        }
-                        placeholder={`Seite ${pageIndex() + 1}`}
-                      />
-                    </div>
-
-                    <div class="paper-section">
-                      <div class="paper-section-label">Individuelle Maße (px)</div>
-                      <div class="dim-inputs">
-                        <label class="dim-field" title="Breite in Pixel">
-                          <span>B</span>
-                          <input
-                            type="number"
-                            min={MIN_PAGE_DIMENSION}
-                            max={MAX_PAGE_WIDTH}
-                            step={10}
-                            value={currPage().width}
-                            onChange={(e) =>
-                              props.store.updatePageProperties(currPage().id, {
-                                width: Number(e.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <span class="dim-x">×</span>
-                        <label class="dim-field" title="Höhe in Pixel">
-                          <span>H</span>
-                          <input
-                            type="number"
-                            min={MIN_PAGE_DIMENSION}
-                            max={MAX_PAGE_HEIGHT}
-                            step={10}
-                            value={currPage().height}
-                            onChange={(e) =>
-                              props.store.updatePageProperties(currPage().id, {
-                                height: Number(e.currentTarget.value),
-                              })
-                            }
-                          />
-                        </label>
+              <div class="paper-section">
+                <div class="paper-section-label">Format-Vorlagen</div>
+                <div class="size-preset-grid">
+                  <For each={PAGE_SIZE_PRESETS}>
+                    {(preset) => {
+                      const isMatch = () =>
+                        currPage().width === preset.width &&
+                        currPage().height === preset.height;
+                      return (
                         <button
                           type="button"
-                          class="tool-btn"
+                          class="size-preset-btn"
+                          classList={{ 'is-active': isMatch() }}
                           onClick={() =>
                             props.store.updatePageProperties(currPage().id, {
-                              width: currPage().height,
-                              height: currPage().width,
+                              width: preset.width,
+                              height: preset.height,
                             })
                           }
-                          title="Breite & Höhe tauschen (Hoch-/Querformat)"
                         >
-                          <IconSwap size={14} />
+                          <span class="sp-name">{preset.shortLabel}</span>
+                          <span class="sp-dims">
+                            {preset.width} × {preset.height}
+                          </span>
                         </button>
-                      </div>
-                    </div>
-
-                    <div class="paper-section">
-                      <div class="paper-section-label">Format-Vorlagen</div>
-                      <div class="size-preset-grid">
-                        <For each={PAGE_SIZE_PRESETS}>
-                          {(preset) => {
-                            const isMatch = () =>
-                              currPage().width === preset.width &&
-                              currPage().height === preset.height;
-                            return (
-                              <button
-                                type="button"
-                                class="size-preset-btn"
-                                classList={{ 'is-active': isMatch() }}
-                                onClick={() =>
-                                  props.store.updatePageProperties(currPage().id, {
-                                    width: preset.width,
-                                    height: preset.height,
-                                  })
-                                }
-                              >
-                                <span class="sp-name">{preset.shortLabel}</span>
-                                <span class="sp-dims">
-                                  {preset.width} × {preset.height}
-                                </span>
-                              </button>
-                            );
-                          }}
-                        </For>
-                      </div>
-                    </div>
-                  </div>
-                </Show>
+                      );
+                    }}
+                  </For>
+                </div>
               </div>
-            )}
-          </Show>
-
-          <button
-            type="button"
-            class="tool-pill page-import-btn"
-            onClick={() => pageImportInputRef?.click()}
-            title="PDF-Dokument oder Bilder als eigene Seiten importieren"
-          >
-            <IconFileUp size={14} />
-            <span class="hide-compact">PDF / Bild</span>
-          </button>
-
-          <button
-            type="button"
-            class="tool-pill page-add-btn"
-            onClick={() => handleAppendPage()}
-            title="Neue Seite unten anhängen"
-          >
-            <IconPlus size={14} />
-            <span class="hide-compact">Seite</span>
-          </button>
-          </Show>
-          <input
-            ref={pageImportInputRef}
-            type="file"
-            accept="application/pdf,.pdf,image/*"
-            multiple
-            class="sr-only"
-            onChange={(e) => {
-              const files = Array.from(e.currentTarget.files ?? []);
-              if (files.length > 0) void handleImportFilesAsPages(files);
-              e.currentTarget.value = '';
-            }}
-          />
-        </div>
-      </div>
+            </div>
+          </div>
+        )}
+      </Show>
 
       {/* Horizontal Docked Page Overview Strip (Pages Mode only) */}
       <Show when={!isInfiniteMode() && overviewOpen()}>
@@ -4418,6 +4323,7 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
                     props.store.setActivePage(targetId);
                     setPenMenuOpen(false);
                     setShapeMenuOpen(false);
+                    setMoreToolsMenuOpen(false);
                     setPaperMenuOpen(false);
                     setSizeMenuOpen(true);
                   }}

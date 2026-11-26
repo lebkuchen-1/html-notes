@@ -10,9 +10,11 @@ import { SettingsPage } from './components/SettingsPage';
 import { Sidebar } from './components/Sidebar';
 import { TextEditor } from './components/TextEditor';
 import { createNotesStore } from './store/notesStore';
+import { createCanvasQuickBridge } from './utils/canvasBridge';
 
 export function App() {
   const store = createNotesStore();
+  const canvasBridge = createCanvasQuickBridge();
   const [splitRatio, setSplitRatio] = createSignal(44); // % width for text pane on desktop
   const [isDraggingSplit, setIsDraggingSplit] = createSignal(false);
   let workspaceRef: HTMLDivElement | undefined;
@@ -167,7 +169,7 @@ export function App() {
           </Match>
 
           <Match when={store.activeScreen() === 'note' && store.activeNote()}>
-            <NoteHeader store={store} />
+            <NoteHeader store={store} canvasBridge={canvasBridge} />
             <div
               ref={workspaceRef}
               class="workspace"
@@ -198,7 +200,7 @@ export function App() {
               </Show>
 
               <Show when={store.viewMode() === 'split' || store.viewMode() === 'canvas'}>
-                <DrawingCanvas store={store} />
+                <DrawingCanvas store={store} canvasBridge={canvasBridge} />
               </Show>
             </div>
           </Match>
