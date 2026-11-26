@@ -29,6 +29,7 @@ import {
   type StudyCardSource,
 } from '../utils/flashcards';
 import { renderInlineMarkdown } from '../utils/markdown';
+import { FlashcardScratchpad } from './FlashcardScratchpad';
 import {
   IconArrowLeft,
   IconBidirectional,
@@ -43,12 +44,14 @@ import {
   IconMaximize,
   IconMoon,
   IconOcclusion,
+  IconPen,
   IconPlay,
   IconPlus,
   IconRotateCcw,
   IconSearch,
   IconSidebar,
   IconSparkles,
+  IconSplit,
   IconSun,
   IconTrash,
   IconX,
@@ -173,6 +176,42 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
   });
   const [occViewMode, setOccViewMode] = createSignal<'focus' | 'full'>('focus');
   const [hideOtherOcclusions, setHideOtherOcclusions] = createSignal(true);
+
+  // Freehand answer scratchpad & compare mode state
+  const [scratchpadOpen, setScratchpadOpen] = createSignal<boolean>(
+    (() => {
+      try {
+        const saved = localStorage.getItem('solid-notes:v1:fcScratchpadOpen');
+        if (saved === '0') return false;
+        if (saved === '1') return true;
+      } catch {
+        // ignore
+      }
+      return true;
+    })()
+  );
+  const [compareLayout, setCompareLayout] = createSignal<'side' | 'stack'>(
+    (() => {
+      try {
+        const saved = localStorage.getItem('solid-notes:v1:fcCompareLayout');
+        if (saved === 'stack' || saved === 'side') return saved;
+      } catch {
+        // ignore
+      }
+      return 'side';
+    })()
+  );
+  const [scratchpadResetToken, setScratchpadResetToken] = createSignal<number>(0);
+  const [scratchpadHasDrawing, setScratchpadHasDrawing] = createSignal<boolean>(false);
+
+  createEffect(() => {
+    try {
+      localStorage.setItem('solid-notes:v1:fcScratchpadOpen', scratchpadOpen() ? '1' : '0');
+      localStorage.setItem('solid-notes:v1:fcCompareLayout', compareLayout());
+    } catch {
+      // ignore
+    }
+  });
 
   // Create / Edit Manual Card modal state
   const [editorOpen, setEditorOpen] = createSignal(false);
@@ -329,6 +368,8 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
     setSessionCounts({ again: 0, hard: 0, good: 0, easy: 0 });
     setRevealed(false);
     setOccViewMode('focus');
+    setScratchpadHasDrawing(false);
+    setScratchpadResetToken((n) => n + 1);
     setInSession(true);
   };
 
@@ -369,12 +410,16 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
       setSessionDoneCount((n) => n + 1);
     }
     setRevealed(false);
+    setScratchpadHasDrawing(false);
+    setScratchpadResetToken((n) => n + 1);
   };
 
   const exitSession = () => {
     setInSession(false);
     setQueue([]);
     setRevealed(false);
+    setScratchpadHasDrawing(false);
+    setScratchpadResetToken((n) => n + 1);
   };
 
   // Keyboard shortcuts during study session
@@ -747,8 +792,16 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                 const badge = () => formatCardBadge(card());
                 const attachments = () => currentCardNote()?.attachments ?? [];
 
+                const isComparingSide = () =>
+                  revealed() && scratchpadOpen() && compareLayout() === 'side';
+
                 return (
-                  <div class="fc-card-shell">
+                  <div
+                    class="fc-card-shell"
+                    classList={{
+                      'is-compare-wide': isComparingSide(),
+                    }}
+                  >
                     {/* Card Breadcrumb & Source Jump */}
                     <div class="fc-card-top">
                       <div class="fc-card-crumb">
@@ -765,6 +818,44 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
 
                       <div class="fc-card-top-right">
                         <span class={`fc-type-badge ${badge().cls}`}>{badge().label}</span>
+
+                        <button
+                          type="button"
+                          class="fc-jump-btn fc-sp-toggle-btn"
+                          classList={{ 'is-active': scratchpadOpen() }}
+                          onClick={() => setScratchpadOpen((v) => !v)}
+                          title={
+                            scratchpadOpen()
+                              ? 'Freies Antwort-Zeichenfeld ausblenden'
+                              : 'Freies Antwort-Zeichenfeld zum Einzeichnen mit Stift öffnen'
+                          }
+                          aria-pressed={scratchpadOpen()}
+                        >
+                          <IconPen size={13} />
+                          <span>Antwortfeld</span>
+                        </button>
+
+                        <Show when={revealed() && scratchpadOpen()}>
+                          <button
+                            type="button"
+                            class="fc-jump-btn fc-layout-toggle-btn"
+                            classList={{ 'is-active': compareLayout() === 'side' }}
+                            onClick={() =>
+                              setCompareLayout((m) => (m === 'side' ? 'stack' : 'side'))
+                            }
+                            title={
+                              compareLayout() === 'side'
+                                ? 'Vergleich untereinander anzeigen'
+                                : 'Vergleich nebeneinander anzeigen'
+                            }
+                          >
+                            <IconSplit size={13} />
+                            <span class="hide-compact">
+                              {compareLayout() === 'side' ? 'Nebeneinander' : 'Untereinander'}
+                            </span>
+                          </button>
+                        </Show>
+
                         <button
                           type="button"
                           class="fc-jump-btn"
@@ -774,14 +865,28 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                           title="Ursprungsnotiz öffnen"
                         >
                           <IconFileText size={13} />
-                          <span>Notiz öffnen</span>
+                          <span class="hide-compact">Notiz öffnen</span>
                         </button>
                       </div>
                     </div>
 
-                    {/* Card Face Body */}
-                    <div class="fc-card-body">
-                      {/* 1. Canvas Occlusion Card */}
+                    {/* Card Face Body + Optional Freehand Scratchpad & Compare Layout */}
+                    <div
+                      class="fc-card-body"
+                      classList={{
+                        'is-compare-active': revealed() && scratchpadOpen(),
+                        'is-compare-side': isComparingSide(),
+                      }}
+                    >
+                      <div class="fc-solution-pane">
+                        <Show when={revealed() && scratchpadOpen()}>
+                          <div class="fc-compare-pane-header is-solution">
+                            <IconCheck size={13} />
+                            <span>Lösung</span>
+                          </div>
+                        </Show>
+
+                        {/* 1. Canvas Occlusion Card */}
                       <Show when={card().kind === 'occlusion' && currentCardPage()}>
                         {(pg) => (
                           <div class="fc-occlusion-card-content">
@@ -933,6 +1038,29 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                           </Show>
                         </div>
                       </Show>
+                      </div>
+
+                      {/* Optional Freehand Pen Scratchpad (Draw Answer & Compare!) */}
+                      <Show when={scratchpadOpen()}>
+                        <div class="fc-scratchpad-pane">
+                          <Show when={revealed()}>
+                            <div class="fc-compare-pane-header is-user-answer">
+                              <IconPen size={13} />
+                              <span>Deine gezeichnete Antwort</span>
+                            </div>
+                          </Show>
+                          <FlashcardScratchpad
+                            resetToken={scratchpadResetToken()}
+                            theme={props.store.theme()}
+                            stabilization={props.store.settings().stabilization}
+                            pressureSensitivity={props.store.settings().pressureSensitivity}
+                            defaultStylusOnly={props.store.settings().stylusOnly}
+                            autoEnableStylusOnly={props.store.settings().autoEnableStylusOnly}
+                            comparing={revealed()}
+                            onHasDrawingChange={setScratchpadHasDrawing}
+                          />
+                        </div>
+                      </Show>
                     </div>
 
                     {/* Bottom Reveal / Rating Bar */}
@@ -946,7 +1074,11 @@ export function FlashcardsPage(props: FlashcardsPageProps) {
                             onClick={() => setRevealed(true)}
                           >
                             <IconEye size={16} />
-                            <span>Antwort zeigen</span>
+                            <span>
+                              {scratchpadHasDrawing()
+                                ? 'Antwort zeigen & vergleichen'
+                                : 'Antwort zeigen'}
+                            </span>
                             <kbd class="fc-kbd">Leertaste</kbd>
                           </button>
                         }

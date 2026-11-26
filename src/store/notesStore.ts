@@ -307,6 +307,8 @@ export function createNotesStore() {
       '.flashcards-scroll',
       '.fc-study-stage',
       '.fc-modal-body',
+      '.fc-scratchpad-canvas',
+      '.fc-scratchpad-resize-handle',
     ].join(', ');
 
     const fullscreenTouchStarts = new Map<number, { x: number; y: number }>();

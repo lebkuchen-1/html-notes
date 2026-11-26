@@ -15,9 +15,10 @@
    - **Text-/Markdown-Karteikarten (RemNote-Syntax):**
      - Lückentext / Stellen verbergen: `{{Antwort}}`, `{{Antwort::Hinweis}}`, `{{1::Gruppe}}` (`Strg+Umschalt+C` + Toolbar-Button `{{…}}`, klickbare Aufdeck-Pills in der Markdown-Vorschau).
      - Einseitig (`Frage >> Antwort`), Rückwärts (`Antwort << Frage`) und **Beidseitig** (`Begriff <> Definition` oder `Begriff :: Definition`, erzeugt automatisch beide Richtungen).
-   - **Manuelle Karteikarten & Einheitlicher Lernmodus (`FlashcardsPage`):**
+   - **Manuelle Karteikarten & Einheitlicher Lernmodus (`FlashcardsPage`, `FlashcardScratchpad`):**
      - Erreichbar über Sidebar (`Karteikarten` mit Fälligkeits-Badge), Tab-Leiste (`Karten`), Startseite und Notiz-Header.
      - Deck-Filter (Alle / Ordner inkl. Unterordner / Einzelnotiz), Quellenfilter (`Canvas-Stellen` / `Text` / `Manuell`), Modal für neue Karten (Standard mit **Beidseitig ↔**-Schalter oder Lückentext), **SM-2 Spaced Repetition** (`Nochmal`/`Schwer`/`Gut`/`Leicht` mit Intervall-Vorschau) und **Übungsmodus** (Alle üben), HiDPI-Canvas-Ausschnitt/Ganze-Seite-Ansicht & „Andere Stellen verbergen“-Schalter.
+     - **Freies Stift-Antwortfeld mit Optionalgröße & Vergleichs-Ansicht:** Im Lernmodus lässt sich per Stift/Apple Pencil (inkl. Druck, Stabilisierung, Radierer, 4 Farben, 3 Stärken, Papiermuster, Nur-Stift-Modus & Größen-Presets `S`/`M`/`L`/`XL` + stufenloser Zieh-Leiste) die eigene Antwort einzeichnen und nach „Antwort zeigen & vergleichen“ direkt **nebeneinander** oder **untereinander** mit der Lösung abgleichen.
    - **Persistenz & Sync:** `page.occlusions` und `note.flashcards` werden normalisiert in IndexedDB v2, JSON-Backups (inkl. Lernfortschritt) und Cloud-Sync gespeichert.
 
 ## Offene Punkte
