@@ -15,6 +15,8 @@
 2. **Ordner-zentrierte Seitenleiste mit Schnellmenü (`src/components/Sidebar.tsx`, `src/styles.css`):**
    - Die 6 dauerhaften Navigationszeilen oben (`Startseite`, `Angepinnt`, `Karteikarten`, `Schnellimport`, `Online-Backup`, `Einstellungen`) sowie der untere `Backup`/`Import`-Footer wurden in ein sauberes **`⋯`-Schnellmenü** in der schlanken `42px`-Seitenleisten-Kopfleiste (neben `+ Ordner` und `+ Notiz`) ausgelagert.
    - Der **Ordnerbaum** startet jetzt sofort ganz oben direkt unter dem Suchfilter und erhält ~90% der gesamten Seitenleistenhöhe (inkl. Ordnerzähler und „Einklappen / Aufklappen“-Schalter für große Ordnerstrukturen); „Weitere Notizen“ und standardmäßig eingeklappte „Favoriten“ sitzen darunter.
+3. **Vertikale Seitenübersicht (`src/components/PageOverview.tsx`, `src/components/DrawingCanvas.tsx`, `src/styles.css`):**
+   - `PageOverview` wurde von einem horizontalen Filmstreifen oben in eine **vertikale, rechts neben dem Canvas angedockte `224px`-Seitenleiste** umgebaut (mit vertikalen Thumbnails im echten Seitenverhältnis, vertikalem Drag & Drop mit Ober-/Unterkanten-Indikator, ↑/↓-Sortierpfeilen, Click-to-Edit-Seitennamen, kompaktem Neue-Seite-Builder und schmaler Overlay-Ansicht unter `680px`).
 
 ## Offene Punkte
-- Praxistest des 2-Zeilen-Layouts (integrierte Tabs, Schnellmenü `⋯` mit `Nur Stift` & `Hintergrund`) sowie der neuen ordner-zentrierten Seitenleiste auf dem iPad.
+- Praxistest des 2-Zeilen-Layouts, der ordner-zentrierten Seitenleiste sowie der neuen vertikalen Seitenübersicht auf dem iPad.

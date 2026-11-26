@@ -12,8 +12,8 @@ import {
 } from '../types';
 import { renderFullCanvas } from '../utils/canvasRenderer';
 import {
-  IconChevronLeft,
-  IconChevronRight,
+  IconChevronDown,
+  IconChevronUp,
   IconCopy,
   IconFileUp,
   IconGrip,
@@ -34,18 +34,18 @@ interface PageThumbnailProps {
 function PageThumbnail(props: PageThumbnailProps) {
   let canvasEl: HTMLCanvasElement | undefined;
 
-  // Uniform target height so portrait, landscape, square & wide pages show true side-by-side proportions
-  const maxH = 104;
-  const maxW = 184;
-  const minDim = 48;
+  // Vertical-rail friendly thumbnail sizing preserving true page aspect ratios
+  const maxW = 168;
+  const maxH = 186;
+  const minDim = 54;
 
   const thumbSize = () => {
     const ratio = props.page.width / Math.max(1, props.page.height);
-    let h = maxH;
-    let w = h * ratio;
-    if (w > maxW) {
-      w = maxW;
-      h = w / ratio;
+    let w = maxW;
+    let h = w / ratio;
+    if (h > maxH) {
+      h = maxH;
+      w = h * ratio;
     }
     return {
       width: Math.max(minDim, Math.round(w)),
@@ -114,15 +114,14 @@ export function PageOverview(props: PageOverviewProps) {
   const [editingOptionsPageId, setEditingOptionsPageId] = createSignal<string | null>(
     null
   );
+  const [editingTitlePageId, setEditingTitlePageId] = createSignal<string | null>(null);
 
-  // Drag & Drop reordering state
+  // Vertical Drag & Drop reordering state
   const [draggingPageId, setDraggingPageId] = createSignal<string | null>(null);
   const [dropTarget, setDropTarget] = createSignal<{
     pageId: string;
     position: 'before' | 'after';
   } | null>(null);
-
-  let filmstripRef: HTMLDivElement | undefined;
 
   const pages = () => props.store.activeNote()?.pages ?? [];
   const pageIds = createMemo(() => pages().map((p) => p.id));
@@ -146,52 +145,39 @@ export function PageOverview(props: PageOverviewProps) {
     }
   };
 
-  const handleWheel = (e: WheelEvent) => {
-    if (!filmstripRef) return;
-    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-      filmstripRef.scrollLeft += e.deltaY;
-      e.preventDefault();
-    }
-  };
-
   return (
-    <div class="page-overview-dock" role="region" aria-label="Seitenübersicht">
+    <aside class="page-overview-dock is-vertical" role="region" aria-label="Seitenübersicht">
       <div class="pod-header">
         <div class="pod-header-left">
-          <span class="pod-title">Seitenübersicht</span>
-          <span class="page-overview-count">
-            {pages().length} {pages().length === 1 ? 'Seite' : 'Seiten'}
-          </span>
-          <Show when={pages().length > 1}>
-            <span class="pod-hint">Zum Verschieben ziehen</span>
-          </Show>
+          <span class="pod-title">Seiten</span>
+          <span class="page-overview-count">{pages().length}</span>
         </div>
 
         <div class="pod-header-right">
           <Show when={props.onTriggerImportPages}>
             <button
               type="button"
-              class="tool-pill pod-new-btn"
+              class="icon-btn-xs pod-header-icon-btn"
               onClick={() => props.onTriggerImportPages?.()}
               title="PDF oder Bilder als neue Seiten importieren"
+              aria-label="PDF oder Bilder importieren"
             >
-              <IconFileUp size={13} />
-              <span>PDF / Bild</span>
+              <IconFileUp size={14} />
             </button>
           </Show>
           <button
             type="button"
-            class="tool-pill pod-new-btn"
-            classList={{ 'is-active': showCreator() }}
+            class="icon-btn-xs pod-header-icon-btn"
+            classList={{ 'is-active-icon': showCreator() }}
             onClick={() => setShowCreator((v) => !v)}
             title="Neue Seite mit individueller Größe erstellen"
+            aria-label="Neue Seite erstellen"
           >
-            <IconPlus size={13} />
-            <span>Neue Seite</span>
+            <IconPlus size={14} />
           </button>
           <button
             type="button"
-            class="icon-btn-xs"
+            class="icon-btn-xs pod-header-icon-btn"
             onClick={props.onClose}
             title="Seitenübersicht ausblenden"
             aria-label="Seitenübersicht ausblenden"
@@ -201,63 +187,54 @@ export function PageOverview(props: PageOverviewProps) {
         </div>
       </div>
 
-      {/* Collapsible Compact New-Page Builder */}
+      {/* Collapsible Vertical New-Page Builder */}
       <Show when={showCreator()}>
         <div class="pod-creator">
-          <div class="npb-row">
-            <input
-              type="text"
-              class="npb-title-input"
-              value={newTitle()}
-              onInput={(e) => setNewTitle(e.currentTarget.value)}
-              placeholder={`Seite ${pages().length + 1}`}
-              aria-label="Titel der neuen Seite"
-            />
-            <div class="dim-inputs">
-              <label class="dim-field is-compact" title="Breite in Pixel">
-                <span>B</span>
-                <input
-                  type="number"
-                  min={MIN_PAGE_DIMENSION}
-                  max={MAX_PAGE_WIDTH}
-                  step={10}
-                  value={newWidth()}
-                  onInput={(e) => setNewWidth(Number(e.currentTarget.value))}
-                />
-              </label>
-              <span class="dim-x">×</span>
-              <label class="dim-field is-compact" title="Höhe in Pixel">
-                <span>H</span>
-                <input
-                  type="number"
-                  min={MIN_PAGE_DIMENSION}
-                  max={MAX_PAGE_HEIGHT}
-                  step={10}
-                  value={newHeight()}
-                  onInput={(e) => setNewHeight(Number(e.currentTarget.value))}
-                />
-              </label>
-              <button
-                type="button"
-                class="tool-btn"
-                onClick={() => {
-                  const w = newWidth();
-                  const h = newHeight();
-                  setNewWidth(h);
-                  setNewHeight(w);
-                }}
-                title="Hoch-/Querformat tauschen"
-              >
-                <IconSwap size={13} />
-              </button>
-            </div>
+          <input
+            type="text"
+            class="npb-title-input"
+            value={newTitle()}
+            onInput={(e) => setNewTitle(e.currentTarget.value)}
+            placeholder={`Seite ${pages().length + 1}`}
+            aria-label="Titel der neuen Seite"
+          />
+
+          <div class="dim-inputs npb-dims-row">
+            <label class="dim-field is-compact" title="Breite in Pixel">
+              <span>B</span>
+              <input
+                type="number"
+                min={MIN_PAGE_DIMENSION}
+                max={MAX_PAGE_WIDTH}
+                step={10}
+                value={newWidth()}
+                onInput={(e) => setNewWidth(Number(e.currentTarget.value))}
+              />
+            </label>
+            <span class="dim-x">×</span>
+            <label class="dim-field is-compact" title="Höhe in Pixel">
+              <span>H</span>
+              <input
+                type="number"
+                min={MIN_PAGE_DIMENSION}
+                max={MAX_PAGE_HEIGHT}
+                step={10}
+                value={newHeight()}
+                onInput={(e) => setNewHeight(Number(e.currentTarget.value))}
+              />
+            </label>
             <button
               type="button"
-              class="btn-primary npb-add-btn"
-              onClick={handleCreateCustomPage}
+              class="icon-btn-xs"
+              onClick={() => {
+                const w = newWidth();
+                const h = newHeight();
+                setNewWidth(h);
+                setNewHeight(w);
+              }}
+              title="Hoch-/Querformat tauschen"
             >
-              <IconPlus size={14} />
-              <span>Hinzufügen</span>
+              <IconSwap size={13} />
             </button>
           </div>
 
@@ -278,22 +255,26 @@ export function PageOverview(props: PageOverviewProps) {
                     title={`${preset.label} (${preset.width} × ${preset.height} px)`}
                   >
                     <span>{preset.shortLabel}</span>
-                    <span class="npb-preset-dims">
-                      {preset.width}×{preset.height}
-                    </span>
                   </button>
                 );
               }}
             </For>
           </div>
+
+          <button
+            type="button"
+            class="btn-primary npb-add-btn"
+            onClick={handleCreateCustomPage}
+          >
+            <IconPlus size={14} />
+            <span>Seite hinzufügen</span>
+          </button>
         </div>
       </Show>
 
-      {/* Horizontal Scrollable Filmstrip */}
+      {/* Vertical Scrollable Thumbnail List */}
       <div
-        ref={filmstripRef}
         class="page-filmstrip"
-        onWheel={handleWheel}
         onDragOver={(e) => {
           if (draggingPageId()) e.preventDefault();
         }}
@@ -303,6 +284,7 @@ export function PageOverview(props: PageOverviewProps) {
             const page = createMemo(() => pages().find((p) => p.id === pageId));
             const isActive = () => pageId === activePageId();
             const isEditingOpts = () => editingOptionsPageId() === pageId;
+            const isEditingTitle = () => editingTitlePageId() === pageId;
             const isDropBefore = () =>
               dropTarget()?.pageId === pageId &&
               dropTarget()?.position === 'before' &&
@@ -316,7 +298,7 @@ export function PageOverview(props: PageOverviewProps) {
               <Show when={page()}>
                 {(curr) => (
                   <div
-                    draggable={true}
+                    draggable={!isEditingTitle()}
                     class="filmstrip-card"
                     classList={{
                       'is-active': isActive(),
@@ -329,8 +311,10 @@ export function PageOverview(props: PageOverviewProps) {
                       props.onSelectPage?.(pageId);
                     }}
                     onDragStart={(e) => {
-                      // Don't hijack drag when user is selecting text in an input
-                      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
+                      if (
+                        e.target instanceof HTMLInputElement ||
+                        e.target instanceof HTMLSelectElement
+                      ) {
                         e.preventDefault();
                         return;
                       }
@@ -343,9 +327,9 @@ export function PageOverview(props: PageOverviewProps) {
                       if (!fromId || fromId === pageId) return;
                       e.preventDefault();
                       const rect = e.currentTarget.getBoundingClientRect();
-                      const midX = rect.left + rect.width / 2;
+                      const midY = rect.top + rect.height / 2;
                       const position: 'before' | 'after' =
-                        e.clientX < midX ? 'before' : 'after';
+                        e.clientY < midY ? 'before' : 'after';
                       setDropTarget({ pageId, position });
                     }}
                     onDragLeave={(e) => {
@@ -377,8 +361,8 @@ export function PageOverview(props: PageOverviewProps) {
                   >
                     <div class="filmstrip-card-top">
                       <span class="filmstrip-grip" title="Ziehen zum Verschieben">
-                        <IconGrip size={13} />
-                        <span class="page-num-badge">#{idx() + 1}</span>
+                        <IconGrip size={12} />
+                        <span class="page-num-badge">{idx() + 1}</span>
                         <Show when={curr().backgroundImage}>
                           {(bg) => (
                             <span
@@ -408,17 +392,45 @@ export function PageOverview(props: PageOverviewProps) {
                     <PageThumbnail page={curr()} theme={props.store.theme()} />
 
                     <div class="filmstrip-card-footer" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="text"
-                        class="filmstrip-name"
-                        value={curr().title}
-                        onInput={(e) =>
-                          props.store.updatePageProperties(pageId, {
-                            title: e.currentTarget.value,
-                          })
+                      <Show
+                        when={isEditingTitle()}
+                        fallback={
+                          <button
+                            type="button"
+                            class="filmstrip-name-display"
+                            onClick={() => setEditingTitlePageId(pageId)}
+                            title="Tippen zum Umbenennen"
+                          >
+                            {curr().title || `Seite ${idx() + 1}`}
+                          </button>
                         }
-                        aria-label="Seitenname"
-                      />
+                      >
+                        <input
+                          ref={(el) => {
+                            el.value = curr().title;
+                            requestAnimationFrame(() => {
+                              el.focus();
+                              el.select();
+                            });
+                          }}
+                          type="text"
+                          class="filmstrip-name"
+                          onInput={(e) =>
+                            props.store.updatePageProperties(pageId, {
+                              title: e.currentTarget.value,
+                            })
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === 'Escape') {
+                              e.preventDefault();
+                              e.currentTarget.blur();
+                              setEditingTitlePageId(null);
+                            }
+                          }}
+                          onBlur={() => setEditingTitlePageId(null)}
+                          aria-label="Seitenname"
+                        />
+                      </Show>
 
                       <Show when={isEditingOpts()}>
                         <div class="filmstrip-opts-box">
@@ -501,18 +513,20 @@ export function PageOverview(props: PageOverviewProps) {
                           class="icon-btn-xs"
                           disabled={idx() === 0}
                           onClick={() => props.store.movePage(pageId, -1)}
-                          title="Nach links / vorne verschieben"
+                          title="Nach oben verschieben"
+                          aria-label="Nach oben verschieben"
                         >
-                          <IconChevronLeft size={13} />
+                          <IconChevronUp size={13} />
                         </button>
                         <button
                           type="button"
                           class="icon-btn-xs"
                           disabled={idx() === pages().length - 1}
                           onClick={() => props.store.movePage(pageId, 1)}
-                          title="Nach rechts / hinten verschieben"
+                          title="Nach unten verschieben"
+                          aria-label="Nach unten verschieben"
                         >
-                          <IconChevronRight size={13} />
+                          <IconChevronDown size={13} />
                         </button>
                         <button
                           type="button"
@@ -553,19 +567,17 @@ export function PageOverview(props: PageOverviewProps) {
           }}
         </For>
 
-        {/* Add Page Card at end of horizontal filmstrip */}
+        {/* Compact Add Page Button at bottom of vertical list */}
         <button
           type="button"
           class="filmstrip-add-card"
           onClick={() => setShowCreator(true)}
           title="Neue Seite mit Wunschformat hinzufügen"
         >
-          <span class="fac-icon">
-            <IconPlus size={18} />
-          </span>
+          <IconPlus size={15} />
           <span>Neue Seite</span>
         </button>
       </div>
-    </div>
+    </aside>
   );
 }

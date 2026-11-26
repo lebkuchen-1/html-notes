@@ -3834,20 +3834,6 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         )}
       </Show>
 
-      {/* Horizontal Docked Page Overview Strip (Pages Mode only) */}
-      <Show when={!isInfiniteMode() && overviewOpen()}>
-        <PageOverview
-          store={props.store}
-          initialShowCreator={overviewAutoCreator()}
-          onClose={() => {
-            setOverviewOpen(false);
-            setOverviewAutoCreator(false);
-          }}
-          onSelectPage={(id) => scrollToPage(id)}
-          onTriggerImportPages={() => pageImportInputRef?.click()}
-        />
-      </Show>
-
       {/* Inline Direct-in-Canvas Study & Compare Bar (no separate flashcard screen!) */}
       <Show when={occlusionDisplayMode() === 'study' && totalNoteOcclusions() > 0}>
         <div class="canvas-study-bar" role="region" aria-label="Direkt im Canvas lernen">
@@ -4102,7 +4088,8 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
         </div>
       </Show>
 
-      {/* Main Canvas Area: Infinite OneNote-style Canvas OR Continuous Multi-Page Document */}
+      {/* Main Canvas Area + Optional Vertical Right-Docked Page Overview Rail */}
+      <div class="canvas-body-row">
       <div ref={stageWrapperRef} class="canvas-stage-wrapper">
       <Show
         when={!isInfiniteMode()}
@@ -4364,6 +4351,21 @@ export function DrawingCanvas(props: DrawingCanvasProps) {
             setRulerActiveEdge(null);
             setRulerState((prev) => ({ ...prev, visible: false }));
           }}
+        />
+      </Show>
+      </div>
+
+      {/* Vertical Right-Docked Page Overview Sidebar (Pages Mode only) */}
+      <Show when={!isInfiniteMode() && overviewOpen()}>
+        <PageOverview
+          store={props.store}
+          initialShowCreator={overviewAutoCreator()}
+          onClose={() => {
+            setOverviewOpen(false);
+            setOverviewAutoCreator(false);
+          }}
+          onSelectPage={(id) => scrollToPage(id)}
+          onTriggerImportPages={() => pageImportInputRef?.click()}
         />
       </Show>
       </div>
